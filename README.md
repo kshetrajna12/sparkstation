@@ -384,7 +384,21 @@ scrape_configs:
 
 ### Grafana Dashboard
 
-See `monitoring/grafana-dashboard.json` for pre-built dashboard.
+Import the pre-built dashboard: `monitoring/grafana-dashboard.json`
+
+**Includes**:
+- Real-time memory, temperature, and power monitoring
+- Model status distribution and per-model memory
+- Request rate and latency metrics (p50, p95)
+- Running vs suspended model counts
+- Auto-refresh every 10 seconds
+
+**Quick Import**:
+1. Open Grafana → Dashboards → Import
+2. Upload `monitoring/grafana-dashboard.json`
+3. Select your Prometheus datasource
+
+See [monitoring/README.md](monitoring/README.md) for detailed setup and alert configuration.
 
 ---
 

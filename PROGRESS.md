@@ -185,7 +185,13 @@ This document tracks implementation progress against the phases defined in [TECH
   - ✅ Port leak detection
   - ✅ Resource usage snapshots
   - ✅ Systemd timer for automatic execution (3 AM daily)
-- ❌ **Grafana dashboard** - **Not created**
+- ✅ **Grafana dashboard** (`monitoring/grafana-dashboard.json`)
+  - ✅ 11 comprehensive panels (gauges, time series, pie charts)
+  - ✅ Memory, temperature, power monitoring
+  - ✅ Model status distribution and per-model metrics
+  - ✅ Request rate and latency (p50, p95)
+  - ✅ Auto-refresh every 10 seconds
+  - ✅ Recommended alerts and queries in monitoring/README.md
 
 #### Optional
 - ❌ Docker Compose deployment - **Not created**
@@ -198,8 +204,7 @@ This document tracks implementation progress against the phases defined in [TECH
 4. ✅ Unit test suite (24 tests, all passing)
 
 ### Remaining
-1. Grafana dashboard JSON
-2. Integration testing with backends
+1. Integration testing with backends (requires DGX Spark + vLLM/SGLang)
 
 ---
 
@@ -273,7 +278,7 @@ Tracking the 9 critical fixes identified in TECH_PLAN.md:
 | Daily Maintenance | ✅ | ✅ | ✅ | ⏸️ |
 | Unit Tests | ✅ | ✅ | ✅ | ✅ |
 | Docker Compose | ❌ | ❌ | ❌ | ❌ |
-| Grafana Dashboard | ❌ | ❌ | ❌ | ❌ |
+| Grafana Dashboard | ✅ | ✅ | ✅ | ✅ |
 
 ---
 
@@ -300,7 +305,7 @@ Tracking the 9 critical fixes identified in TECH_PLAN.md:
 - [x] Add comprehensive error handling for model launch failures
 - [x] Add model restart on failure logic
 - [x] Add unit tests (24 tests, all passing)
-- [ ] Create Grafana dashboard
+- [x] Create Grafana dashboard
 
 ### 4. Documentation
 - [ ] Add examples for starting specific models
@@ -566,6 +571,40 @@ All model management endpoints enhanced with:
 **Total Tests**: 24 (all passing)
 **New Settings**: +13 configuration options
 **Systemd Units**: 5 (supervisor, gateway, maintenance service/timer)
+
+### Grafana Dashboard (October 27, 2025 - Current)
+
+#### Production Monitoring Dashboard (`monitoring/grafana-dashboard.json`)
+- **11 comprehensive panels**:
+  1. Unified Memory Used (gauge)
+  2. GPU Temperature (gauge with 80°C threshold)
+  3. GPU Power Draw (time series)
+  4. Running Models count (stat)
+  5. Memory Usage Over Time (stacked area with limit)
+  6. GPU Temperature Over Time (line with threshold)
+  7. Model Status Distribution (pie chart)
+  8. Memory Per Model (stacked bars)
+  9. Model Counts Over Time (running vs suspended)
+  10. Request Rate by Model (5m window)
+  11. Request Latency (p50, p95 percentiles)
+
+- **Features**:
+  - Auto-refresh every 10 seconds
+  - Color-coded thresholds (green/yellow/red)
+  - DGX Spark optimized (unified memory tracking)
+  - Production-ready alert queries included
+
+#### Monitoring Documentation (`monitoring/README.md`)
+- Complete setup guide for Prometheus + Grafana
+- All available metrics documented
+- Recommended alert rules (memory, temperature, model health, capacity)
+- Useful PromQL queries (error rate, idle models, etc.)
+- Troubleshooting guide for common issues
+- Performance impact metrics
+
+**Files Added** (2):
+- `monitoring/grafana-dashboard.json` (11 panels)
+- `monitoring/README.md` (comprehensive guide)
 
 ---
 
