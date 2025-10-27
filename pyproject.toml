@@ -25,6 +25,7 @@ dependencies = [
     # Database
     "sqlalchemy>=2.0.29",
     "aiosqlite>=0.20.0",
+    "greenlet>=3.0.0",
 
     # Monitoring
     "prometheus-client>=0.20.0",

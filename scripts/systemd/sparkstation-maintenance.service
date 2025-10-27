@@ -1,0 +1,21 @@
+[Unit]
+Description=Sparkstation Daily Maintenance
+After=network.target
+
+[Service]
+Type=oneshot
+User=kshetrajna
+WorkingDirectory=/home/kshetrajna/src/github.com/sparkstation
+ExecStart=/home/kshetrajna/src/github.com/sparkstation/.venv/bin/python scripts/maintenance.py
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sparkstation-maintenance
+
+[Install]
+WantedBy=multi-user.target

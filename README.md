@@ -307,16 +307,56 @@ Use the startup scripts for quick iteration:
 ### Production (Systemd)
 
 ```bash
-# Install systemd service
+# Install systemd services
 sudo cp scripts/systemd/sparkstation-supervisor.service /etc/systemd/system/
+sudo cp scripts/systemd/sparkstation-gateway.service /etc/systemd/system/
+sudo cp scripts/systemd/sparkstation-maintenance.service /etc/systemd/system/
+sudo cp scripts/systemd/sparkstation-maintenance.timer /etc/systemd/system/
+
 sudo systemctl daemon-reload
+
+# Enable and start services
 sudo systemctl enable sparkstation-supervisor
 sudo systemctl start sparkstation-supervisor
 
+sudo systemctl enable sparkstation-gateway
+sudo systemctl start sparkstation-gateway
+
+# Enable daily maintenance (runs at 3 AM)
+sudo systemctl enable sparkstation-maintenance.timer
+sudo systemctl start sparkstation-maintenance.timer
+
 # Check status
 sudo systemctl status sparkstation-supervisor
+sudo systemctl status sparkstation-gateway
+sudo systemctl list-timers sparkstation-maintenance.timer
 sudo journalctl -u sparkstation-supervisor -f
 ```
+
+### Maintenance
+
+Automated daily maintenance runs at 3 AM via systemd timer:
+
+```bash
+# Manual run
+python scripts/maintenance.py
+
+# Dry run (show what would be done)
+python scripts/maintenance.py --dry-run
+
+# Verbose output
+python scripts/maintenance.py --verbose
+
+# Check last maintenance run
+sudo journalctl -u sparkstation-maintenance -n 50
+```
+
+**Maintenance tasks**:
+- Cleanup log files older than 30 days
+- Vacuum SQLite database
+- Detect stale/zombie models (STARTING >10 min)
+- Check for port leaks
+- Generate resource usage snapshot
 
 ---
 
