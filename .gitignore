@@ -205,3 +205,35 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Sparkstation specific
+# Runtime data and databases
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/logs/
+
+# Model weights (if downloaded locally)
+models/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+
+# LiteLLM generated files
+litellm_config.json
+.litellm_cache/
+
+# Model server logs
+model_logs/
+*.model.log
+
+# Backup files
+*.backup
+*.bak
+
+# OS-specific
+.DS_Store
+Thumbs.db
