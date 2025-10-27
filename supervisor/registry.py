@@ -63,6 +63,8 @@ class ModelRegistry:
                 memory_gb=instance.memory_gb,
                 saved_config=instance.saved_config,
                 extra_args=instance.extra_args,
+                restart_count=instance.restart_count,
+                last_restart_time=instance.last_restart_time,
             )
             session.add(db_instance)
             await session.commit()
@@ -146,6 +148,8 @@ class ModelRegistry:
                     saved_config=instance.saved_config,
                     auto_suspend_enabled=instance.auto_suspend_enabled,
                     idle_timeout_minutes=instance.idle_timeout_minutes,
+                    restart_count=instance.restart_count,
+                    last_restart_time=instance.last_restart_time,
                 )
             )
             await session.commit()
@@ -207,6 +211,8 @@ class ModelRegistry:
             memory_gb=db_instance.memory_gb,
             saved_config=db_instance.saved_config,
             extra_args=db_instance.extra_args,
+            restart_count=db_instance.restart_count or 0,
+            last_restart_time=db_instance.last_restart_time,
         )
 
     @staticmethod

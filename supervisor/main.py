@@ -4,8 +4,10 @@ Sparkstation Supervisor - Main FastAPI application.
 DGX Spark-optimized LLM model lifecycle management.
 """
 import logging
+from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Depends
@@ -27,12 +29,31 @@ from supervisor.resources import ResourceManager, ResourceError
 from supervisor.launchers.factory import LauncherFactory
 from supervisor.auto_suspend import AutoSuspendManager
 from supervisor.gateway_sync import GatewaySync
+from supervisor.health_check import HealthCheckManager
+from supervisor.restart_manager import RestartManager
+from supervisor.auth import require_api_key
 from supervisor import metrics
 
-# Configure logging
+# Configure logging (stdout + file)
+handlers = [logging.StreamHandler()]
+
+if settings.log_to_file:
+    # Ensure log directory exists
+    log_path = Path(settings.log_file_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Add rotating file handler
+    file_handler = RotatingFileHandler(
+        settings.log_file_path,
+        maxBytes=settings.log_max_bytes,
+        backupCount=settings.log_backup_count,
+    )
+    handlers.append(file_handler)
+
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper()),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=handlers,
 )
 logger = logging.getLogger(__name__)
 
@@ -42,12 +63,14 @@ resource_manager: Optional[ResourceManager] = None
 launcher_factory: Optional[LauncherFactory] = None
 auto_suspend_manager: Optional[AutoSuspendManager] = None
 gateway_sync: Optional[GatewaySync] = None
+health_check_manager: Optional[HealthCheckManager] = None
+restart_manager: Optional[RestartManager] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize and cleanup resources."""
-    global registry, resource_manager, launcher_factory, auto_suspend_manager, gateway_sync
+    global registry, resource_manager, launcher_factory, auto_suspend_manager, gateway_sync, health_check_manager, restart_manager
 
     logger.info("Initializing Sparkstation Supervisor...")
 
@@ -59,6 +82,8 @@ async def lifespan(app: FastAPI):
     launcher_factory = LauncherFactory()
     auto_suspend_manager = AutoSuspendManager(registry, launcher_factory)
     gateway_sync = GatewaySync(registry)
+    restart_manager = RestartManager(registry, launcher_factory, resource_manager)
+    health_check_manager = HealthCheckManager(registry, restart_manager)
 
     # Start background tasks
     if settings.auto_suspend_enabled:
@@ -66,12 +91,18 @@ async def lifespan(app: FastAPI):
 
     await gateway_sync.start()
 
+    if settings.health_check_enabled:
+        await health_check_manager.start()
+        logger.info("Health check manager activated")
+
     logger.info(f"Supervisor started on {settings.host}:{settings.port}")
 
     yield
 
     # Cleanup
     logger.info("Shutting down Supervisor...")
+    if health_check_manager:
+        await health_check_manager.stop()
     await auto_suspend_manager.stop()
     await gateway_sync.stop()
 
@@ -164,7 +195,7 @@ async def list_models_detailed():
     return {"models": detailed}
 
 
-@app.post("/models/start", response_model=ModelStartResponse)
+@app.post("/models/start", response_model=ModelStartResponse, dependencies=[Depends(require_api_key)])
 async def start_model(request: ModelStartRequest):
     """Start a new model server."""
     if not all([registry, resource_manager, launcher_factory]):
@@ -233,7 +264,7 @@ async def start_model(request: ModelStartRequest):
         raise HTTPException(status_code=500, detail=f"Failed to start model: {str(e)}")
 
 
-@app.post("/models/{model_id}/stop")
+@app.post("/models/{model_id}/stop", dependencies=[Depends(require_api_key)])
 async def stop_model(model_id: str):
     """Stop a running model."""
     if not all([registry, resource_manager, launcher_factory]):
@@ -270,7 +301,7 @@ async def stop_model(model_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/models/{model_id}/suspend")
+@app.post("/models/{model_id}/suspend", dependencies=[Depends(require_api_key)])
 async def suspend_model(model_id: str):
     """Manually suspend a model."""
     if auto_suspend_manager is None:
@@ -291,7 +322,7 @@ async def suspend_model(model_id: str):
     }
 
 
-@app.post("/models/{model_id}/resume")
+@app.post("/models/{model_id}/resume", dependencies=[Depends(require_api_key)])
 async def resume_model(model_id: str):
     """Resume a suspended model."""
     if auto_suspend_manager is None:
