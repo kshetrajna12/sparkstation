@@ -70,6 +70,10 @@ class ModelInstanceDB(Base):
     saved_config = Column(JSON, nullable=True)  # Dict saved for resume
     extra_args = Column(JSON, nullable=True)  # Additional launch args
 
+    # Restart tracking
+    restart_count = Column(Integer, default=0)  # Number of restart attempts
+    last_restart_time = Column(DateTime, nullable=True)  # Last restart timestamp
+
 
 # Pydantic models for API
 class ModelConfig(BaseModel):
@@ -115,6 +119,9 @@ class ModelInstance(BaseModel):
 
     saved_config: Optional[Dict[str, Any]] = None
     extra_args: Optional[Dict[str, Any]] = None
+
+    restart_count: int = 0
+    last_restart_time: Optional[datetime] = None
 
     class Config:
         use_enum_values = True
