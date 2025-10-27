@@ -1,0 +1,36 @@
+"""
+Factory for creating model launchers based on backend type.
+"""
+from supervisor.launchers.base import ModelLauncher
+from supervisor.launchers.vllm_launcher import VLLMLauncher
+from supervisor.launchers.sglang_launcher import SGLangLauncher
+from supervisor.models import Backend
+
+
+class LauncherFactory:
+    """Factory for creating model launchers."""
+
+    def __init__(self):
+        self._launchers = {
+            Backend.VLLM: VLLMLauncher(),
+            Backend.SGLANG: SGLangLauncher(),
+            # Backend.TRT_LLM: TRTLLMLauncher(),  # TODO: Implement
+        }
+
+    def get_launcher(self, backend: Backend) -> ModelLauncher:
+        """
+        Get launcher for specified backend.
+
+        Args:
+            backend: Backend type
+
+        Returns:
+            Model launcher instance
+
+        Raises:
+            ValueError: If backend not supported
+        """
+        launcher = self._launchers.get(backend)
+        if launcher is None:
+            raise ValueError(f"Unsupported backend: {backend}")
+        return launcher
