@@ -4,9 +4,9 @@ Data models for Sparkstation Supervisor.
 from datetime import datetime
 from enum import Enum
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, JSON, Float
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
 
@@ -123,8 +123,7 @@ class ModelInstance(BaseModel):
     restart_count: int = 0
     last_restart_time: Optional[datetime] = None
 
-    class Config:
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)
 
 
 class ModelStartRequest(BaseModel):

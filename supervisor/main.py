@@ -32,6 +32,15 @@ from supervisor.gateway_sync import GatewaySync
 from supervisor.health_check import HealthCheckManager
 from supervisor.restart_manager import RestartManager
 from supervisor.auth import require_api_key
+from supervisor.errors import (
+    ModelNotFoundError,
+    ModelAlreadyExistsError,
+    InsufficientResourcesError,
+    ModelLaunchError,
+    ModelNotRunningError,
+    ModelNotSuspendedError,
+    handle_exception,
+)
 from supervisor import metrics
 
 # Configure logging (stdout + file)
@@ -203,7 +212,14 @@ async def start_model(request: ModelStartRequest):
 
     logger.info(f"Starting model: {request.model_name} ({request.backend})")
 
+    model_id = None
     try:
+        # Check if alias already exists
+        if request.model_alias:
+            existing = await registry.get_by_alias(request.model_alias)
+            if existing:
+                raise ModelAlreadyExistsError(request.model_alias)
+
         # Generate model ID
         model_id = ModelRegistry.generate_id(request.model_name)
 
@@ -216,7 +232,8 @@ async def start_model(request: ModelStartRequest):
         try:
             port = resource_manager.allocate_model(model_id, memory_estimate)
         except ResourceError as e:
-            raise HTTPException(status_code=507, detail=str(e))
+            current = resource_manager.get_unified_memory_usage()
+            raise InsufficientResourcesError(str(e), current, resource_manager.hard_limit_gb)
 
         # Create config
         config = ModelConfig(
@@ -231,15 +248,28 @@ async def start_model(request: ModelStartRequest):
         )
 
         # Launch model
-        launcher = launcher_factory.get_launcher(request.backend)
-        instance = await launcher.launch(config, model_id, port)
-        instance.memory_gb = memory_estimate
+        try:
+            launcher = launcher_factory.get_launcher(request.backend)
+            instance = await launcher.launch(config, model_id, port)
+            instance.memory_gb = memory_estimate
+        except Exception as e:
+            raise ModelLaunchError(request.backend.value, str(e))
 
         # Save to registry
-        await registry.create(instance)
+        try:
+            await registry.create(instance)
+        except Exception as e:
+            logger.error(f"Failed to save to registry: {e}")
+            # Try to stop the launched model
+            await launcher.stop(instance)
+            raise
 
         # Trigger gateway sync
-        await gateway_sync.sync_models()
+        try:
+            await gateway_sync.sync_models()
+        except Exception as e:
+            logger.warning(f"Gateway sync failed: {e}")
+            # Don't fail the whole operation if sync fails
 
         logger.info(f"Model {model_id} started on port {port}")
 
@@ -256,12 +286,19 @@ async def start_model(request: ModelStartRequest):
             auto_suspend_enabled=instance.auto_suspend_enabled,
         )
 
-    except Exception as e:
-        logger.error(f"Failed to start model: {e}", exc_info=True)
+    except (ModelAlreadyExistsError, InsufficientResourcesError, ModelLaunchError) as e:
+        logger.error(f"Failed to start model: {e}")
         # Cleanup on failure
         if model_id and resource_manager:
             resource_manager.release_model(model_id, full_release=True)
-        raise HTTPException(status_code=500, detail=f"Failed to start model: {str(e)}")
+        raise e.to_http_exception()
+
+    except Exception as e:
+        logger.error(f"Unexpected error starting model: {e}", exc_info=True)
+        # Cleanup on failure
+        if model_id and resource_manager:
+            resource_manager.release_model(model_id, full_release=True)
+        raise handle_exception(e)
 
 
 @app.post("/models/{model_id}/stop", dependencies=[Depends(require_api_key)])
@@ -272,7 +309,7 @@ async def stop_model(model_id: str):
 
     model = await registry.get(model_id)
     if model is None:
-        raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+        raise ModelNotFoundError(model_id).to_http_exception()
 
     logger.info(f"Stopping model: {model_id}")
 
@@ -290,15 +327,23 @@ async def stop_model(model_id: str):
             resource_manager.release_model(model_id, full_release=True)
 
             # Trigger gateway sync
-            await gateway_sync.sync_models()
+            try:
+                await gateway_sync.sync_models()
+            except Exception as e:
+                logger.warning(f"Gateway sync failed: {e}")
 
             return {"model_id": model_id, "status": "stopped", "stopped_at": model.stopped_at.isoformat()}
         else:
-            raise HTTPException(status_code=500, detail="Failed to stop model")
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "Failed to stop model", "detail": "Backend stop command failed"}
+            )
 
+    except ModelNotFoundError as e:
+        raise e.to_http_exception()
     except Exception as e:
         logger.error(f"Failed to stop model {model_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise handle_exception(e)
 
 
 @app.post("/models/{model_id}/suspend", dependencies=[Depends(require_api_key)])
@@ -307,19 +352,29 @@ async def suspend_model(model_id: str):
     if auto_suspend_manager is None:
         raise HTTPException(status_code=503, detail="Auto-suspend not initialized")
 
-    model = await registry.get(model_id)
-    if model is None:
-        raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+    try:
+        model = await registry.get(model_id)
+        if model is None:
+            raise ModelNotFoundError(model_id)
 
-    await auto_suspend_manager.suspend_model(model_id)
+        if model.status != ModelStatus.RUNNING:
+            raise ModelNotRunningError(model_id, model.status.value)
 
-    model = await registry.get(model_id)  # Refresh
-    return {
-        "model_id": model_id,
-        "status": model.status.value,
-        "suspended_at": model.stopped_at.isoformat() if model.stopped_at else None,
-        "port_reserved": model.port,
-    }
+        await auto_suspend_manager.suspend_model(model_id)
+
+        model = await registry.get(model_id)  # Refresh
+        return {
+            "model_id": model_id,
+            "status": model.status.value,
+            "suspended_at": model.stopped_at.isoformat() if model.stopped_at else None,
+            "port_reserved": model.port,
+        }
+
+    except (ModelNotFoundError, ModelNotRunningError) as e:
+        raise e.to_http_exception()
+    except Exception as e:
+        logger.error(f"Failed to suspend model {model_id}: {e}", exc_info=True)
+        raise handle_exception(e)
 
 
 @app.post("/models/{model_id}/resume", dependencies=[Depends(require_api_key)])
@@ -328,25 +383,42 @@ async def resume_model(model_id: str):
     if auto_suspend_manager is None:
         raise HTTPException(status_code=503, detail="Auto-suspend not initialized")
 
-    model = await registry.get(model_id)
-    if model is None:
-        raise HTTPException(status_code=404, detail=f"Model {model_id} not found")
+    try:
+        model = await registry.get(model_id)
+        if model is None:
+            raise ModelNotFoundError(model_id)
 
-    resumed = await auto_suspend_manager.resume_model(model_id)
+        if model.status != ModelStatus.SUSPENDED:
+            raise ModelNotSuspendedError(model_id, model.status.value)
 
-    if not resumed:
-        raise HTTPException(status_code=500, detail="Failed to resume model")
+        resumed = await auto_suspend_manager.resume_model(model_id)
 
-    model = await registry.get(model_id)  # Refresh
-    startup_time = (datetime.now() - model.started_at).total_seconds() if model.started_at else None
+        if not resumed:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Failed to resume model",
+                    "detail": "Resume operation returned false",
+                    "suggestion": "Check logs for details, verify sufficient resources available"
+                }
+            )
 
-    return {
-        "model_id": model_id,
-        "status": model.status.value,
-        "resumed_at": model.started_at.isoformat() if model.started_at else None,
-        "startup_time_seconds": startup_time,
-        "base_url": model.base_url,
-    }
+        model = await registry.get(model_id)  # Refresh
+        startup_time = (datetime.now() - model.started_at).total_seconds() if model.started_at else None
+
+        return {
+            "model_id": model_id,
+            "status": model.status.value,
+            "resumed_at": model.started_at.isoformat() if model.started_at else None,
+            "startup_time_seconds": startup_time,
+            "base_url": model.base_url,
+        }
+
+    except (ModelNotFoundError, ModelNotSuspendedError) as e:
+        raise e.to_http_exception()
+    except Exception as e:
+        logger.error(f"Failed to resume model {model_id}: {e}", exc_info=True)
+        raise handle_exception(e)
 
 
 @app.get("/models/{model_id}/status", response_model=ModelStatusResponse)
