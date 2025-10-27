@@ -54,7 +54,7 @@ Model Backends (vLLM, SGLang, TRT-LLM)
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/sparkstation.git
+git clone https://github.com/kshetrajna12/sparkstation.git
 cd sparkstation
 
 # Install dependencies with uv
@@ -377,7 +377,7 @@ Contributions welcome! Please open an issue or PR.
 
 ## Support
 
-- **Issues**: https://github.com/yourusername/sparkstation/issues
+- **Issues**: https://github.com/kshetrajna12/sparkstation/issues
 - **Docs**: See `TECH_PLAN.md` for detailed architecture
 
 ---
