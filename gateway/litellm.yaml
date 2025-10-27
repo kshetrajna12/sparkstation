@@ -1,30 +1,15 @@
-# LiteLLM Gateway Configuration for Sparkstation
-
-# CRITICAL: Model list is dynamically populated by Supervisor via admin API
-# This file serves as initial bootstrap only
-model_list: []
-
-# Router settings
-router_settings:
-  routing_strategy: simple-shuffle  # Load balance if multiple backends for same model
-  allowed_fails: 3  # Allow 3 failures before marking backend as unhealthy
-  cooldown_time: 30  # Cooldown period in seconds after failure
-
-# LiteLLM settings
-litellm_settings:
-  drop_params: true  # Drop unsupported params instead of erroring
-  set_verbose: true  # Enable detailed logging
-  success_callback: ["prometheus"]  # Log successful requests to Prometheus
-  failure_callback: ["prometheus"]  # Log failed requests to Prometheus
-  telemetry: false  # Disable anonymous telemetry
-
-# General settings
 general_settings:
-  # Master key for admin operations (set via env: LITELLM_MASTER_KEY)
-  master_key: "sk-sparkstation-admin"  # Change this in production!
-
-  # Database for tracking usage (optional)
-  # database_url: "sqlite:///./data/litellm.db"
-
-  # Custom callbacks
-  # callbacks: []
+  master_key: sk-sparkstation-admin
+litellm_settings:
+  drop_params: true
+  failure_callback:
+  - prometheus
+  set_verbose: true
+  success_callback:
+  - prometheus
+  telemetry: false
+model_list: []
+router_settings:
+  allowed_fails: 3
+  cooldown_time: 30
+  routing_strategy: simple-shuffle
