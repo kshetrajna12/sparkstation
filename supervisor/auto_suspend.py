@@ -136,6 +136,7 @@ class AutoSuspendManager:
             # Check if model has been idle too long
             if model.last_request_time is None:
                 model.last_request_time = model.started_at
+                await self.registry.update(model)  # Persist to database
 
             idle_duration = now - model.last_request_time
             if idle_duration.total_seconds() / 60 >= model.idle_timeout_minutes:

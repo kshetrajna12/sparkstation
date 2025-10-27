@@ -3,6 +3,8 @@ SGLang launcher for DGX Spark vision models with quantization support.
 """
 import asyncio
 import logging
+import os
+import signal
 import subprocess
 from datetime import datetime
 from typing import Dict, Optional
@@ -142,17 +144,33 @@ class SGLangLauncher(ModelLauncher):
         """
         try:
             if instance.pid:
-                # Kill subprocess
+                # Send SIGTERM for graceful shutdown
                 try:
-                    process = subprocess.Popen(["kill", str(instance.pid)])
-                    process.wait(timeout=10)
-                    logger.info(f"Stopped SGLang process PID={instance.pid}")
-                    return True
-                except subprocess.TimeoutExpired:
-                    # Force kill if graceful shutdown fails
-                    subprocess.run(["kill", "-9", str(instance.pid)])
+                    os.kill(instance.pid, signal.SIGTERM)
+                    logger.debug(f"Sent SIGTERM to SGLang process PID={instance.pid}")
+
+                    # Wait up to 10 seconds for process to terminate
+                    for _ in range(100):
+                        try:
+                            # Check if process still exists (sends signal 0)
+                            os.kill(instance.pid, 0)
+                            await asyncio.sleep(0.1)
+                        except ProcessLookupError:
+                            # Process is dead
+                            logger.info(f"Stopped SGLang process PID={instance.pid}")
+                            return True
+
+                    # Process still alive after 10s, force kill
+                    logger.warning(f"SGLang process PID={instance.pid} didn't respond to SIGTERM, sending SIGKILL")
+                    os.kill(instance.pid, signal.SIGKILL)
                     logger.warning(f"Force killed SGLang process PID={instance.pid}")
                     return True
+
+                except ProcessLookupError:
+                    # Process already dead
+                    logger.info(f"SGLang process PID={instance.pid} already stopped")
+                    return True
+
             elif instance.container_id:
                 # TODO: Stop Docker container
                 pass

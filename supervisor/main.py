@@ -252,6 +252,20 @@ async def start_model(request: ModelStartRequest):
             launcher = launcher_factory.get_launcher(request.backend)
             instance = await launcher.launch(config, model_id, port)
             instance.memory_gb = memory_estimate
+
+            # CRITICAL: Save config for auto-restart and resume
+            # This MUST be set here so restart_manager can recover failed models
+            instance.saved_config = {
+                "model_name": config.model_name,
+                "backend": config.backend.value,
+                "model_alias": config.model_alias,
+                "gpu_ids": instance.gpu_ids,
+                "port": port,
+                "quantization": config.quantization,
+                "auto_suspend_enabled": config.auto_suspend_enabled,
+                "idle_timeout_minutes": config.idle_timeout_minutes,
+                "extra_args": config.extra_args,
+            }
         except Exception as e:
             raise ModelLaunchError(request.backend.value, str(e))
 
