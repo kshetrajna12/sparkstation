@@ -1,0 +1,14 @@
+[Unit]
+Description=Sparkstation Daily Maintenance Timer
+Requires=sparkstation-maintenance.service
+
+[Timer]
+# Run daily at 3 AM
+OnCalendar=daily
+OnCalendar=*-*-* 03:00:00
+
+# Run 10 minutes after boot if missed
+Persistent=true
+
+[Install]
+WantedBy=timers.target

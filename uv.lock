@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.11"
 
 [[package]]
@@ -2004,6 +2004,7 @@ dependencies = [
     { name = "aiosqlite" },
     { name = "click" },
     { name = "fastapi" },
+    { name = "greenlet" },
     { name = "httpx" },
     { name = "litellm" },
     { name = "nvidia-ml-py3" },
@@ -2043,6 +2044,7 @@ requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.3.0" },
     { name = "click", specifier = ">=8.1.7" },
     { name = "fastapi", specifier = ">=0.110.0" },
+    { name = "greenlet", specifier = ">=3.0.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "ipython", marker = "extra == 'dev'", specifier = ">=8.22.0" },
     { name = "litellm", specifier = ">=1.35.8" },
