@@ -61,8 +61,10 @@ class HealthCheckManager:
             except asyncio.CancelledError:
                 pass
             self._task = None
-            logger.info("Health check manager stopped")
+
+        # CRITICAL: Close httpx client to prevent file descriptor leak
         await self.client.aclose()
+        logger.info("Health check manager stopped")
 
     async def _monitoring_loop(self):
         """Background task: check all running models periodically."""

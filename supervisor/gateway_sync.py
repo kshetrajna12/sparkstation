@@ -50,7 +50,10 @@ class GatewaySync:
             except asyncio.CancelledError:
                 pass
             self._task = None
-            logger.info("Gateway sync stopped")
+
+        # CRITICAL: Close httpx client to prevent file descriptor leak
+        await self.client.aclose()
+        logger.info("Gateway sync stopped")
 
     async def _sync_loop(self):
         """Background task: sync every N seconds."""
