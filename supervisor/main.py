@@ -89,7 +89,7 @@ async def lifespan(app: FastAPI):
 
     resource_manager = ResourceManager()
     launcher_factory = LauncherFactory()
-    auto_suspend_manager = AutoSuspendManager(registry, launcher_factory)
+    auto_suspend_manager = AutoSuspendManager(registry, launcher_factory, resource_manager)
     gateway_sync = GatewaySync(registry)
     restart_manager = RestartManager(registry, launcher_factory, resource_manager)
     health_check_manager = HealthCheckManager(registry, restart_manager)

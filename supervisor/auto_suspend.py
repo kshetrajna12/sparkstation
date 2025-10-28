@@ -21,10 +21,10 @@ class AutoSuspendManager:
     CRITICAL: Implements hysteresis to prevent suspend/resume thrashing.
     """
 
-    def __init__(self, registry: ModelRegistry, launcher_factory: LauncherFactory):
+    def __init__(self, registry: ModelRegistry, launcher_factory: LauncherFactory, resource_manager: ResourceManager):
         self.registry = registry
         self.launcher_factory = launcher_factory
-        self.resource_manager = ResourceManager()
+        self.resource_manager = resource_manager
 
         # Check interval
         self.check_interval_seconds = settings.auto_suspend_check_interval_seconds

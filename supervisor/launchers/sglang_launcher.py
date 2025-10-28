@@ -7,6 +7,7 @@ import os
 import signal
 import subprocess
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Optional
 import httpx
 from supervisor.launchers.base import ModelLauncher, LaunchError
@@ -29,6 +30,10 @@ class SGLangLauncher(ModelLauncher):
 
     def __init__(self):
         self.client = httpx.AsyncClient(timeout=30.0)
+
+    async def cleanup(self):
+        """Cleanup resources (close httpx client)."""
+        await self.client.aclose()
 
     async def launch(self, config: ModelConfig, model_id: str, port: int) -> ModelInstance:
         """
@@ -86,10 +91,16 @@ class SGLangLauncher(ModelLauncher):
         try:
             # Launch as subprocess
             if config.use_subprocess:
+                # CRITICAL: Open log file to prevent pipe buffer deadlock
+                # Without this, backend logs fill the pipe buffer and the process hangs
+                log_dir = Path("data/model_logs")
+                log_dir.mkdir(parents=True, exist_ok=True)
+                log_file = open(log_dir / f"{model_id}.log", "a")
+
                 process = subprocess.Popen(
                     cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,  # Merge stderr into stdout
                     env=None,  # Inherit environment
                 )
 
@@ -98,8 +109,15 @@ class SGLangLauncher(ModelLauncher):
 
                 # Check if process started successfully
                 if process.poll() is not None:
-                    stderr = process.stderr.read().decode() if process.stderr else ""
-                    raise LaunchError(f"SGLang process failed to start: {stderr}")
+                    # Read last 100 lines from log file for error context
+                    log_file.flush()
+                    try:
+                        with open(log_dir / f"{model_id}.log", "r") as lf:
+                            log_lines = lf.readlines()
+                            error_context = "".join(log_lines[-100:])
+                    except:
+                        error_context = "(could not read log file)"
+                    raise LaunchError(f"SGLang process failed to start. Check logs at {log_dir}/{model_id}.log\nLast output: {error_context[:500]}")
 
                 # Create instance
                 instance = ModelInstance(

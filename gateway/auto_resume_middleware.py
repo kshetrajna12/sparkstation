@@ -30,6 +30,21 @@ class AutoResumeMiddleware(BaseHTTPMiddleware):
         self.client = httpx.AsyncClient(timeout=60.0)
         logger.info(f"Auto-resume middleware initialized, supervisor: {supervisor_url}")
 
+    async def cleanup(self):
+        """
+        Cleanup resources (close httpx client).
+
+        NOTE: This should be called during app shutdown to prevent file descriptor leaks.
+        For LiteLLM integration, this requires registering a shutdown event:
+
+        @app.on_event("shutdown")
+        async def shutdown_middleware():
+            middleware = app.user_middleware[0][1]  # Get middleware instance
+            await middleware.cleanup()
+        """
+        await self.client.aclose()
+        logger.info("Auto-resume middleware cleaned up")
+
     async def dispatch(self, request: Request, call_next):
         """
         Intercept requests and auto-resume suspended models.

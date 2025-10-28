@@ -86,6 +86,29 @@ Added 13 new settings in `supervisor/config.py`:
 - Logging: `LOG_TO_FILE`, `LOG_FILE_PATH`, `LOG_MAX_BYTES`, `LOG_BACKUP_COUNT`
 
 ### Fixed
+
+#### Critical Production Bugs (October 27, 2025 - Code Review Fixes)
+- **ResourceManager split-brain bug** (CRITICAL)
+  - AutoSuspendManager was creating its own ResourceManager instance instead of using shared instance
+  - Caused memory deadlock after a few suspend/resume cycles
+  - System would falsely reject new models claiming insufficient resources while GPUs idle
+  - Fixed by passing shared ResourceManager instance from main.py to AutoSuspendManager
+  - Impact: Prevents production deadlock within hours of operation
+
+- **Subprocess pipe buffer deadlock** (CRITICAL)
+  - vLLM and SGLang launchers piped stdout/stderr to subprocess.PIPE but never consumed output
+  - When logs filled 64KB pipe buffer, child process blocked on write() causing hangs
+  - Models appeared "hung" with health checks failing and requests timing out
+  - Fixed by redirecting subprocess output to log files at `data/model_logs/{model_id}.log`
+  - Impact: Prevents random model hangs, provides debugging logs as bonus
+
+- **httpx.AsyncClient file descriptor leak** (RESOURCE LEAK)
+  - Multiple components (GatewaySync, HealthCheckManager, launchers, middleware) never called aclose()
+  - Each AsyncClient holds TCP sockets, connection pools, SSL contexts
+  - Over days/weeks would exhaust file descriptors causing "too many open files" errors
+  - Fixed by adding cleanup to all stop() methods: `await self.client.aclose()`
+  - Impact: Prevents file descriptor exhaustion during long production runs
+
 - SQLAlchemy deprecation warning: Use `declarative_base` from `sqlalchemy.orm`
 - Pydantic deprecation warning: Use `ConfigDict` instead of `class Config`
 - Test suite now runs with 0 warnings
