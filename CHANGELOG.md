@@ -103,10 +103,11 @@ Added 13 new settings in `supervisor/config.py`:
   - Impact: Prevents random model hangs, provides debugging logs as bonus
 
 - **httpx.AsyncClient file descriptor leak** (RESOURCE LEAK)
-  - Multiple components (GatewaySync, HealthCheckManager, launchers, middleware) never called aclose()
+  - GatewaySync and HealthCheckManager never called aclose() on their httpx clients
   - Each AsyncClient holds TCP sockets, connection pools, SSL contexts
   - Over days/weeks would exhaust file descriptors causing "too many open files" errors
-  - Fixed by adding cleanup to all stop() methods: `await self.client.aclose()`
+  - Fixed by adding cleanup to stop() methods: `await self.client.aclose()`
+  - Note: AutoResumeMiddleware client is intentionally long-lived (single instance for process lifetime)
   - Impact: Prevents file descriptor exhaustion during long production runs
 
 - SQLAlchemy deprecation warning: Use `declarative_base` from `sqlalchemy.orm`
