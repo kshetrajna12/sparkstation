@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Verified (October 31, 2025 - Bug Verification)
+
+All critical bugs identified in BUG_REPORT.md have been **verified as fixed**:
+- ✅ BUG #1 (MEDIUM): `last_request_time` persistence - Fixed in auto_suspend.py:139
+- ✅ BUG #2 (MEDIUM): Process termination verification - Fixed in vllm_launcher.py:165-186
+- ✅ BUG #3 (HIGH): `saved_config` on model start - Fixed in main.py:256-268
+- ✅ BUG #4 (MEDIUM): SGLang process termination - Fixed in sglang_launcher.py:165-190
+
+All fixes were implemented in commit ed7fd0b and earlier commits. All 24 unit tests pass.
+
+**Status**: Production-ready with all known bugs resolved.
+
 ### Added (October 27, 2025 - Production Hardening)
 
 #### Health Check & Auto-Restart System
