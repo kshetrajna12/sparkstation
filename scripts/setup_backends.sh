@@ -77,25 +77,23 @@ echo -e "${BLUE}Pulling Backend Docker Images${NC}"
 echo -e "${BLUE}========================================${NC}"
 echo ""
 
-# Pull SGLang image
-echo -e "${YELLOW}Pulling SGLang Docker image (this may take a few minutes)...${NC}"
-docker pull --platform "$PLATFORM" lmsysorg/sglang:latest
-echo -e "${GREEN}✓ SGLang image pulled${NC}"
+# Pull vLLM image
+echo -e "${YELLOW}Pulling vLLM Docker image (this may take a few minutes)...${NC}"
+docker pull --platform "$PLATFORM" nvcr.io/nvidia/vllm:25.09-py3
+echo -e "${GREEN}✓ vLLM image pulled${NC}"
 
 echo ""
-echo -e "${YELLOW}Note: vLLM support will be added later${NC}"
-echo ""
 
-# Verify SGLang image works with CUDA
-echo -e "${YELLOW}Verifying SGLang image with CUDA...${NC}"
-CUDA_TEST=$(docker run --platform "$PLATFORM" --gpus all --rm lmsysorg/sglang:latest \
+# Verify vLLM image works with CUDA
+echo -e "${YELLOW}Verifying vLLM image with CUDA...${NC}"
+CUDA_TEST=$(docker run --platform "$PLATFORM" --gpus all --rm nvcr.io/nvidia/vllm:25.09-py3 \
     python -c "import torch; print('CUDA:', torch.cuda.is_available())" 2>&1 | grep "CUDA: True" || echo "")
 
 if [ -z "$CUDA_TEST" ]; then
-    echo -e "${RED}✗ CUDA not available in SGLang Docker image!${NC}"
+    echo -e "${RED}✗ CUDA not available in vLLM Docker image!${NC}"
     exit 1
 fi
-echo -e "${GREEN}✓ CUDA works in SGLang Docker image${NC}"
+echo -e "${GREEN}✓ CUDA works in vLLM Docker image${NC}"
 
 echo ""
 echo -e "${BLUE}========================================${NC}"
@@ -137,7 +135,7 @@ update_env_var() {
 }
 
 update_env_var "USE_DOCKER" "true" "$ENV_FILE"
-update_env_var "SGLANG_DOCKER_IMAGE" "lmsysorg/sglang:latest" "$ENV_FILE"
+update_env_var "VLLM_DOCKER_IMAGE" "nvcr.io/nvidia/vllm:25.09-py3" "$ENV_FILE"
 
 echo -e "${GREEN}✓ Configuration updated${NC}"
 
@@ -146,9 +144,8 @@ echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}Installation Complete!${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
-echo "Backend Docker images installed:"
-echo "  - SGLang: lmsysorg/sglang:latest ($PLATFORM)"
-echo "  - vLLM:   (to be added later)"
+echo "Backend Docker image installed:"
+echo "  - vLLM: nvcr.io/nvidia/vllm:25.09-py3 ($PLATFORM)"
 echo ""
 echo "Configuration file updated:"
 echo "  - $ENV_FILE"

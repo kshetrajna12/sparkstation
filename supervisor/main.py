@@ -290,8 +290,8 @@ async def start_model(request: ModelStartRequest):
         return ModelStartResponse(
             model_id=instance.id,
             model_name=instance.model_name,
-            backend=instance.backend.value,
-            status=instance.status.value,
+            backend=instance.backend.value if hasattr(instance.backend, 'value') else instance.backend,
+            status=instance.status.value if hasattr(instance.status, 'value') else instance.status,
             port=instance.port,
             gpu_ids=instance.gpu_ids,
             base_url=instance.base_url,

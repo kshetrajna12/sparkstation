@@ -1,6 +1,6 @@
 # Sparkstation
 
-Unified LLM orchestration and gateway service for DGX Spark — dynamically manages vLLM, SGLang, and TensorRT-LLM backends under a single OpenAI-compatible API.
+LLM orchestration and gateway service for DGX Spark — manages vLLM backend with Docker for seamless model serving under an OpenAI-compatible API.
 
 **Version**: 0.1.0 (Alpha)
 **Platform**: NVIDIA DGX Spark (Grace Blackwell)
@@ -10,7 +10,7 @@ Unified LLM orchestration and gateway service for DGX Spark — dynamically mana
 
 ## Features
 
-- **Multi-backend support**: vLLM, SGLang, TensorRT-LLM
+- **vLLM backend**: NVIDIA-optimized vLLM with official Blackwell support via Docker
 - **OpenAI-compatible API**: Drop-in replacement via LiteLLM gateway
 - **Auto-suspend/resume**: Idle models auto-suspend to free GPU resources (~15s resume time)
 - **Health monitoring**: Periodic 1-token probes detect unresponsive models
@@ -68,7 +68,7 @@ uv sync
 
 **What this does:**
 - Installs Sparkstation with uv (lightweight)
-- Pulls SGLang Docker image with full CUDA support
+- Pulls vLLM Docker image with full CUDA and Blackwell support
 - Auto-detects ARM64 (DGX Spark) vs x86_64 architecture
 - Configures `.env` for Docker mode
 - Verifies CUDA is working in Docker container
@@ -103,7 +103,7 @@ sudo systemctl restart docker
 
 ### Advanced: Subprocess Mode (Conda/Micromamba)
 
-If you prefer isolated conda/micromamba environments instead of Docker:
+If you prefer isolated conda/micromamba environment instead of Docker:
 
 ```bash
 # 1. Install Sparkstation
@@ -111,18 +111,18 @@ uv sync
 cp .env.example .env
 mkdir -p data
 
-# 2. Set up SGLang backend (separate conda environment)
-./scripts/setup_sglang_env.sh ./backends/sglang
+# 2. Set up vLLM backend (separate conda environment)
+./scripts/setup_vllm_env.sh ./backends/vllm
 
 # 3. Update .env for subprocess mode
 echo "USE_DOCKER=false" >> .env
-echo "SGLANG_PYTHON_PATH=./backends/sglang/bin/python" >> .env
+echo "VLLM_PYTHON_PATH=./backends/vllm/bin/python" >> .env
 
 # 4. Verify
 ./scripts/verify_backends.sh
 ```
 
-**Note**: Docker mode is recommended for production. Subprocess mode is only for specific use cases where Docker is not available.
+**Note**: Docker mode is strongly recommended for production, especially on Blackwell GPUs. Subprocess mode is only for specific use cases where Docker is not available.
 
 ### Start Services
 

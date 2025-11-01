@@ -64,73 +64,73 @@ if [ "${USE_DOCKER:-true}" = "true" ]; then
     fi
     echo -e "${GREEN}✓ Docker available${NC}"
 
-    # Check SGLang image
-    SGLANG_IMAGE="${SGLANG_DOCKER_IMAGE:-lmsysorg/sglang:latest}"
-    echo -e "${YELLOW}Checking SGLang Docker image: $SGLANG_IMAGE${NC}"
+    # Check vLLM image
+    VLLM_IMAGE="${VLLM_DOCKER_IMAGE:-nvcr.io/nvidia/vllm:25.09-py3}"
+    echo -e "${YELLOW}Checking vLLM Docker image: $VLLM_IMAGE${NC}"
 
-    if ! docker image inspect "$SGLANG_IMAGE" &> /dev/null; then
-        echo -e "${RED}✗ SGLang image not found locally!${NC}"
-        echo "  Run: docker pull --platform $PLATFORM $SGLANG_IMAGE"
+    if ! docker image inspect "$VLLM_IMAGE" &> /dev/null; then
+        echo -e "${RED}✗ vLLM image not found locally!${NC}"
+        echo "  Run: docker pull --platform $PLATFORM $VLLM_IMAGE"
         exit 1
     fi
-    echo -e "${GREEN}✓ SGLang image found${NC}"
+    echo -e "${GREEN}✓ vLLM image found${NC}"
 
     # Test PyTorch CUDA
-    echo -e "${YELLOW}Testing PyTorch CUDA in SGLang container...${NC}"
-    CUDA_OUTPUT=$(docker run --platform "$PLATFORM" --gpus all --rm "$SGLANG_IMAGE" \
+    echo -e "${YELLOW}Testing PyTorch CUDA in vLLM container...${NC}"
+    CUDA_OUTPUT=$(docker run --platform "$PLATFORM" --gpus all --rm "$VLLM_IMAGE" \
         python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda}'); print(f'GPU count: {torch.cuda.device_count()}'); print(f'GPU 0: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')" 2>&1)
 
     echo "$CUDA_OUTPUT"
 
     if echo "$CUDA_OUTPUT" | grep -q "CUDA available: True"; then
-        echo -e "${GREEN}✓ CUDA works in SGLang Docker container${NC}"
+        echo -e "${GREEN}✓ CUDA works in vLLM Docker container${NC}"
     else
-        echo -e "${RED}✗ CUDA not available in SGLang Docker container${NC}"
+        echo -e "${RED}✗ CUDA not available in vLLM Docker container${NC}"
         exit 1
     fi
 
-    # Test SGLang import
+    # Test vLLM import
     echo ""
-    echo -e "${YELLOW}Testing SGLang import...${NC}"
-    SGLANG_VERSION=$(docker run --platform "$PLATFORM" --rm "$SGLANG_IMAGE" \
-        python -c "import sglang; print(sglang.__version__)" 2>&1 | tail -1)
+    echo -e "${YELLOW}Testing vLLM import...${NC}"
+    VLLM_VERSION=$(docker run --platform "$PLATFORM" --rm "$VLLM_IMAGE" \
+        python -c "import vllm; print(vllm.__version__)" 2>&1 | tail -1)
 
-    if [ -n "$SGLANG_VERSION" ]; then
-        echo -e "${GREEN}✓ SGLang $SGLANG_VERSION${NC}"
+    if [ -n "$VLLM_VERSION" ]; then
+        echo -e "${GREEN}✓ vLLM $VLLM_VERSION${NC}"
     else
-        echo -e "${RED}✗ Failed to import sglang${NC}"
+        echo -e "${RED}✗ Failed to import vllm${NC}"
         exit 1
     fi
 
     echo ""
-    echo -e "${GREEN}✓ SGLang Docker backend verified${NC}"
+    echo -e "${GREEN}✓ vLLM Docker backend verified${NC}"
 
 else
     # Subprocess mode (conda/micromamba)
     echo -e "${YELLOW}Checking subprocess-based backend (conda/micromamba)...${NC}"
 
-    if [ -n "$SGLANG_PYTHON_PATH" ] && [ -f "$SGLANG_PYTHON_PATH" ]; then
-        echo "  Python path: $SGLANG_PYTHON_PATH"
+    if [ -n "$VLLM_PYTHON_PATH" ] && [ -f "$VLLM_PYTHON_PATH" ]; then
+        echo "  Python path: $VLLM_PYTHON_PATH"
 
         # Check Python version
-        PYTHON_VERSION=$("$SGLANG_PYTHON_PATH" --version 2>&1)
+        PYTHON_VERSION=$("$VLLM_PYTHON_PATH" --version 2>&1)
         echo "  $PYTHON_VERSION"
 
-        # Check SGLang import
-        if "$SGLANG_PYTHON_PATH" -c "import sglang" 2>/dev/null; then
-            SGLANG_VERSION=$("$SGLANG_PYTHON_PATH" -c "import sglang; print(sglang.__version__)")
-            echo -e "  ${GREEN}✓ SGLang $SGLANG_VERSION${NC}"
+        # Check vLLM import
+        if "$VLLM_PYTHON_PATH" -c "import vllm" 2>/dev/null; then
+            VLLM_VERSION=$("$VLLM_PYTHON_PATH" -c "import vllm; print(vllm.__version__)")
+            echo -e "  ${GREEN}✓ vLLM $VLLM_VERSION${NC}"
         else
-            echo -e "  ${RED}✗ Failed to import sglang${NC}"
+            echo -e "  ${RED}✗ Failed to import vllm${NC}"
             exit 1
         fi
 
         # Check PyTorch CUDA
-        if "$SGLANG_PYTHON_PATH" -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
-            TORCH_VERSION=$("$SGLANG_PYTHON_PATH" -c "import torch; print(torch.__version__)")
-            CUDA_VERSION=$("$SGLANG_PYTHON_PATH" -c "import torch; print(torch.version.cuda)")
-            GPU_COUNT=$("$SGLANG_PYTHON_PATH" -c "import torch; print(torch.cuda.device_count())")
-            GPU_NAME=$("$SGLANG_PYTHON_PATH" -c "import torch; print(torch.cuda.get_device_name(0))")
+        if "$VLLM_PYTHON_PATH" -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
+            TORCH_VERSION=$("$VLLM_PYTHON_PATH" -c "import torch; print(torch.__version__)")
+            CUDA_VERSION=$("$VLLM_PYTHON_PATH" -c "import torch; print(torch.version.cuda)")
+            GPU_COUNT=$("$VLLM_PYTHON_PATH" -c "import torch; print(torch.cuda.device_count())")
+            GPU_NAME=$("$VLLM_PYTHON_PATH" -c "import torch; print(torch.cuda.get_device_name(0))")
             echo -e "  ${GREEN}✓ PyTorch $TORCH_VERSION (CUDA $CUDA_VERSION)${NC}"
             echo -e "  ${GREEN}✓ GPUs: $GPU_COUNT x $GPU_NAME${NC}"
         else
@@ -138,16 +138,14 @@ else
             exit 1
         fi
 
-        echo -e "${GREEN}✓ SGLang subprocess backend verified${NC}"
+        echo -e "${GREEN}✓ vLLM subprocess backend verified${NC}"
     else
-        echo -e "${YELLOW}! SGLANG_PYTHON_PATH not set or not found${NC}"
-        echo "  Expected: SGLANG_PYTHON_PATH in .env"
+        echo -e "${YELLOW}! VLLM_PYTHON_PATH not set or not found${NC}"
+        echo "  Expected: VLLM_PYTHON_PATH in .env"
         echo "  See DEPLOYMENT_PRODUCTION.md for conda/micromamba setup"
     fi
 fi
 
-echo ""
-echo -e "${YELLOW}vLLM backend: Not installed yet (to be added later)${NC}"
 echo ""
 
 # Check Sparkstation
@@ -181,9 +179,9 @@ echo -e "${GREEN}========================================${NC}"
 echo ""
 
 if [ "${USE_DOCKER:-true}" = "true" ]; then
-    echo "SGLang Docker backend is properly installed and CUDA is available."
+    echo "vLLM Docker backend is properly installed and CUDA is available."
 else
-    echo "SGLang subprocess backend is properly installed and CUDA is available."
+    echo "vLLM subprocess backend is properly installed and CUDA is available."
 fi
 
 echo ""
@@ -194,6 +192,4 @@ echo "   ./scripts/start_supervisor.sh"
 echo ""
 echo "2. Start a model via Sparkstation API"
 echo "   # See README.md for examples"
-echo ""
-echo -e "${YELLOW}Note: vLLM support will be added in a future update${NC}"
 echo ""
