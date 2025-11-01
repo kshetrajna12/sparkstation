@@ -47,48 +47,99 @@ Model Backends (vLLM, SGLang, TRT-LLM)
 
 ## Quick Start
 
-### Prerequisites
+### For New Users (Automated Setup)
 
-- Python 3.11+
-- NVIDIA DGX Spark (Grace Blackwell) or compatible GPU system
-- CUDA 12.0+
-- [uv](https://github.com/astral-sh/uv) package manager
-
-### Installation
+**One-command setup:**
 
 ```bash
 # Clone repository
 git clone https://github.com/kshetrajna12/sparkstation.git
 cd sparkstation
 
-# Install dependencies with uv
+# 1. Install Sparkstation dependencies
 uv sync
 
-# Copy and configure environment
-cp .env.example .env
-# Edit .env to configure settings
+# 2. Set up backend Docker images (SGLang)
+./scripts/setup_backends.sh
 
-# Ensure data directory exists
-mkdir -p data
+# 3. Verify installation
+./scripts/verify_backends.sh
 ```
 
-### Start Supervisor
+**What this does:**
+- Installs Sparkstation with uv (lightweight)
+- Pulls SGLang Docker image with full CUDA support
+- Auto-detects ARM64 (DGX Spark) vs x86_64 architecture
+- Configures `.env` for Docker mode
+- Verifies CUDA is working in Docker container
+
+### Prerequisites
+
+- Python 3.11+
+- NVIDIA GPU with CUDA 12.0+ driver
+- [Docker](https://docs.docker.com/engine/install/) with [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+- [uv](https://github.com/astral-sh/uv) package manager
+
+**Install uv:**
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+**Install Docker & NVIDIA Container Toolkit:**
+```bash
+# Docker (Ubuntu/Debian)
+curl -fsSL https://get.docker.com | sh
+
+# NVIDIA Container Toolkit
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+### Advanced: Subprocess Mode (Conda/Micromamba)
+
+If you prefer isolated conda/micromamba environments instead of Docker:
 
 ```bash
-# Using startup script
+# 1. Install Sparkstation
+uv sync
+cp .env.example .env
+mkdir -p data
+
+# 2. Set up SGLang backend (separate conda environment)
+./scripts/setup_sglang_env.sh ./backends/sglang
+
+# 3. Update .env for subprocess mode
+echo "USE_DOCKER=false" >> .env
+echo "SGLANG_PYTHON_PATH=./backends/sglang/bin/python" >> .env
+
+# 4. Verify
+./scripts/verify_backends.sh
+```
+
+**Note**: Docker mode is recommended for production. Subprocess mode is only for specific use cases where Docker is not available.
+
+### Start Services
+
+```bash
+# Terminal 1: Start Sparkstation supervisor
 ./scripts/start_supervisor.sh
 
-# Or directly with uv
-uv run uvicorn supervisor.main:app --host 127.0.0.1 --port 9001
+# Terminal 2: Start LiteLLM gateway
+./scripts/start_gateway.sh
 ```
 
-### Start LiteLLM Gateway
-
+Or directly with uv:
 ```bash
-# In a separate terminal
-./scripts/start_gateway.sh
+# Supervisor
+uv run uvicorn supervisor.main:app --host 127.0.0.1 --port 9001
 
-# Or directly with uv
+# Gateway
 uv run litellm --config gateway/litellm.yaml --host 127.0.0.1 --port 8000
 ```
 

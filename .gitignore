@@ -213,6 +213,17 @@ data/*.db-journal
 data/*.db-wal
 data/*.db-shm
 data/logs/
+data/model_logs/
+
+# Backend environments (dev mode)
+# These are large conda/micromamba environments (GB each)
+backends/*
+!backends/.gitkeep
+
+# HuggingFace model cache (can be very large)
+# Usually stored in ~/.cache/huggingface but might be local
+.cache/
+huggingface_cache/
 
 # Model weights (if downloaded locally)
 models/
@@ -224,11 +235,15 @@ models/
 
 # LiteLLM generated files
 litellm_config.json
+litellm.db
 .litellm_cache/
 
 # Model server logs
 model_logs/
 *.model.log
+
+# Systemd generated files (if testing locally)
+*.service.d/
 
 # Backup files
 *.backup

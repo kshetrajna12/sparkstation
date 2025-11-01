@@ -20,6 +20,18 @@ class Settings(BaseSettings):
     port: int = 9001
     log_level: str = "info"
 
+    # Backend configuration
+    # Docker mode: Use Docker containers for backends (recommended for production)
+    # Subprocess mode: Use direct Python execution from conda/micromamba environments
+    use_docker: bool = True  # Default to Docker for better isolation and easier setup
+    sglang_docker_image: str = "lmsysorg/sglang:latest"
+    vllm_docker_image: str = "vllm/vllm-openai:latest"
+
+    # Backend Python paths (for subprocess mode only)
+    # If use_docker=False, these paths point to conda/micromamba environments
+    sglang_python_path: Optional[str] = None
+    vllm_python_path: Optional[str] = None
+
     # DGX Spark hardware constraints
     total_unified_memory_gb: int = 128  # Total unified CPU+GPU memory
     memory_hard_limit_gb: int = 110  # 85% of total

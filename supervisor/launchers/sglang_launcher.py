@@ -64,33 +64,82 @@ class SGLangLauncher(ModelLauncher):
         context_len = config.extra_args.get("max_model_len", 8192)
         max_concurrent = config.extra_args.get("max_concurrent_requests", 16)  # Lower for vision
 
-        # Build SGLang command
-        cmd = [
-            "python",
-            "-m",
-            "sglang.launch_server",
-            "--model-path",
-            config.model_name,
-            "--host",
-            settings.host,  # CRITICAL: Localhost only
-            "--port",
-            str(port),
-            "--quantization",
-            sglang_quant,
-            "--context-length",
-            str(context_len),
-            "--mem-fraction-static",
-            "0.9",  # Max 90% memory
-            "--max-running-requests",
-            str(max_concurrent),
-        ]
-
         logger.info(f"Launching SGLang model: {config.model_name} on port {port}")
-        logger.debug(f"Command: {' '.join(cmd)}")
 
         try:
-            # Launch as subprocess
-            if config.use_subprocess:
+            # Launch using Docker (recommended)
+            if settings.use_docker:
+                # Build docker run command
+                docker_cmd = [
+                    "docker",
+                    "run",
+                    "-d",  # Detached mode
+                    "--platform", "linux/arm64",  # Explicit ARM64 for DGX Spark
+                    "--gpus", "all",  # GPU passthrough
+                    "--network", "host",  # Use host network for simplicity
+                    "--name", f"sparkstation-{model_id}",  # Container name
+                    "--env", f"HF_HOME=/workspace/.cache/huggingface",  # HuggingFace cache
+                    settings.sglang_docker_image,
+                    "python", "-m", "sglang.launch_server",
+                    "--model-path", config.model_name,
+                    "--host", "0.0.0.0",  # Bind to all interfaces (container network)
+                    "--port", str(port),
+                    "--quantization", sglang_quant,
+                    "--context-length", str(context_len),
+                    "--mem-fraction-static", "0.9",
+                    "--max-running-requests", str(max_concurrent),
+                ]
+
+                logger.debug(f"Docker command: {' '.join(docker_cmd)}")
+
+                # Launch Docker container
+                result = subprocess.run(
+                    docker_cmd,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+
+                container_id = result.stdout.strip()
+                logger.info(f"Docker container started: {container_id[:12]}, model_id={model_id}")
+
+                # Wait a moment for container to start
+                await asyncio.sleep(3)
+
+                # Check if container is still running
+                check_cmd = ["docker", "inspect", "-f", "{{.State.Running}}", container_id]
+                check_result = subprocess.run(check_cmd, capture_output=True, text=True)
+
+                if check_result.stdout.strip() != "true":
+                    # Get container logs for debugging
+                    logs_cmd = ["docker", "logs", container_id]
+                    logs_result = subprocess.run(logs_cmd, capture_output=True, text=True)
+                    error_context = logs_result.stdout + logs_result.stderr
+                    raise LaunchError(f"Docker container failed to start. Logs:\n{error_context[:1000]}")
+
+                # Create instance
+                instance = ModelInstance(
+                    id=model_id,
+                    model_name=config.model_name,
+                    model_alias=config.model_alias,
+                    backend=Backend.SGLANG,
+                    status=ModelStatus.STARTING,
+                    health_status=HealthStatus.UNKNOWN,
+                    port=port,
+                    gpu_ids=[0],  # DGX Spark: single GPU
+                    base_url=f"http://{settings.host}:{port}",
+                    container_id=container_id,
+                    started_at=datetime.now(),
+                    auto_suspend_enabled=config.auto_suspend_enabled,
+                    idle_timeout_minutes=config.idle_timeout_minutes,
+                    extra_args=config.extra_args,
+                )
+
+                logger.info(f"SGLang Docker container ready: container_id={container_id[:12]}, model_id={model_id}")
+                return instance
+
+            # Launch as subprocess (legacy mode for conda/micromamba environments)
+            elif config.use_subprocess:
                 # CRITICAL: Open log file to prevent pipe buffer deadlock
                 # Without this, backend logs fill the pipe buffer and the process hangs
                 log_dir = Path("data/model_logs")
@@ -190,8 +239,45 @@ class SGLangLauncher(ModelLauncher):
                     return True
 
             elif instance.container_id:
-                # TODO: Stop Docker container
-                pass
+                # Stop Docker container
+                try:
+                    # Stop container with timeout
+                    subprocess.run(
+                        ["docker", "stop", "-t", "10", instance.container_id],
+                        capture_output=True,
+                        text=True,
+                        timeout=15,  # Give extra time
+                    )
+                    logger.info(f"Stopped Docker container {instance.container_id[:12]}")
+
+                    # Remove container
+                    subprocess.run(
+                        ["docker", "rm", instance.container_id],
+                        capture_output=True,
+                        text=True,
+                    )
+                    logger.info(f"Removed Docker container {instance.container_id[:12]}")
+                    return True
+
+                except subprocess.TimeoutExpired:
+                    # Force kill if timeout
+                    logger.warning(f"Docker container {instance.container_id[:12]} didn't stop gracefully, forcing kill")
+                    subprocess.run(
+                        ["docker", "kill", instance.container_id],
+                        capture_output=True,
+                        text=True,
+                    )
+                    subprocess.run(
+                        ["docker", "rm", instance.container_id],
+                        capture_output=True,
+                        text=True,
+                    )
+                    logger.warning(f"Force killed and removed Docker container {instance.container_id[:12]}")
+                    return True
+
+                except Exception as e:
+                    logger.error(f"Failed to stop Docker container: {e}")
+                    return False
 
             return False
 
