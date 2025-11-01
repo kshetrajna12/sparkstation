@@ -26,6 +26,7 @@ class VLLMLauncher(ModelLauncher):
         "int4": "awq",  # vLLM uses AWQ for int4
         "awq": "awq",  # Direct AWQ
         "gptq": "gptq",  # GPTQ quantization
+        "none": None,  # No quantization (for models with built-in quantization)
     }
 
     def __init__(self):
@@ -50,15 +51,21 @@ class VLLMLauncher(ModelLauncher):
         Raises:
             LaunchError: If launch fails
         """
-        # DGX Spark: Mandatory quantization
-        quantization = config.quantization or "fp8"
-        if quantization.lower() not in self.QUANTIZATION_MAP:
-            raise LaunchError(
-                f"Unsupported quantization for vLLM: {quantization}. "
-                f"Supported: {list(self.QUANTIZATION_MAP.keys())}"
-            )
+        # DGX Spark: Quantization (some models have built-in quantization)
+        # Default to fp8 for most models, but allow None for models with built-in quantization
+        vllm_quant = None
 
-        vllm_quant = self.QUANTIZATION_MAP[quantization.lower()]
+        if config.quantization:
+            quantization = config.quantization.lower()
+            if quantization not in self.QUANTIZATION_MAP:
+                raise LaunchError(
+                    f"Unsupported quantization for vLLM: {config.quantization}. "
+                    f"Supported: {list(self.QUANTIZATION_MAP.keys())}"
+                )
+            vllm_quant = self.QUANTIZATION_MAP[quantization]
+        else:
+            # Default to fp8 if not specified (for DGX Spark memory efficiency)
+            vllm_quant = "fp8"
 
         # Per-model max_model_len (not blanket 8192)
         max_len = config.extra_args.get("max_model_len", 8192)
@@ -93,9 +100,24 @@ class VLLMLauncher(ModelLauncher):
                     "--max-num-seqs", str(max_concurrent),
                 ]
 
-                # Only add quantization flag for non-AWQ models (AWQ is auto-detected)
-                if vllm_quant.lower() != "awq":
+                # Only add quantization flag if specified and not auto-detected
+                # AWQ is auto-detected from model config, None means skip quantization
+                if vllm_quant and vllm_quant.lower() != "awq":
                     docker_cmd.extend(["--quantization", vllm_quant])
+
+                # Add speculative decoding if specified
+                if config.speculative_model:
+                    import json
+                    spec_config = {
+                        "model": config.speculative_model,
+                        "num_speculative_tokens": config.num_speculative_tokens,
+                    }
+                    # Add method if explicitly specified
+                    if config.speculative_method:
+                        spec_config["method"] = config.speculative_method
+
+                    docker_cmd.extend(["--speculative-config", json.dumps(spec_config)])
+                    logger.info(f"Enabling speculative decoding with draft model: {config.speculative_model}")
 
                 logger.debug(f"Docker command: {' '.join(docker_cmd)}")
 

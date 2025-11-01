@@ -250,6 +250,9 @@ class AutoSuspendManager:
                 quantization=model.saved_config.get("quantization"),
                 idle_timeout_minutes=model.saved_config["idle_timeout_minutes"],
                 auto_suspend_enabled=model.saved_config["auto_suspend_enabled"],
+                speculative_model=model.saved_config.get("speculative_model"),
+                num_speculative_tokens=model.saved_config.get("num_speculative_tokens", 5),
+                speculative_method=model.saved_config.get("speculative_method"),
                 extra_args=model.saved_config.get("extra_args", {}),
             )
 

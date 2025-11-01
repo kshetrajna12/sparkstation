@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     # Docker mode: Use Docker containers for vLLM backend (recommended for production)
     # Subprocess mode: Use direct Python execution from conda/micromamba environments
     use_docker: bool = True  # Default to Docker for better isolation and easier setup
-    vllm_docker_image: str = "nvcr.io/nvidia/vllm:25.09-py3"  # NVIDIA official image with Blackwell support
+    vllm_docker_image: str = "nvcr.io/nvidia/vllm:25.10-py3"  # NVIDIA official image with Blackwell support
 
     # Backend Python path (for subprocess mode only)
     # If use_docker=False, this path points to conda/micromamba environment

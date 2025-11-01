@@ -79,14 +79,14 @@ echo ""
 
 # Pull vLLM image
 echo -e "${YELLOW}Pulling vLLM Docker image (this may take a few minutes)...${NC}"
-docker pull --platform "$PLATFORM" nvcr.io/nvidia/vllm:25.09-py3
+docker pull --platform "$PLATFORM" nvcr.io/nvidia/vllm:25.10-py3
 echo -e "${GREEN}✓ vLLM image pulled${NC}"
 
 echo ""
 
 # Verify vLLM image works with CUDA
 echo -e "${YELLOW}Verifying vLLM image with CUDA...${NC}"
-CUDA_TEST=$(docker run --platform "$PLATFORM" --gpus all --rm nvcr.io/nvidia/vllm:25.09-py3 \
+CUDA_TEST=$(docker run --platform "$PLATFORM" --gpus all --rm nvcr.io/nvidia/vllm:25.10-py3 \
     python -c "import torch; print('CUDA:', torch.cuda.is_available())" 2>&1 | grep "CUDA: True" || echo "")
 
 if [ -z "$CUDA_TEST" ]; then
@@ -135,7 +135,7 @@ update_env_var() {
 }
 
 update_env_var "USE_DOCKER" "true" "$ENV_FILE"
-update_env_var "VLLM_DOCKER_IMAGE" "nvcr.io/nvidia/vllm:25.09-py3" "$ENV_FILE"
+update_env_var "VLLM_DOCKER_IMAGE" "nvcr.io/nvidia/vllm:25.10-py3" "$ENV_FILE"
 
 echo -e "${GREEN}✓ Configuration updated${NC}"
 
@@ -145,7 +145,7 @@ echo -e "${GREEN}Installation Complete!${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
 echo "Backend Docker image installed:"
-echo "  - vLLM: nvcr.io/nvidia/vllm:25.09-py3 ($PLATFORM)"
+echo "  - vLLM: nvcr.io/nvidia/vllm:25.10-py3 ($PLATFORM)"
 echo ""
 echo "Configuration file updated:"
 echo "  - $ENV_FILE"

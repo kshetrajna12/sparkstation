@@ -86,6 +86,10 @@ class ModelConfig(BaseModel):
     idle_timeout_minutes: int = Field(30, description="Minutes before auto-suspend")
     auto_suspend_enabled: bool = Field(True, description="Enable auto-suspend")
     use_subprocess: bool = Field(True, description="Use subprocess vs systemd/docker")
+    # Speculative decoding (vLLM only)
+    speculative_model: Optional[str] = Field(None, description="Draft model for speculative decoding")
+    num_speculative_tokens: int = Field(5, description="Number of speculative tokens to generate")
+    speculative_method: Optional[str] = Field(None, description="Speculative decoding method (auto-detected if None)")
     extra_args: Dict[str, Any] = Field(
         default_factory=dict, description="Additional backend-specific args"
     )
@@ -135,6 +139,10 @@ class ModelStartRequest(BaseModel):
     quantization: Optional[str] = "fp8"
     idle_timeout_minutes: int = 30
     auto_suspend_enabled: bool = True
+    # Speculative decoding (vLLM only)
+    speculative_model: Optional[str] = None
+    num_speculative_tokens: int = 5
+    speculative_method: Optional[str] = None
     extra_args: Dict[str, Any] = Field(default_factory=dict)
 
 

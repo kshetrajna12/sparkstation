@@ -244,6 +244,9 @@ async def start_model(request: ModelStartRequest):
             quantization=request.quantization,
             idle_timeout_minutes=request.idle_timeout_minutes,
             auto_suspend_enabled=request.auto_suspend_enabled,
+            speculative_model=request.speculative_model,
+            num_speculative_tokens=request.num_speculative_tokens,
+            speculative_method=request.speculative_method,
             extra_args=request.extra_args,
         )
 
@@ -264,6 +267,9 @@ async def start_model(request: ModelStartRequest):
                 "quantization": config.quantization,
                 "auto_suspend_enabled": config.auto_suspend_enabled,
                 "idle_timeout_minutes": config.idle_timeout_minutes,
+                "speculative_model": config.speculative_model,
+                "num_speculative_tokens": config.num_speculative_tokens,
+                "speculative_method": config.speculative_method,
                 "extra_args": config.extra_args,
             }
         except Exception as e:
