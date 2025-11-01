@@ -1,0 +1,63 @@
+# Sparkstation Models Configuration
+# Define models to auto-load on startup
+
+# Auto-load these models when supervisor starts
+autoload:
+  enabled: true
+  models:
+    # Example: Vision model for image analysis
+    - name: "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
+      alias: "qwen-vl-3b"
+      backend: "vllm"
+      quantization: "awq"
+      idle_timeout_minutes: 30
+      auto_suspend_enabled: true
+      extra_args:
+        max_model_len: 8192
+        max_concurrent_requests: 32
+
+    # Example: Reasoning model
+    # - name: "openai/gpt-oss-20b"
+    #   alias: "gpt-oss-20b"
+    #   backend: "vllm"
+    #   quantization: "none"  # Uses built-in MXFP4
+    #   idle_timeout_minutes: 60
+    #   auto_suspend_enabled: false
+    #   extra_args:
+    #     max_model_len: 16384
+    #     max_concurrent_requests: 32
+
+# Named profiles for different use cases
+profiles:
+  # Development profile - lightweight models
+  dev:
+    - name: "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
+      alias: "qwen-vl-3b"
+      backend: "vllm"
+      quantization: "awq"
+
+  # Production profile - full model set
+  prod:
+    - name: "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
+      alias: "qwen-vl-3b"
+      backend: "vllm"
+      quantization: "awq"
+      extra_args:
+        max_model_len: 8192
+
+    - name: "openai/gpt-oss-20b"
+      alias: "gpt-oss-20b"
+      backend: "vllm"
+      quantization: "none"
+      extra_args:
+        max_model_len: 16384
+
+  # Inference only - no auto-suspend
+  inference:
+    - name: "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
+      alias: "qwen-vl-3b"
+      backend: "vllm"
+      quantization: "awq"
+      auto_suspend_enabled: false
+      extra_args:
+        max_model_len: 8192

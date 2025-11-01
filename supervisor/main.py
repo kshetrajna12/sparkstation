@@ -87,6 +87,11 @@ async def lifespan(app: FastAPI):
     registry = ModelRegistry()
     await registry.initialize()
 
+    # Reconcile database state with reality (fix stale/orphaned entries)
+    reconcile_summary = await registry.reconcile_state()
+    if reconcile_summary["fixed_stopped"] or reconcile_summary["fixed_running"] or reconcile_summary["removed_orphaned"]:
+        logger.warning(f"Database reconciliation found inconsistencies: {reconcile_summary}")
+
     resource_manager = ResourceManager()
     launcher_factory = LauncherFactory()
     auto_suspend_manager = AutoSuspendManager(registry, launcher_factory, resource_manager)
@@ -103,6 +108,77 @@ async def lifespan(app: FastAPI):
     if settings.health_check_enabled:
         await health_check_manager.start()
         logger.info("Health check manager activated")
+
+    # Auto-load models from config
+    from supervisor.models_config import get_autoload_models
+    from supervisor.models import ModelStartRequest
+
+    autoload_models = get_autoload_models()
+    if autoload_models:
+        logger.info(f"Auto-loading {len(autoload_models)} model(s) from config...")
+        for model_config in autoload_models:
+            try:
+                # Check if model already exists in database
+                existing = await registry.get_by_alias(model_config.alias or model_config.name)
+                if existing and existing.status in [ModelStatus.RUNNING, ModelStatus.STARTING]:
+                    logger.info(f"Model {model_config.alias or model_config.name} already running, skipping")
+                    continue
+
+                # Generate model ID
+                model_id = registry.generate_id(model_config.name)
+
+                # Estimate memory
+                memory_estimate = resource_manager.estimate_model_memory(
+                    model_config.name, model_config.quantization
+                )
+
+                # Allocate port
+                port = resource_manager.allocate_model(model_id, memory_estimate)
+
+                # Create model config
+                from supervisor.models import ModelConfig, Backend
+                config = ModelConfig(
+                    model_name=model_config.name,
+                    backend=Backend(model_config.backend),
+                    model_alias=model_config.alias,
+                    num_gpus=1,
+                    quantization=model_config.quantization,
+                    idle_timeout_minutes=model_config.idle_timeout_minutes,
+                    auto_suspend_enabled=model_config.auto_suspend_enabled,
+                    speculative_model=model_config.speculative_model,
+                    num_speculative_tokens=model_config.num_speculative_tokens,
+                    speculative_method=model_config.speculative_method,
+                    extra_args=model_config.extra_args,
+                )
+
+                # Launch model
+                launcher = launcher_factory.get_launcher(config.backend)
+                instance = await launcher.launch(config, model_id, port)
+                instance.memory_gb = memory_estimate
+
+                # Save config for auto-restart
+                instance.saved_config = {
+                    "model_name": config.model_name,
+                    "backend": config.backend.value,
+                    "model_alias": config.model_alias,
+                    "gpu_ids": instance.gpu_ids,
+                    "port": port,
+                    "quantization": config.quantization,
+                    "auto_suspend_enabled": config.auto_suspend_enabled,
+                    "idle_timeout_minutes": config.idle_timeout_minutes,
+                    "speculative_model": config.speculative_model,
+                    "num_speculative_tokens": config.num_speculative_tokens,
+                    "speculative_method": config.speculative_method,
+                    "extra_args": config.extra_args,
+                }
+
+                # Save to registry
+                await registry.create(instance)
+                logger.info(f"Auto-loaded model: {model_config.alias or model_config.name}")
+
+            except Exception as e:
+                logger.error(f"Failed to auto-load model {model_config.name}: {e}")
+                # Continue with other models
 
     logger.info(f"Supervisor started on {settings.host}:{settings.port}")
 

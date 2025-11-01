@@ -215,6 +215,106 @@ class ModelRegistry:
             last_restart_time=db_instance.last_restart_time,
         )
 
+    async def reconcile_state(self) -> Dict[str, Any]:
+        """
+        Reconcile database state with actual running containers.
+        Called on startup to fix inconsistencies.
+
+        Returns:
+            Summary of reconciliation actions
+        """
+        import subprocess
+
+        logger.info("Starting database reconciliation...")
+        summary = {
+            "checked": 0,
+            "fixed_stopped": [],
+            "fixed_running": [],
+            "removed_orphaned": [],
+        }
+
+        # Get all models from database
+        models = await self.list_all()
+        summary["checked"] = len(models)
+
+        for model in models:
+            # Only reconcile Docker-based models
+            if not model.container_id:
+                continue
+
+            # Check if container exists and is running
+            try:
+                result = subprocess.run(
+                    ["docker", "inspect", "-f", "{{.State.Running}}", model.container_id],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+
+                container_running = result.stdout.strip() == "true"
+                db_thinks_running = model.status in [ModelStatus.STARTING, ModelStatus.RUNNING]
+
+                # Fix mismatches
+                if container_running and not db_thinks_running:
+                    # Container is running but DB says stopped - mark as running
+                    logger.warning(f"Container {model.container_id[:12]} is running but DB says stopped. Fixing...")
+                    model.status = ModelStatus.RUNNING
+                    model.health_status = HealthStatus.UNKNOWN
+                    await self.update(model)
+                    summary["fixed_running"].append(model.id)
+
+                elif not container_running and db_thinks_running:
+                    # Container stopped but DB says running - mark as stopped
+                    logger.warning(f"Container {model.container_id[:12]} stopped but DB says running. Fixing...")
+                    model.status = ModelStatus.STOPPED
+                    model.health_status = HealthStatus.UNHEALTHY
+                    model.stopped_at = datetime.now()
+                    await self.update(model)
+                    summary["fixed_stopped"].append(model.id)
+
+            except subprocess.TimeoutExpired:
+                logger.error(f"Timeout checking container {model.container_id[:12]}")
+            except Exception as e:
+                # Container doesn't exist - mark as stopped
+                logger.warning(f"Container {model.container_id[:12]} doesn't exist: {e}. Marking as stopped...")
+                model.status = ModelStatus.STOPPED
+                model.health_status = HealthStatus.UNHEALTHY
+                model.stopped_at = datetime.now()
+                await self.update(model)
+                summary["fixed_stopped"].append(model.id)
+
+        # Check for orphaned containers (containers running but not in DB)
+        try:
+            result = subprocess.run(
+                ["docker", "ps", "-a", "--filter", "name=sparkstation-", "--format", "{{.ID}}:{{.Names}}"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            if result.returncode == 0 and result.stdout.strip():
+                known_container_ids = {m.container_id for m in models if m.container_id}
+
+                for line in result.stdout.strip().split("\n"):
+                    if ":" not in line:
+                        continue
+                    container_id, name = line.split(":", 1)
+
+                    if container_id not in known_container_ids:
+                        logger.warning(f"Found orphaned container {name} ({container_id[:12]}). Removing...")
+                        subprocess.run(
+                            ["docker", "rm", "-f", container_id],
+                            capture_output=True,
+                            timeout=10,
+                        )
+                        summary["removed_orphaned"].append(name)
+
+        except Exception as e:
+            logger.error(f"Failed to check for orphaned containers: {e}")
+
+        logger.info(f"Reconciliation complete: {summary}")
+        return summary
+
     @staticmethod
     def generate_id(model_name: str) -> str:
         """Generate unique model ID."""

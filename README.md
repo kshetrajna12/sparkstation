@@ -145,7 +145,59 @@ uv run litellm --config gateway/litellm.yaml --host 127.0.0.1 --port 8000
 
 ---
 
-## Usage
+## CLI Usage
+
+Sparkstation includes a unified CLI for easier management:
+
+### Start/Stop Sparkstation
+
+```bash
+# Start supervisor in background
+uv run python cli.py start -d
+
+# Check status
+uv run python cli.py status
+
+# Stop supervisor
+uv run python cli.py stop
+
+# Restart supervisor
+uv run python cli.py restart
+```
+
+### Manage Models
+
+```bash
+# List all models
+uv run python cli.py models list
+
+# Stop a model
+uv run python cli.py models stop <model-id>
+
+# View model logs (streaming)
+uv run python cli.py models logs -f <model-id>
+```
+
+### Cleanup Database Issues
+
+If you encounter database inconsistencies (stale entries, orphaned containers):
+
+```bash
+# Clean database and containers
+uv run python cli.py cleanup --force
+```
+
+This will:
+- Stop the supervisor
+- Remove all stopped containers
+- Delete the database (fresh start)
+- Clean up orphaned entries
+
+**Note**: Sparkstation now auto-reconciles database state on startup, so manual cleanup should rarely be needed.
+
+---
+
+## API Usage
 
 ### Start a Model
 
