@@ -42,11 +42,14 @@ class HealthCheckManager:
         self.failure_counts: Dict[str, int] = {}
 
         self._task: Optional[asyncio.Task] = None
+        self._startup_task: Optional[asyncio.Task] = None
 
     async def start(self):
         """Start background health check task."""
         if self._task is None:
             self._task = asyncio.create_task(self._monitoring_loop())
+            # Also start a task to monitor models in "starting" state
+            self._startup_task = asyncio.create_task(self._startup_monitoring_loop())
             logger.info(
                 f"Health check manager started (interval: {self.check_interval}s, "
                 f"max_failures: {self.max_failures})"
@@ -62,6 +65,14 @@ class HealthCheckManager:
                 pass
             self._task = None
 
+        if self._startup_task:
+            self._startup_task.cancel()
+            try:
+                await self._startup_task
+            except asyncio.CancelledError:
+                pass
+            self._startup_task = None
+
         # CRITICAL: Close httpx client to prevent file descriptor leak
         await self.client.aclose()
         logger.info("Health check manager stopped")
@@ -76,6 +87,66 @@ class HealthCheckManager:
                 break
             except Exception as e:
                 logger.error(f"Error in health check monitoring: {e}", exc_info=True)
+
+    async def _startup_monitoring_loop(self):
+        """Background task: check models in STARTING state every 10 seconds."""
+        while True:
+            try:
+                await asyncio.sleep(10)  # Check every 10 seconds
+                await self._check_starting_models()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in startup monitoring: {e}", exc_info=True)
+
+    async def _check_starting_models(self):
+        """Check models in STARTING state and transition them to RUNNING if healthy."""
+        # Get all models in STARTING state
+        all_models = await self.registry.list_all()
+        starting_models = [m for m in all_models if m.status == ModelStatus.STARTING]
+
+        if not starting_models:
+            return
+
+        logger.debug(f"Checking {len(starting_models)} model(s) in STARTING state")
+
+        for model in starting_models:
+            try:
+                display_name = model.model_alias or model.model_name
+
+                # Try to health check the model (without counting failures)
+                try:
+                    response = await self.client.post(
+                        f"{model.base_url}/v1/chat/completions",
+                        json={
+                            "model": model.model_name,
+                            "messages": [{"role": "user", "content": "hi"}],
+                            "max_tokens": 1,
+                            "temperature": 0,
+                        },
+                    )
+
+                    if response.status_code == 200:
+                        # Model is healthy! Transition to RUNNING
+                        model.status = ModelStatus.RUNNING
+                        model.health_status = HealthStatus.HEALTHY
+                        model.last_health_check = datetime.now()
+                        # Reset any failure counts from before
+                        if model.id in self.failure_counts:
+                            del self.failure_counts[model.id]
+                        await self.registry.update(model)
+
+                        logger.info(f"✓ Model {display_name} is now RUNNING (transitioned from STARTING)")
+                    else:
+                        # Not ready yet, keep waiting
+                        logger.debug(f"Model {display_name} not ready yet (HTTP {response.status_code}), will retry...")
+
+                except (httpx.ConnectError, httpx.TimeoutException):
+                    # Connection failed or timeout - model still starting up
+                    logger.debug(f"Model {display_name} not ready yet (connection/timeout), will retry...")
+
+            except Exception as e:
+                logger.error(f"Error checking starting model {model.id}: {e}")
 
     async def _check_all_models(self):
         """Check health of all running models."""

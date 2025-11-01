@@ -60,18 +60,39 @@ def start(ctx, detach):
 
 @cli.command()
 def stop():
-    """Stop Sparkstation supervisor."""
-    click.echo("Stopping Sparkstation supervisor...")
+    """Stop Sparkstation supervisor and all model containers."""
+    click.echo("Stopping Sparkstation...")
 
+    # Stop supervisor
+    click.echo("  → Stopping supervisor...")
     result = subprocess.run(
         ["pkill", "-f", "uvicorn supervisor.main:app"],
         capture_output=True,
     )
 
     if result.returncode == 0:
-        click.secho("✓ Supervisor stopped", fg="green")
+        click.echo("     Supervisor stopped")
     else:
-        click.secho("✗ No supervisor process found", fg="yellow")
+        click.echo("     No supervisor process found")
+
+    # Stop all model containers
+    click.echo("  → Stopping model containers...")
+    result = subprocess.run(
+        ["docker", "ps", "--filter", "name=sparkstation-", "--format", "{{.Names}}"],
+        capture_output=True,
+        text=True
+    )
+
+    if result.stdout.strip():
+        container_names = result.stdout.strip().split("\n")
+        for container_name in container_names:
+            if container_name:
+                subprocess.run(["docker", "stop", container_name], capture_output=True)
+                click.echo(f"     Stopped: {container_name}")
+        click.secho("\n✓ Sparkstation stopped", fg="green")
+    else:
+        click.echo("     No model containers running")
+        click.secho("\n✓ Sparkstation stopped", fg="green")
 
 
 @cli.command()
@@ -316,7 +337,7 @@ def models_logs(model_id, follow, tail):
 def cleanup(ctx, force):
     """Clean up database and orphaned containers."""
     if not force:
-        click.confirm("This will clean up all stopped containers and reset the database. Continue?", abort=True)
+        click.confirm("This will stop all models, clean up containers, and reset the database. Continue?", abort=True)
 
     click.echo("Cleaning up...")
 
@@ -324,11 +345,21 @@ def cleanup(ctx, force):
     click.echo("  → Stopping supervisor...")
     subprocess.run(["pkill", "-9", "-f", "uvicorn supervisor.main:app"], capture_output=True)
 
-    # Remove stopped containers
-    click.echo("  → Removing stopped containers...")
-    result = subprocess.run(["docker", "container", "prune", "-f"], capture_output=True, text=True)
-    if "Total reclaimed space" in result.stdout:
-        click.echo(f"     {result.stdout.strip().split('Total')[1]}")
+    # Stop and remove ALL Sparkstation containers (running and stopped)
+    click.echo("  → Stopping and removing Sparkstation containers...")
+    result = subprocess.run(
+        ["docker", "ps", "-a", "--filter", "name=sparkstation-", "--format", "{{.Names}}"],
+        capture_output=True,
+        text=True
+    )
+    if result.stdout.strip():
+        container_names = result.stdout.strip().split("\n")
+        for container_name in container_names:
+            if container_name:  # Skip empty lines
+                subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
+                click.echo(f"     Removed: {container_name}")
+    else:
+        click.echo("     No Sparkstation containers found")
 
     # Clean database
     click.echo("  → Cleaning database...")
