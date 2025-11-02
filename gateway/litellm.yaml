@@ -1,14 +1,20 @@
 general_settings:
-  master_key: sk-sparkstation-admin
+  allow_requests_on_db_unavailable: true
 litellm_settings:
   drop_params: true
-  failure_callback:
-  - prometheus
-  set_verbose: true
-  success_callback:
-  - prometheus
+  set_verbose: false
   telemetry: false
-model_list: []
+model_list:
+- litellm_params:
+    api_base: http://127.0.0.1:8001/v1
+    api_key: EMPTY
+    model: openai/qwen-vl-3b
+  model_name: qwen-vl-3b
+- litellm_params:
+    api_base: http://127.0.0.1:8002/v1
+    api_key: EMPTY
+    model: openai/gpt-oss-20b
+  model_name: gpt-oss-20b
 router_settings:
   allowed_fails: 3
   cooldown_time: 30

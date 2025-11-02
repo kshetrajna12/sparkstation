@@ -2,6 +2,7 @@
 """
 Sparkstation CLI - Unified interface for managing Sparkstation and models.
 """
+import os
 import subprocess
 import sys
 import time
@@ -29,30 +30,119 @@ def cli(ctx, supervisor_url):
 @click.option("--detach", "-d", is_flag=True, help="Run in background")
 @click.pass_context
 def start(ctx, detach):
-    """Start Sparkstation supervisor."""
-    click.echo("Starting Sparkstation supervisor...")
+    """Start Sparkstation (supervisor + gateway) and wait for models to be ready."""
+    click.echo("Starting Sparkstation...")
 
     if detach:
-        # Start in background
+        # Start supervisor in background
+        click.echo("  → Starting supervisor...")
         subprocess.Popen(
             ["uv", "run", "uvicorn", "supervisor.main:app", "--host", "127.0.0.1", "--port", "9001"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        click.echo("Supervisor started in background. Waiting for startup...")
-        time.sleep(3)
 
-        # Check if it's running
+        # Wait for supervisor to be ready
+        supervisor_url = ctx.obj['supervisor_url']
+        for i in range(30):  # Try for 30 seconds
+            try:
+                response = httpx.get(f"{supervisor_url}/health", timeout=2)
+                if response.status_code == 200:
+                    click.echo("     Supervisor is running")
+                    break
+            except:
+                pass
+            time.sleep(1)
+        else:
+            click.secho("✗ Supervisor failed to start", fg="red")
+            return
+
+        # Wait for all models to be ready (RUNNING or FAILED)
+        click.echo("  → Waiting for models to load...")
+        max_wait = 180  # 3 minutes max
+        start_time = time.time()
+
+        while time.time() - start_time < max_wait:
+            try:
+                response = httpx.get(f"{supervisor_url}/models/detailed", timeout=5)
+                if response.status_code == 200:
+                    models = response.json()["models"]
+
+                    if not models:
+                        # No models to wait for
+                        break
+
+                    # Check if all models are done loading (RUNNING or FAILED)
+                    starting_models = [m for m in models if m["status"] == "starting"]
+
+                    if not starting_models:
+                        # All models are done
+                        running = [m for m in models if m["status"] == "running"]
+                        failed = [m for m in models if m["status"] == "failed"]
+
+                        click.echo(f"     {len(running)} model(s) running, {len(failed)} failed")
+                        break
+                    else:
+                        # Still loading
+                        click.echo(f"     {len(starting_models)} model(s) still loading...", nl=False)
+                        click.echo("\r", nl=False)
+
+            except Exception as e:
+                pass
+
+            time.sleep(5)
+
+        # Start gateway in background
+        click.echo("  → Starting gateway...")
+        # Remove DATABASE_URL from environment - gateway runs as simple router without DB features
+        # TODO: Add gateway database support for usage tracking, API key management, rate limiting
+        gateway_env = os.environ.copy()
+        gateway_env.pop("DATABASE_URL", None)
+        subprocess.Popen(
+            ["uv", "run", "litellm", "--config", "gateway/litellm.yaml",
+             "--host", "127.0.0.1", "--port", "8000"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=gateway_env,
+        )
+
+        # Wait for gateway to be ready
+        gateway_url = "http://localhost:8000"
+        for i in range(15):  # Try for 15 seconds
+            try:
+                response = httpx.get(f"{gateway_url}/health", timeout=2)
+                if response.status_code == 200:
+                    click.echo("     Gateway is running")
+                    break
+            except:
+                pass
+            time.sleep(1)
+        else:
+            click.secho("     Warning: Gateway may not have started", fg="yellow")
+
+        # Final status
+        click.echo("\n")
         try:
-            response = httpx.get(f"{ctx.obj['supervisor_url']}/health", timeout=5)
+            response = httpx.get(f"{supervisor_url}/models/detailed", timeout=5)
             if response.status_code == 200:
-                click.secho("✓ Supervisor is running!", fg="green")
-            else:
-                click.secho("✗ Supervisor may have issues", fg="yellow")
-        except Exception as e:
-            click.secho(f"✗ Could not verify supervisor: {e}", fg="red")
+                models = response.json()["models"]
+                for model in models:
+                    status_icon = {"running": "●", "starting": "◐", "stopped": "○", "failed": "✗"}.get(model["status"], "?")
+                    status_color = {"running": "green", "starting": "yellow", "stopped": "white", "failed": "red"}.get(model["status"], "white")
+
+                    click.echo(f"  {status_icon} ", nl=False)
+                    click.secho(f"{model['alias'] or model['model_name']}: {model['status']}", fg=status_color)
+
+                click.echo("")
+                click.secho("✓ Sparkstation is running!", fg="green")
+                click.echo(f"Gateway: http://localhost:8000 (OpenAI-compatible API)")
+                click.echo(f"Supervisor: {supervisor_url} (Model management)")
+        except:
+            click.secho("✓ Supervisor started (could not verify models)", fg="yellow")
     else:
-        # Start in foreground
+        # Start in foreground (supervisor only)
+        click.echo("Starting supervisor in foreground...")
+        click.echo("Note: Run with -d to also start gateway")
         subprocess.run(
             ["uv", "run", "uvicorn", "supervisor.main:app", "--host", "127.0.0.1", "--port", "9001"]
         )
@@ -60,8 +150,20 @@ def start(ctx, detach):
 
 @cli.command()
 def stop():
-    """Stop Sparkstation supervisor and all model containers."""
+    """Stop Sparkstation (gateway + supervisor) and all model containers."""
     click.echo("Stopping Sparkstation...")
+
+    # Stop gateway
+    click.echo("  → Stopping gateway...")
+    result = subprocess.run(
+        ["pkill", "-f", "litellm.*gateway/litellm.yaml"],
+        capture_output=True,
+    )
+
+    if result.returncode == 0:
+        click.echo("     Gateway stopped")
+    else:
+        click.echo("     No gateway process found")
 
     # Stop supervisor
     click.echo("  → Stopping supervisor...")
@@ -88,7 +190,23 @@ def stop():
         for container_name in container_names:
             if container_name:
                 subprocess.run(["docker", "stop", container_name], capture_output=True)
-                click.echo(f"     Stopped: {container_name}")
+                click.echo(f"     Stopping: {container_name}")
+
+        # Wait for containers to actually stop
+        click.echo("  → Waiting for containers to stop...")
+        for i in range(30):  # Wait up to 30 seconds
+            result = subprocess.run(
+                ["docker", "ps", "--filter", "name=sparkstation-", "--format", "{{.Names}}"],
+                capture_output=True,
+                text=True
+            )
+            if not result.stdout.strip():
+                click.echo("     All containers stopped")
+                break
+            time.sleep(1)
+        else:
+            click.secho("     Warning: Some containers may still be stopping", fg="yellow")
+
         click.secho("\n✓ Sparkstation stopped", fg="green")
     else:
         click.echo("     No model containers running")
@@ -340,6 +458,10 @@ def cleanup(ctx, force):
         click.confirm("This will stop all models, clean up containers, and reset the database. Continue?", abort=True)
 
     click.echo("Cleaning up...")
+
+    # Stop gateway
+    click.echo("  → Stopping gateway...")
+    subprocess.run(["pkill", "-9", "-f", "litellm.*gateway/litellm.yaml"], capture_output=True)
 
     # Stop supervisor
     click.echo("  → Stopping supervisor...")

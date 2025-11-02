@@ -20,7 +20,10 @@ dependencies = [
     # vllm, sglang are system-level installs with CUDA dependencies
 
     # Gateway
-    "litellm>=1.35.8",
+    "litellm[proxy]>=1.35.8",
+    "backoff>=2.2.1",
+    "orjson>=3.9.0",
+    "prisma>=0.15.0",  # Required by litellm proxy (even without DB)
 
     # Database
     "sqlalchemy>=2.0.29",

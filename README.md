@@ -578,6 +578,37 @@ uv run mypy supervisor/
 
 ---
 
+## Known Issues & Technical Debt
+
+### Gateway Startup Issues (IN PROGRESS)
+
+**Status**: Gateway fails to start due to LiteLLM attempting to initialize Prisma/database even when not needed.
+
+**Problem**: LiteLLM proxy automatically detects `DATABASE_URL` from `.env` file and attempts to initialize Prisma client. Even with `allow_requests_on_db_unavailable: true` setting, the proxy hangs during startup when Prisma is installed.
+
+**Attempted Solutions**:
+1. ✗ Removing `DATABASE_URL` from environment - LiteLLM loads `.env` automatically
+2. ✗ Using `uv run --no-env-file` - LiteLLM still loads `.env` from project directory
+3. ✗ Setting `database_url: null` in config - Still attempts Prisma initialization
+4. ✗ Installing `prisma` package - Gateway hangs during startup
+
+**Missing Features** (until gateway works):
+- Usage tracking and analytics
+- API key management and authentication
+- Rate limiting per user/key
+- Request logging and audit trails
+- Cost tracking per API key
+
+**Next Steps**:
+1. Investigate why gateway hangs with Prisma installed
+2. Consider separate .env file for gateway without DATABASE_URL
+3. Or set up proper PostgreSQL database for gateway with full Prisma support
+4. Alternative: Use a different routing solution (nginx, custom FastAPI proxy)
+
+**Current Workaround**: Models can be accessed directly via their ports (8001, 8002, etc.) without going through the gateway.
+
+---
+
 ## License
 
 [Your License]

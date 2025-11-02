@@ -120,9 +120,14 @@ async def lifespan(app: FastAPI):
             try:
                 # Check if model already exists in database
                 existing = await registry.get_by_alias(model_config.alias or model_config.name)
-                if existing and existing.status in [ModelStatus.RUNNING, ModelStatus.STARTING]:
-                    logger.info(f"Model {model_config.alias or model_config.name} already running, skipping")
-                    continue
+                if existing:
+                    if existing.status in [ModelStatus.RUNNING, ModelStatus.STARTING]:
+                        logger.info(f"Model {model_config.alias or model_config.name} already running, skipping")
+                        continue
+                    else:
+                        # Remove old stopped/failed entry to avoid duplicates
+                        logger.info(f"Removing old entry for {model_config.alias or model_config.name} (status: {existing.status})")
+                        await registry.delete(existing.id)
 
                 # Generate model ID
                 model_id = registry.generate_id(model_config.name)
