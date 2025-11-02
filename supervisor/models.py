@@ -33,6 +33,7 @@ class Backend(str, Enum):
     """Supported LLM backends."""
 
     VLLM = "vllm"
+    SGLANG = "sglang"
     TRT_LLM = "trt-llm"  # Future support
 
 

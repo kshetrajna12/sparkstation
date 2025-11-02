@@ -20,6 +20,11 @@ model_list:
     api_key: EMPTY
     model: openai/BAAI/bge-large-en-v1.5
   model_name: bge-large
+- litellm_params:
+    api_base: http://127.0.0.1:8004/v1
+    api_key: EMPTY
+    model: openai/openai/clip-vit-large-patch14
+  model_name: clip-vit
 router_settings:
   allowed_fails: 3
   cooldown_time: 30

@@ -3,6 +3,7 @@ Factory for creating model launchers based on backend type.
 """
 from supervisor.launchers.base import ModelLauncher
 from supervisor.launchers.vllm_launcher import VLLMLauncher
+from supervisor.launchers.sglang_launcher import SGLangLauncher
 from supervisor.models import Backend
 
 
@@ -12,6 +13,7 @@ class LauncherFactory:
     def __init__(self):
         self._launchers = {
             Backend.VLLM: VLLMLauncher(),
+            Backend.SGLANG: SGLangLauncher(),
             # Backend.TRT_LLM: TRTLLMLauncher(),  # TODO: Implement
         }
 

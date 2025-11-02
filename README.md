@@ -1,6 +1,6 @@
 # Sparkstation
 
-LLM orchestration and gateway service for DGX Spark — manages vLLM backend with Docker for seamless model serving under an OpenAI-compatible API.
+LLM orchestration and gateway service for DGX Spark — manages vLLM and SGLang backends with Docker for seamless model serving under an OpenAI-compatible API.
 
 **Version**: 0.1.0 (Alpha)
 **Platform**: NVIDIA DGX Spark (Grace Blackwell)
@@ -10,8 +10,9 @@ LLM orchestration and gateway service for DGX Spark — manages vLLM backend wit
 
 ## Features
 
-- **vLLM backend**: NVIDIA-optimized vLLM with official Blackwell support via Docker
-- **OpenAI-compatible API**: Drop-in replacement via LiteLLM gateway
+- **vLLM & SGLang backends**: NVIDIA-optimized backends with official Blackwell support via Docker
+- **OpenAI-compatible API**: Drop-in replacement via LiteLLM gateway (chat + embeddings)
+- **Embeddings support**: Text (bge-large) and image (CLIP) embeddings for RAG and search
 - **Auto-suspend/resume**: Idle models auto-suspend to free GPU resources (~15s resume time)
 - **Health monitoring**: Periodic 1-token probes detect unresponsive models
 - **Auto-restart**: Failed models automatically restart with exponential backoff
@@ -68,10 +69,10 @@ uv sync
 
 **What this does:**
 - Installs Sparkstation with uv (lightweight)
-- Pulls vLLM Docker image with full CUDA and Blackwell support
+- Pulls vLLM and SGLang Docker images with full CUDA and Blackwell support
 - Auto-detects ARM64 (DGX Spark) vs x86_64 architecture
 - Configures `.env` for Docker mode
-- Verifies CUDA is working in Docker container
+- Verifies CUDA is working in Docker containers
 
 ### Prerequisites
 
@@ -256,6 +257,49 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 ```
 
 **Note**: The gateway requires an Authorization header. Use any dummy bearer token (e.g., `sk-1234`) for local development. For production, configure proper API keys in `gateway/litellm.yaml`.
+
+### Embeddings
+
+Sparkstation supports both text and image embeddings via OpenAI-compatible `/v1/embeddings` endpoint:
+
+```bash
+# Text embeddings (bge-large)
+curl -X POST http://localhost:8000/v1/embeddings \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "bge-large",
+    "input": "The quick brown fox jumps over the lazy dog"
+  }'
+
+# Image embeddings (CLIP) - with URL
+curl -X POST http://localhost:8000/v1/embeddings \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "clip-vit",
+    "input": "https://example.com/image.jpg"
+  }'
+
+# Batch embeddings
+curl -X POST http://localhost:8000/v1/embeddings \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "bge-large",
+    "input": ["First document", "Second document", "Third document"]
+  }'
+```
+
+**Supported embedding models:**
+- `bge-large`: Text embeddings (1024 dimensions, vLLM) - for semantic search, RAG
+- `clip-vit`: Image embeddings (768 dimensions, SGLang) - for image search, cross-modal retrieval
+
+**Use cases:**
+- Semantic search and similarity matching
+- RAG (Retrieval Augmented Generation)
+- Image search by text description
+- Document classification
 
 ### Suspend/Resume Model
 

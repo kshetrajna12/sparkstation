@@ -18,6 +18,7 @@ class ModelConfigYAML(BaseModel):
     backend: str
     model_type: str = "chat"  # Default to chat for backward compatibility
     quantization: Optional[str] = "fp8"
+    memory_gb: Optional[float] = None  # Explicit memory allocation (overrides estimation)
     idle_timeout_minutes: int = 30
     auto_suspend_enabled: bool = True
     speculative_model: Optional[str] = None

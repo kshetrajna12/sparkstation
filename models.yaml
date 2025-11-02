@@ -11,12 +11,12 @@ autoload:
       backend: "vllm"
       model_type: "chat"
       quantization: "awq"
+      memory_gb: 32  # AWQ quantized 3B vision model
       idle_timeout_minutes: 30
       auto_suspend_enabled: true
       extra_args:
         max_model_len: 8192
         max_concurrent_requests: 32
-        gpu_memory_utilization: 0.25  # Small model, only needs ~25% GPU
 
     # Reasoning model with built-in MXFP4 quantization
     - name: "openai/gpt-oss-20b"
@@ -24,23 +24,32 @@ autoload:
       backend: "vllm"
       model_type: "chat"
       quantization: "none"  # Uses built-in MXFP4
+      memory_gb: 38  # 20B with built-in quantization
       idle_timeout_minutes: 60
       auto_suspend_enabled: true
       extra_args:
         max_model_len: 16384
         max_concurrent_requests: 32
-        gpu_memory_utilization: 0.30  # Large model, uses ~30% GPU
 
-    # Embedding model for semantic search and RAG
+    # Text embedding model for semantic search and RAG
     - name: "BAAI/bge-large-en-v1.5"
       alias: "bge-large"
       backend: "vllm"
       model_type: "embedding"
       quantization: "none"
+      memory_gb: 2.5  # 1.34GB model + vLLM overhead
       idle_timeout_minutes: 30
       auto_suspend_enabled: true
-      extra_args:
-        gpu_memory_utilization: 0.25  # Larger embedding model
+
+    # Image embedding model for vision tasks (CLIP)
+    - name: "openai/clip-vit-large-patch14"
+      alias: "clip-vit"
+      backend: "sglang"  # SGLang for CLIP support
+      model_type: "embedding"
+      quantization: "none"
+      memory_gb: 3.5  # 815MB model + SGLang overhead (~3.13GB total)
+      idle_timeout_minutes: 30
+      auto_suspend_enabled: true
 
 # Named profiles for different use cases
 profiles:

@@ -36,7 +36,7 @@ class VLLMLauncher(ModelLauncher):
         """Cleanup resources (close httpx client)."""
         await self.client.aclose()
 
-    async def launch(self, config: ModelConfig, model_id: str, port: int) -> ModelInstance:
+    async def launch(self, config: ModelConfig, model_id: str, port: int, memory_gb: float = None) -> ModelInstance:
         """
         Launch vLLM model server.
 
@@ -44,6 +44,7 @@ class VLLMLauncher(ModelLauncher):
             config: Model configuration
             model_id: Unique model ID
             port: Allocated port
+            memory_gb: Allocated memory in GB (used to calculate gpu_memory_utilization)
 
         Returns:
             Model instance
@@ -100,8 +101,18 @@ class VLLMLauncher(ModelLauncher):
                     "--host", "0.0.0.0",  # Bind to all interfaces
                     "--port", str(port),
                     "--trust-remote-code",  # Required for many models
-                    "--gpu-memory-utilization", str(config.extra_args.get("gpu_memory_utilization", 0.9)),
                 ]
+
+                # Calculate gpu_memory_utilization from allocated memory_gb
+                # DGX Spark: 119 GB usable memory (128 GB total - system overhead)
+                if memory_gb is not None:
+                    gpu_mem_util = memory_gb / 119.0
+                    logger.info(f"Using gpu_memory_utilization={gpu_mem_util:.3f} (from {memory_gb}GB allocation)")
+                else:
+                    # Fallback to config or default
+                    gpu_mem_util = config.extra_args.get("gpu_memory_utilization", 0.9)
+
+                docker_cmd.extend(["--gpu-memory-utilization", str(gpu_mem_util)])
 
                 # Add embedding-specific or chat-specific flags
                 if is_embedding:

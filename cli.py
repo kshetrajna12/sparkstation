@@ -614,14 +614,116 @@ if hasattr(response.choices[0].message, 'reasoning_content'):
     # Output: "We need to add 2 and 2. That equals 4."
 ```
 
+## Embeddings
+
+Sparkstation provides both text and image embedding models for semantic search, RAG, and similarity tasks.
+
+### Text Embeddings (bge-large)
+
+Generate embeddings for text using the `bge-large` model:
+
+```python
+# Generate text embeddings
+response = client.embeddings.create(
+    model="bge-large",
+    input="Hello world"
+)
+
+# Get embedding vector (1024 dimensions)
+embedding = response.data[0].embedding
+print(f"Embedding dimensions: {{len(embedding)}}")
+```
+
+### Image Embeddings (CLIP)
+
+The `clip-vit` model generates embeddings for images using OpenAI's CLIP. Supports both URLs and base64:
+
+#### With Image URL
+```python
+response = client.embeddings.create(
+    model="clip-vit",
+    input="https://example.com/image.jpg"
+)
+
+embedding = response.data[0].embedding
+```
+
+#### With Base64 Encoded Image
+```python
+import base64
+
+with open("image.jpg", "rb") as f:
+    image_data = base64.b64encode(f.read()).decode('utf-8')
+
+response = client.embeddings.create(
+    model="clip-vit",
+    input=f"data:image/jpeg;base64,{{image_data}}"
+)
+
+embedding = response.data[0].embedding
+```
+
+### Batch Embeddings
+
+Generate embeddings for multiple inputs at once:
+
+```python
+response = client.embeddings.create(
+    model="bge-large",
+    input=["First document", "Second document", "Third document"]
+)
+
+for i, data in enumerate(response.data):
+    print(f"Document {{i}}: {{len(data.embedding)}} dimensions")
+```
+
+### Cross-Modal Search with CLIP
+
+CLIP embeddings enable searching images with text or finding similar images:
+
+```python
+# Embed text query
+text_response = client.embeddings.create(
+    model="clip-vit",
+    input="a red car"
+)
+text_embedding = text_response.data[0].embedding
+
+# Embed image
+image_response = client.embeddings.create(
+    model="clip-vit",
+    input="https://example.com/car.jpg"
+)
+image_embedding = image_response.data[0].embedding
+
+# Compare via cosine similarity (both in same embedding space)
+from numpy import dot
+from numpy.linalg import norm
+
+similarity = dot(text_embedding, image_embedding) / (norm(text_embedding) * norm(image_embedding))
+print(f"Similarity: {{similarity}}")
+```
+
+### Use Cases
+
+- **Semantic Search**: Embed documents and queries, find similar content via cosine similarity
+- **RAG (Retrieval Augmented Generation)**: Embed knowledge base for context retrieval
+- **Image Search**: Use CLIP to search images by text description or find similar images
+- **Cross-Modal Retrieval**: Search images with text queries or text with image queries
+- **Classification**: Use embeddings as features for downstream ML tasks
+
 ## Important Notes
 
 - **Do not start/stop Sparkstation services** - they are managed by the system
 - Models are already running and ready to use
 - Use the gateway endpoint (`http://localhost:8000/v1`) for all requests
-- All models support the standard OpenAI chat completions API
-- **Vision**: `qwen-vl-3b` supports image analysis (URL and base64)
+- All models support standard OpenAI APIs:
+  - Chat: `/v1/chat/completions` (qwen-vl-3b, gpt-oss-20b)
+  - Embeddings: `/v1/embeddings` (bge-large, clip-vit)
+- **Vision Chat**: `qwen-vl-3b` supports image analysis (URL and base64)
 - **Reasoning**: `gpt-oss-20b` includes reasoning traces in `reasoning_content` field
+- **Text Embeddings**: `bge-large` generates 1024-dim embeddings for text semantic tasks
+- **Image Embeddings**: `clip-vit` generates embeddings for images and cross-modal search (URL and base64)
 """
 
     # Write file
