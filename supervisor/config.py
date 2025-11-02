@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     # Subprocess mode: Use direct Python execution from conda/micromamba environments
     use_docker: bool = True  # Default to Docker for better isolation and easier setup
     vllm_docker_image: str = "nvcr.io/nvidia/vllm:25.10-py3"  # NVIDIA official image with Blackwell support
+    sglang_docker_image: str = "nvcr.io/nvidia/sglang:25.10-py3"  # NVIDIA SGLang image with Blackwell support
 
     # Backend Python path (for subprocess mode only)
     # If use_docker=False, this path points to conda/micromamba environment
@@ -34,7 +35,7 @@ class Settings(BaseSettings):
     total_unified_memory_gb: int = 128  # Total unified CPU+GPU memory
     memory_hard_limit_gb: int = 110  # 85% of total
     memory_soft_limit_gb: int = 100  # 78% of total
-    max_resident_models: int = 3  # Maximum concurrent models
+    max_resident_models: int = 5  # Maximum concurrent models (2 chat + 2 embedding + headroom)
 
     # Port allocation
     model_port_range_start: int = 8001

@@ -130,10 +130,14 @@ async def lifespan(app: FastAPI):
                 # Generate model ID
                 model_id = registry.generate_id(model_config.name)
 
-                # Estimate memory
-                memory_estimate = resource_manager.estimate_model_memory(
-                    model_config.name, model_config.quantization
-                )
+                # Use explicit memory if provided, otherwise estimate
+                if model_config.memory_gb is not None:
+                    memory_estimate = model_config.memory_gb
+                    logger.info(f"Using explicit memory allocation: {memory_estimate}GB for {model_config.name}")
+                else:
+                    memory_estimate = resource_manager.estimate_model_memory(
+                        model_config.name, model_config.quantization
+                    )
 
                 # Allocate port
                 port = resource_manager.allocate_model(model_id, memory_estimate)
@@ -157,7 +161,7 @@ async def lifespan(app: FastAPI):
 
                 # Launch model
                 launcher = launcher_factory.get_launcher(config.backend)
-                instance = await launcher.launch(config, model_id, port)
+                instance = await launcher.launch(config, model_id, port, memory_gb=memory_estimate)
                 instance.memory_gb = memory_estimate
 
                 # Save config for auto-restart
@@ -340,7 +344,7 @@ async def start_model(request: ModelStartRequest):
         # Launch model
         try:
             launcher = launcher_factory.get_launcher(request.backend)
-            instance = await launcher.launch(config, model_id, port)
+            instance = await launcher.launch(config, model_id, port, memory_gb=memory_estimate)
             instance.memory_gb = memory_estimate
 
             # CRITICAL: Save config for auto-restart and resume

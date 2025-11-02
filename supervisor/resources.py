@@ -56,7 +56,12 @@ class ResourceManager:
                 text=True,
                 timeout=5,
             )
-            gpu_memory_mb = float(gpu_result.stdout.strip())
+            gpu_memory_str = gpu_result.stdout.strip()
+            # Handle [N/A] case (happens during model startup)
+            if gpu_memory_str == "[N/A]" or not gpu_memory_str:
+                gpu_memory_mb = 0
+            else:
+                gpu_memory_mb = float(gpu_memory_str)
 
             # Get system memory usage from /proc/meminfo
             # MemTotal - MemAvailable = used memory
