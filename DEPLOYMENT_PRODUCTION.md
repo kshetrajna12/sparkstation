@@ -1,50 +1,48 @@
 # Sparkstation Production Deployment Guide
 
 **Target Platform**: NVIDIA DGX Spark (Grace Blackwell)
-**Architecture**: Multi-environment with separate backend isolation
+**Architecture**: Docker-based model backends with Supervisor coordination
 **Version**: 0.1.0
-**Last Updated**: 2025-10-31
+**Last Updated**: 2025-11-02
 
 ---
 
 ## Table of Contents
 
 1. [Architecture Overview](#architecture-overview)
-2. [Directory Layout](#directory-layout)
-3. [Backend Environment Setup](#backend-environment-setup)
-4. [Configuration Files](#configuration-files)
-5. [Systemd Service Units](#systemd-service-units)
-6. [Deployment Steps](#deployment-steps)
-7. [GPU Partitioning & Performance](#gpu-partitioning--performance)
-8. [Health Checks & Monitoring](#health-checks--monitoring)
-9. [Logging & Retention](#logging--retention)
-10. [Maintenance](#maintenance)
+2. [Prerequisites](#prerequisites)
+3. [Quick Start (Docker Mode - Recommended)](#quick-start-docker-mode---recommended)
+4. [Directory Layout](#directory-layout)
+5. [Configuration](#configuration)
+6. [Systemd Services](#systemd-services)
+7. [Model Configuration](#model-configuration)
+8. [Monitoring](#monitoring)
+9. [Maintenance](#maintenance)
+10. [Troubleshooting](#troubleshooting)
+11. [Advanced: Subprocess Mode](#advanced-subprocess-mode)
 
 ---
 
 ## Architecture Overview
 
-### Design Decisions
+### Design Philosophy
 
-**✅ YES: Separate Conda/Mamba Environments per Backend**
-- SGLang in `/opt/backends/sglang` (conda env)
-- vLLM in `/opt/backends/vllm` (conda env)
-- Sparkstation + LiteLLM in uv environment (lightweight)
+**✅ Docker-First Approach (Recommended)**
+- Official NVIDIA vLLM Docker images with Blackwell GPU support
+- Simplified setup - no conda/micromamba management
+- Better isolation and reproducibility
+- Automatic GPU passthrough via `--gpus` flag
+- One-command backend setup
 
-**✅ YES: Systemd Process Management**
-- Each backend as independent systemd unit
-- Sparkstation can still spawn/stop via subprocess
+**✅ Lightweight Supervisor**
+- Sparkstation + LiteLLM in `uv` environment (minimal dependencies)
+- Manages Docker containers for model backends
+- Handles lifecycle, health checks, auto-suspend/resume
+
+**✅ Systemd Process Management**
+- Supervisor and gateway as systemd services
+- Daily maintenance via systemd timer
 - Clean restart, logging, and watchdog support
-
-**✅ YES: Shared Model Cache**
-- Single `/var/lib/models` for all HuggingFace weights
-- Reduces disk usage and download time
-
-**❌ NO: Docker (for now)**
-- Single-node setup doesn't need container isolation
-- Direct GPU access is faster
-- Saves overhead on unified memory system
-- **Later**: Consider Podman if you need portability
 
 ### System Architecture
 
@@ -56,23 +54,150 @@
 │  Sparkstation (uv env) - /opt/sparkstation                      │
 │  ├── Supervisor (FastAPI) - Port 9001                           │
 │  ├── LiteLLM Gateway - Port 8000                                │
-│  └── Manages backends via subprocess + systemd                  │
+│  └── Manages Docker containers for model backends               │
 │                                                                  │
-│  Backend Environments (micromamba/conda)                        │
-│  ├── /opt/backends/sglang - Ports 8011+                         │
-│  │   ├── Vision models (Qwen2-VL, LLaVA, etc.)                 │
-│  │   └── Text models (Qwen2.5, etc.)                            │
-│  ├── /opt/backends/vllm - Ports 8021+                           │
-│  │   ├── Text models (Llama, Mistral, etc.)                    │
-│  │   └── Optimized for high throughput                          │
-│  └── Future: /opt/backends/trt-llm                              │
+│  Docker Containers (vLLM)                                        │
+│  ├── sparkstation-{model-id-1} - Port 8001                      │
+│  ├── sparkstation-{model-id-2} - Port 8002                      │
+│  └── sparkstation-{model-id-3} - Port 8003                      │
+│      └── Image: nvcr.io/nvidia/vllm:25.10-py3                   │
 │                                                                  │
 │  Shared Resources                                               │
-│  ├── /var/lib/models - HuggingFace cache (shared)              │
+│  ├── /var/lib/models - HuggingFace cache (shared via volumes)  │
 │  ├── /var/log/sparkstation - Supervisor logs                   │
-│  └── /var/log/llm/{sglang,vllm} - Backend logs                 │
+│  └── /opt/sparkstation/data - SQLite database                  │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Prerequisites
+
+### Required Software
+
+1. **Docker with NVIDIA Container Toolkit**
+   ```bash
+   # Docker (Ubuntu/Debian)
+   curl -fsSL https://get.docker.com | sh
+
+   # NVIDIA Container Toolkit
+   curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+     sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+   curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+     sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+     sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+   sudo apt-get update
+   sudo apt-get install -y nvidia-container-toolkit
+   sudo nvidia-ctk runtime configure --runtime=docker
+   sudo systemctl restart docker
+   ```
+
+2. **Python 3.11+ and uv**
+   ```bash
+   # uv package manager
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   ```
+
+3. **NVIDIA GPU Driver**
+   - DGX Spark typically has CUDA 12.4 or 12.6 pre-installed
+   - Verify: `nvidia-smi`
+
+### Verify Setup
+
+```bash
+# Test Docker + NVIDIA
+docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
+```
+
+---
+
+## Quick Start (Docker Mode - Recommended)
+
+### 1. Clone and Install Sparkstation
+
+```bash
+# Clone repository
+git clone https://github.com/kshetrajna12/sparkstation.git
+cd sparkstation
+
+# Install Sparkstation (lightweight uv environment)
+uv sync
+
+# Create data directory
+mkdir -p data
+```
+
+### 2. Pull Docker Image
+
+```bash
+# Automated setup script
+./scripts/setup_backends.sh
+
+# OR manual pull
+docker pull nvcr.io/nvidia/vllm:25.10-py3
+
+# Verify
+./scripts/verify_backends.sh
+```
+
+### 3. Configure Environment
+
+```bash
+# Copy example config
+cp .env.example .env
+
+# Edit configuration (optional - defaults work for most cases)
+# Key settings:
+#   USE_DOCKER=true  (already default)
+#   TOTAL_UNIFIED_MEMORY_GB=128
+#   API_KEY=your-secret-key-here
+```
+
+### 4. Configure Models
+
+Edit `models.yaml` to define auto-load models:
+
+```yaml
+autoload:
+  enabled: true
+  models:
+    - name: "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
+      alias: "qwen-vl-3b"
+      backend: "vllm"
+      quantization: "awq"
+      idle_timeout_minutes: 30
+      auto_suspend_enabled: true
+      extra_args:
+        max_model_len: 8192
+        gpu_memory_utilization: 0.25
+```
+
+### 5. Start Sparkstation
+
+```bash
+# Using CLI (recommended)
+sparkstation start -d
+
+# OR using scripts
+./scripts/start_supervisor.sh  # Terminal 1
+./scripts/start_gateway.sh     # Terminal 2
+```
+
+### 6. Verify Deployment
+
+```bash
+# Check status
+sparkstation status
+
+# Check Supervisor health
+curl http://localhost:9001/health
+
+# Check Gateway health
+curl http://localhost:8000/health
+
+# List running models
+sparkstation models list
 ```
 
 ---
@@ -80,85 +205,358 @@
 ## Directory Layout
 
 ```bash
-/opt/sparkstation/              # Sparkstation uv app
+/opt/sparkstation/              # Sparkstation installation
 ├── .venv/                      # uv virtual environment
 ├── supervisor/                 # Supervisor code
 ├── gateway/                    # Gateway code
 ├── scripts/                    # Utility scripts
-└── data/                       # Runtime data (SQLite DB)
-
-/opt/backends/                  # Backend environments
-├── sglang/                     # SGLang conda/micromamba env
-│   ├── bin/python             # Python interpreter
-│   └── lib/python3.11/...
-└── vllm/                       # vLLM conda/micromamba env
-    ├── bin/python
-    └── lib/python3.11/...
+├── data/                       # Runtime data
+│   ├── sparkstation.db         # SQLite database
+│   └── sparkstation.log        # Rotating logs
+└── models.yaml                 # Model configuration
 
 /var/lib/models/                # HuggingFace model cache (shared)
-├── models--Qwen--Qwen2.5-7B-Instruct/
-├── models--Qwen--Qwen2-VL-7B-Instruct/
-└── ...
+├── models--Qwen--Qwen2.5-VL-3B-Instruct-AWQ/
+└── models--openai--gpt-oss-20b/
 
-/var/log/sparkstation/          # Sparkstation logs
+/var/log/sparkstation/          # Sparkstation logs (if configured)
 └── sparkstation.log            # Rotating log file
 
-/var/log/llm/                   # Backend logs
-├── sglang/
-│   ├── stdout.log
-│   └── stderr.log
-└── vllm/
-    ├── stdout.log
-    └── stderr.log
-
-/etc/sparkstation/              # Configuration
+/etc/sparkstation/              # System configuration
 ├── env                         # Central environment file
 └── litellm.yaml                # LiteLLM routing config
 ```
 
 ---
 
-## Backend Environment Setup
+## Configuration
+
+### Environment Variables
+
+Key settings in `.env`:
+
+```bash
+# Backend mode (Docker is recommended)
+USE_DOCKER=true
+VLLM_DOCKER_IMAGE=nvcr.io/nvidia/vllm:25.10-py3
+
+# DGX Spark Constraints
+TOTAL_UNIFIED_MEMORY_GB=128
+MEMORY_HARD_LIMIT_GB=110  # 85% of total
+MAX_RESIDENT_MODELS=3
+
+# Auto-suspend
+AUTO_SUSPEND_ENABLED=true
+DEFAULT_IDLE_TIMEOUT_MINUTES=30
+
+# Health Checks
+HEALTH_CHECK_ENABLED=true
+HEALTH_CHECK_INTERVAL_SECONDS=300  # 5 minutes
+HEALTH_CHECK_MAX_FAILURES=3
+
+# Auto-restart
+AUTO_RESTART_ENABLED=true
+AUTO_RESTART_MAX_ATTEMPTS=3
+AUTO_RESTART_BACKOFF_MINUTES=1,5,15  # Exponential backoff
+
+# Security
+API_KEY=your-secret-key-here  # Optional: Enable API key auth
+
+# LiteLLM Gateway
+LITELLM_ADMIN_URL=http://127.0.0.1:8000
+GATEWAY_SYNC_INTERVAL_SECONDS=60
+
+# Logging
+LOG_TO_FILE=true
+LOG_FILE_PATH=./data/sparkstation.log
+LOG_MAX_BYTES=10485760  # 10 MB per file
+LOG_BACKUP_COUNT=5
+```
+
+### Shared Model Cache
+
+All Docker containers share `/var/lib/models` for HuggingFace cache:
+
+```bash
+# Create shared cache directory
+sudo mkdir -p /var/lib/models
+sudo chown -R $USER:$USER /var/lib/models
+
+# Pre-download models (optional but recommended)
+export HF_HOME=/var/lib/models
+huggingface-cli download Qwen/Qwen2.5-VL-3B-Instruct-AWQ
+```
+
+Docker containers automatically mount this directory via `-v /var/lib/models:/root/.cache/huggingface`.
+
+---
+
+## Systemd Services
+
+### 1. Sparkstation Supervisor Service
+
+Use existing template: `scripts/systemd/sparkstation-supervisor.service`
+
+Install:
+```bash
+sudo cp scripts/systemd/sparkstation-supervisor.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable sparkstation-supervisor
+sudo systemctl start sparkstation-supervisor
+```
+
+### 2. LiteLLM Gateway Service
+
+Use existing template: `scripts/systemd/sparkstation-gateway.service`
+
+Install:
+```bash
+sudo cp scripts/systemd/sparkstation-gateway.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable sparkstation-gateway
+sudo systemctl start sparkstation-gateway
+```
+
+### 3. Daily Maintenance
+
+Enable daily maintenance (3 AM):
+```bash
+sudo cp scripts/systemd/sparkstation-maintenance.service /etc/systemd/system/
+sudo cp scripts/systemd/sparkstation-maintenance.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable sparkstation-maintenance.timer
+sudo systemctl start sparkstation-maintenance.timer
+```
+
+---
+
+## Model Configuration
+
+### Auto-Load Models (Recommended)
+
+Edit `models.yaml`:
+
+```yaml
+autoload:
+  enabled: true
+  models:
+    # Vision model
+    - name: "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
+      alias: "qwen-vl-3b"
+      backend: "vllm"
+      quantization: "awq"
+      idle_timeout_minutes: 30
+      auto_suspend_enabled: true
+      extra_args:
+        max_model_len: 8192
+        max_concurrent_requests: 32
+        gpu_memory_utilization: 0.25
+
+    # Reasoning model
+    - name: "openai/gpt-oss-20b"
+      alias: "gpt-oss-20b"
+      backend: "vllm"
+      quantization: "none"  # Uses built-in MXFP4
+      idle_timeout_minutes: 60
+      auto_suspend_enabled: true
+      extra_args:
+        max_model_len: 16384
+        max_concurrent_requests: 32
+        gpu_memory_utilization: 0.30
+```
+
+Models automatically load on supervisor startup.
+
+### Manual Model Management
+
+```bash
+# Start a model
+curl -X POST http://localhost:9001/models/start \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key-here" \
+  -d '{
+    "model_name": "Qwen/Qwen2.5-VL-3B-Instruct-AWQ",
+    "backend": "vllm",
+    "model_alias": "qwen-vl-3b",
+    "quantization": "awq"
+  }'
+
+# Or via CLI
+sparkstation models start Qwen/Qwen2.5-VL-3B-Instruct-AWQ \
+  --alias qwen-vl-3b \
+  --backend vllm \
+  --quantization awq
+```
+
+---
+
+## Monitoring
+
+### Prometheus + Grafana
+
+#### Setup Prometheus
+
+Add to `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: 'sparkstation'
+    static_configs:
+      - targets: ['localhost:9001']
+    scrape_interval: 15s
+```
+
+#### Import Grafana Dashboard
+
+1. Open Grafana → Dashboards → Import
+2. Upload `monitoring/grafana-dashboard.json`
+3. Select Prometheus datasource
+
+See `monitoring/README.md` for detailed setup.
+
+### Available Metrics
+
+- `unified_memory_used_bytes` - Total memory usage
+- `gpu_temperature_celsius` - GPU temperature
+- `gpu_power_draw_watts` - Power consumption
+- `model_status` - Model status (0-4)
+- `resident_models_count` - Active models
+- `model_requests_total` - Request counter per model
+
+---
+
+## Maintenance
+
+### Daily Automated Maintenance
+
+Runs via systemd timer at 3 AM:
+- Cleanup log files older than 30 days
+- Vacuum SQLite database
+- Detect stale/zombie models
+- Check for port leaks
+- Generate resource usage snapshot
+
+Manual run:
+```bash
+python scripts/maintenance.py
+
+# Dry run
+python scripts/maintenance.py --dry-run
+
+# Check last run
+sudo journalctl -u sparkstation-maintenance -n 50
+```
+
+### Model Cache Cleanup
+
+```bash
+# Check cache size
+du -sh /var/lib/models
+
+# List cached models
+huggingface-cli scan-cache
+
+# Interactive cleanup
+huggingface-cli delete-cache
+```
+
+### Database Cleanup
+
+```bash
+# Full cleanup (stops all services and resets database)
+sparkstation cleanup --force
+
+# Manual database reset
+rm data/sparkstation.db
+sparkstation restart
+```
+
+---
+
+## Troubleshooting
+
+### Model fails to start
+
+```bash
+# Check logs
+sparkstation models logs <model-id> -f
+
+# Or check Supervisor logs
+tail -f data/sparkstation.log
+
+# Check Docker containers
+docker ps -a --filter name=sparkstation-
+
+# Check specific container
+docker logs sparkstation-<model-id>
+```
+
+### Common Issues
+
+**401 Unauthorized**:
+- API key required - add `X-API-Key` header to requests
+- Or disable auth: remove `API_KEY` from `.env`
+
+**Insufficient memory**:
+- Check `/resources` endpoint: `curl http://localhost:9001/resources`
+- Reduce `MAX_RESIDENT_MODELS` in `.env`
+- Enable auto-suspend: `AUTO_SUSPEND_ENABLED=true`
+
+**Container not starting**:
+- Verify GPU access: `docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi`
+- Check Docker daemon: `sudo systemctl status docker`
+- Verify image exists: `docker images | grep vllm`
+
+**Gateway returns 404**:
+- Model may be suspended - first request triggers auto-resume (~15s)
+- Check model status: `sparkstation status`
+- Verify gateway is running: `curl http://localhost:8000/health`
+
+### Logs
+
+**Supervisor**:
+```bash
+# File logs
+tail -f data/sparkstation.log
+
+# Systemd logs
+sudo journalctl -u sparkstation-supervisor -f
+```
+
+**Gateway**:
+```bash
+sudo journalctl -u sparkstation-gateway -f
+```
+
+**Model containers**:
+```bash
+sparkstation models logs <model-id> -f
+```
+
+---
+
+## Advanced: Subprocess Mode
+
+For users who prefer direct Python execution over Docker:
+
+### Why Use Subprocess Mode?
+
+- Need custom vLLM builds
+- Debugging backend code
+- Maximum performance (no container overhead)
+- Fine-grained control over Python environment
 
 ### Prerequisites
 
+Install micromamba (lightweight conda):
 ```bash
-# Check CUDA version (should be 12.4 or 12.6 for DGX Spark)
-nvidia-smi
-
-# Install micromamba (lightweight conda alternative)
 curl -L https://micromamba.snakepit.net/api/micromamba/linux-64/latest | tar -xvj bin/micromamba
 sudo mv bin/micromamba /usr/local/bin/
 ```
 
-### SGLang Environment
+### Backend Environment Setup
 
-```bash
-# Create directory
-sudo mkdir -p /opt/backends/sglang
-sudo chown $USER /opt/backends/sglang
-
-# Create environment with Python 3.11
-micromamba create -y -p /opt/backends/sglang -c conda-forge python=3.11
-
-# Install PyTorch with CUDA 12.4 support
-micromamba run -p /opt/backends/sglang pip install \
-  "torch==2.4.*" --index-url https://download.pytorch.org/whl/cu124
-
-# Install SGLang with all dependencies
-micromamba run -p /opt/backends/sglang pip install "sglang[all]==0.3.*"
-
-# Optional: Install FlashInfer for faster inference (match CUDA version)
-micromamba run -p /opt/backends/sglang pip install flashinfer
-
-# Optional: Install Flash-Attention 2 (if needed)
-micromamba run -p /opt/backends/sglang pip install "flash-attn==2.6.*"
-
-# Verify installation
-/opt/backends/sglang/bin/python -c "import sglang; print(sglang.__version__)"
-```
-
-### vLLM Environment
+#### vLLM Environment
 
 ```bash
 # Create directory
@@ -175,736 +573,44 @@ micromamba run -p /opt/backends/vllm pip install \
 # Install vLLM
 micromamba run -p /opt/backends/vllm pip install "vllm==0.6.*"
 
-# Verify installation
+# Verify
 /opt/backends/vllm/bin/python -c "import vllm; print(vllm.__version__)"
 ```
 
-### Version Pinning Notes
+### Configuration for Subprocess Mode
 
-**CRITICAL**: Match CUDA wheels to your driver version:
-- DGX Spark typically runs CUDA 12.4 or 12.6
-- Check with `nvidia-smi` → look for "CUDA Version: 12.x"
-- Use corresponding PyTorch wheel: `cu124` for CUDA 12.4, `cu126` for CUDA 12.6
-- FlashInfer and Flash-Attention must match the same CUDA version
-
-**Don't mix CUDA versions** across PyTorch, FlashInfer, and Flash-Attention in the same env!
-
----
-
-## Configuration Files
-
-### 1. Central Environment File
-
-`/etc/sparkstation/env`
-
+Update `.env`:
 ```bash
-# Backend Python paths (absolute)
-SGLANG_PY=/opt/backends/sglang/bin/python
+# Disable Docker mode
+USE_DOCKER=false
+
+# Provide Python path
+VLLM_PYTHON_PATH=/opt/backends/vllm/bin/python
+```
+
+### Shared Environment File
+
+Create `/etc/sparkstation/env`:
+```bash
+# Backend Python paths
 VLLM_PY=/opt/backends/vllm/bin/python
 
-# HuggingFace cache (shared across all backends)
+# HuggingFace cache (shared)
 HF_HOME=/var/lib/models
 HUGGINGFACE_HUB_CACHE=/var/lib/models
 TOKENIZERS_PARALLELISM=false
 
 # GPU configuration
-CUDA_VISIBLE_DEVICES=0  # Single GPU on DGX Spark
-PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-NCCL_P2P_DISABLE=0
-NCCL_IB_DISABLE=0
-NCCL_ASYNC_ERROR_HANDLING=1
-
-# Port allocation
-SGLANG_PORT=8011
-VLLM_PORT=8021
-LITELLM_PORT=8000
-SUPERVISOR_PORT=9001
-
-# Logging
-LOG_DIR=/var/log/llm
-
-# Performance tuning
-OMP_NUM_THREADS=8
-MKL_NUM_THREADS=8
-```
-
-### 2. Sparkstation Environment
-
-Update `/opt/sparkstation/.env`:
-
-```bash
-# Server settings
-HOST=127.0.0.1
-PORT=9001
-LOG_LEVEL=info
-
-# Backend Python paths (for subprocess launching)
-SGLANG_PYTHON_PATH=/opt/backends/sglang/bin/python
-VLLM_PYTHON_PATH=/opt/backends/vllm/bin/python
-
-# DGX Spark hardware constraints
-TOTAL_UNIFIED_MEMORY_GB=128
-MEMORY_HARD_LIMIT_GB=110
-MEMORY_SOFT_LIMIT_GB=100
-MAX_RESIDENT_MODELS=3
-
-# Port allocation for model servers
-MODEL_PORT_RANGE_START=8001
-MODEL_PORT_RANGE_END=8100
-
-# Auto-suspend settings
-AUTO_SUSPEND_ENABLED=true
-DEFAULT_IDLE_TIMEOUT_MINUTES=30
-AUTO_SUSPEND_CHECK_INTERVAL_SECONDS=60
-
-# Health checks
-HEALTH_CHECK_ENABLED=true
-HEALTH_CHECK_INTERVAL_SECONDS=300
-HEALTH_CHECK_TIMEOUT_SECONDS=5
-HEALTH_CHECK_MAX_FAILURES=3
-
-# Model restart policy
-AUTO_RESTART_ENABLED=true
-AUTO_RESTART_MAX_ATTEMPTS=3
-AUTO_RESTART_BACKOFF_MINUTES=1,5,15
-
-# LiteLLM Gateway settings
-LITELLM_ADMIN_URL=http://127.0.0.1:8000
-LITELLM_MASTER_KEY=sk-sparkstation-admin
-GATEWAY_SYNC_INTERVAL_SECONDS=60
-
-# Database
-DATABASE_URL=sqlite+aiosqlite:////opt/sparkstation/data/sparkstation.db
-
-# Security
-API_KEY=your-production-api-key-here
-
-# Logging
-LOG_TO_FILE=true
-LOG_FILE_PATH=/var/log/sparkstation/sparkstation.log
-LOG_MAX_BYTES=10485760
-LOG_BACKUP_COUNT=5
-```
-
-### 3. LiteLLM Routing Configuration
-
-`/etc/sparkstation/litellm.yaml`
-
-```yaml
-model_list:
-  # SGLang models (vision + text)
-  - model_name: qwen2-vl-7b
-    litellm_params:
-      model: openai/qwen2-vl-7b
-      api_base: http://127.0.0.1:8011/v1
-      api_key: "EMPTY"
-
-  - model_name: qwen2.5-7b
-    litellm_params:
-      model: openai/qwen2.5-7b
-      api_base: http://127.0.0.1:8012/v1
-      api_key: "EMPTY"
-
-  # vLLM models (text optimized)
-  - model_name: llama3-8b
-    litellm_params:
-      model: openai/llama3-8b
-      api_base: http://127.0.0.1:8021/v1
-      api_key: "EMPTY"
-
-router_settings:
-  num_retries: 2
-  timeout: 120
-  enable_pre_call_checks: true
-
-general_settings:
-  master_key: sk-sparkstation-admin
-  database_url: sqlite:////etc/sparkstation/litellm.db
-```
-
----
-
-## Systemd Service Units
-
-### 1. SGLang Service (Vision Model Example)
-
-`/etc/systemd/system/sglang-vision.service`
-
-```ini
-[Unit]
-Description=SGLang Server - Vision Models
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-EnvironmentFile=/etc/sparkstation/env
-User=llm
-Group=llm
-WorkingDirectory=/var/lib/models
-
-# Create log directory
-ExecStartPre=/usr/bin/mkdir -p ${LOG_DIR}/sglang
-
-# Launch SGLang with Qwen2-VL
-ExecStart=/opt/backends/sglang/bin/python -m sglang.launch_server \
-  --host 0.0.0.0 \
-  --port 8011 \
-  --model Qwen/Qwen2-VL-7B-Instruct \
-  --tensor-parallel-size 1 \
-  --kv-cache-dtype fp8 \
-  --max-model-len 32768 \
-  --trust-remote-code
-
-# Restart policy
-Restart=always
-RestartSec=5
-StartLimitBurst=3
-StartLimitIntervalSec=300
-
-# Logging
-StandardOutput=append:/var/log/llm/sglang/stdout.log
-StandardError=append:/var/log/llm/sglang/stderr.log
-
-# Resource limits
-LimitNOFILE=1048576
-LimitNPROC=4096
-
-# Security hardening
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ReadWritePaths=/var/lib/models /var/log/llm
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### 2. vLLM Service (Text Model Example)
-
-`/etc/systemd/system/vllm-text.service`
-
-```ini
-[Unit]
-Description=vLLM Server - Text Models
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-EnvironmentFile=/etc/sparkstation/env
-User=llm
-Group=llm
-WorkingDirectory=/var/lib/models
-
-# Create log directory
-ExecStartPre=/usr/bin/mkdir -p ${LOG_DIR}/vllm
-
-# Launch vLLM with Llama model
-ExecStart=/opt/backends/vllm/bin/python -m vllm.entrypoints.openai.api_server \
-  --host 0.0.0.0 \
-  --port 8021 \
-  --model meta-llama/Llama-3.1-8B-Instruct \
-  --tensor-parallel-size 1 \
-  --max-model-len 32768 \
-  --gpu-memory-utilization 0.92 \
-  --quantization fp8
-
-# Restart policy
-Restart=always
-RestartSec=5
-StartLimitBurst=3
-StartLimitIntervalSec=300
-
-# Logging
-StandardOutput=append:/var/log/llm/vllm/stdout.log
-StandardError=append:/var/log/llm/vllm/stderr.log
-
-# Resource limits
-LimitNOFILE=1048576
-LimitNPROC=4096
-
-# Security hardening
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ReadWritePaths=/var/lib/models /var/log/llm
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### 3. Sparkstation Supervisor Service
-
-Use existing `/opt/sparkstation/scripts/systemd/sparkstation-supervisor.service`
-
-Update paths if needed:
-```ini
-WorkingDirectory=/opt/sparkstation
-ExecStart=/opt/sparkstation/.venv/bin/uvicorn supervisor.main:app \
-  --host 127.0.0.1 \
-  --port 9001
-```
-
-### 4. LiteLLM Gateway Service
-
-`/etc/systemd/system/litellm-gateway.service`
-
-```ini
-[Unit]
-Description=LiteLLM Gateway
-After=network-online.target sglang-vision.service vllm-text.service
-Wants=sglang-vision.service vllm-text.service
-
-[Service]
-EnvironmentFile=/etc/sparkstation/env
-User=llm
-Group=llm
-WorkingDirectory=/etc/sparkstation
-
-# Launch LiteLLM
-ExecStart=/usr/local/bin/litellm \
-  --port 8000 \
-  --config /etc/sparkstation/litellm.yaml \
-  --host 0.0.0.0
-
-# Restart policy
-Restart=always
-RestartSec=3
-StartLimitBurst=5
-StartLimitIntervalSec=300
-
-# Logging
-StandardOutput=journal
-StandardError=journal
-
-# Resource limits
-LimitNOFILE=65536
-
-[Install]
-WantedBy=multi-user.target
-```
-
----
-
-## Deployment Steps
-
-### Step 1: Create System Users
-
-```bash
-# Create llm user for backend services
-sudo useradd -r -s /bin/false llm
-
-# Create directories and set permissions
-sudo mkdir -p /var/lib/models /var/log/llm/{sglang,vllm} /var/log/sparkstation
-sudo chown -R llm:llm /var/lib/models /var/log/llm
-sudo chown -R $USER:$USER /var/log/sparkstation
-```
-
-### Step 2: Install Backend Environments
-
-Follow [Backend Environment Setup](#backend-environment-setup) section above.
-
-### Step 3: Deploy Sparkstation
-
-```bash
-# Clone/copy Sparkstation to /opt
-sudo mkdir -p /opt/sparkstation
-sudo chown $USER:$USER /opt/sparkstation
-cd /opt/sparkstation
-
-# Install dependencies with uv
-uv sync
-
-# Create data directory
-mkdir -p data
-
-# Copy and configure environment
-cp .env.example .env
-# Edit .env with production values
-```
-
-### Step 4: Install Configuration Files
-
-```bash
-# Create config directory
-sudo mkdir -p /etc/sparkstation
-
-# Copy central env file
-sudo cp /path/to/env /etc/sparkstation/env
-
-# Copy LiteLLM config
-sudo cp gateway/litellm.yaml /etc/sparkstation/litellm.yaml
-```
-
-### Step 5: Install Systemd Units
-
-```bash
-# Copy service files
-sudo cp scripts/systemd/sparkstation-supervisor.service /etc/systemd/system/
-sudo cp /path/to/sglang-vision.service /etc/systemd/system/
-sudo cp /path/to/vllm-text.service /etc/systemd/system/
-sudo cp /path/to/litellm-gateway.service /etc/systemd/system/
-
-# Reload systemd
-sudo systemctl daemon-reload
-```
-
-### Step 6: Start Services
-
-```bash
-# Start backend services first
-sudo systemctl enable sglang-vision vllm-text
-sudo systemctl start sglang-vision vllm-text
-
-# Wait for backends to be ready (check logs)
-sudo journalctl -u sglang-vision -f &
-sudo journalctl -u vllm-text -f &
-
-# Start Sparkstation supervisor
-sudo systemctl enable sparkstation-supervisor
-sudo systemctl start sparkstation-supervisor
-
-# Start LiteLLM gateway
-sudo systemctl enable litellm-gateway
-sudo systemctl start litellm-gateway
-
-# Check status
-sudo systemctl status sglang-vision vllm-text sparkstation-supervisor litellm-gateway
-```
-
-### Step 7: Verify Deployment
-
-```bash
-# Check Sparkstation supervisor
-curl http://localhost:9001/health
-
-# Check LiteLLM gateway
-curl http://localhost:8000/health
-
-# Check SGLang backend
-curl http://localhost:8011/v1/models
-
-# Check vLLM backend
-curl http://localhost:8021/v1/models
-
-# List models in Sparkstation
-curl http://localhost:9001/models/detailed
-
-# Test chat completion through gateway
-curl -X POST http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "qwen2.5-7b",
-    "messages": [{"role": "user", "content": "Hello!"}],
-    "max_tokens": 50
-  }'
-```
-
----
-
-## GPU Partitioning & Performance
-
-### Single GPU Configuration (Default)
-
-For DGX Spark with single Blackwell GPU:
-
-```bash
-# In /etc/sparkstation/env
 CUDA_VISIBLE_DEVICES=0
-```
-
-All backends share the single GPU. Sparkstation's resource manager ensures:
-- Max 3 concurrent models (configurable)
-- Memory limit: 110 GB (85% of 128 GB unified memory)
-- Auto-suspend idle models to free GPU
-
-### Performance Tuning
-
-**PyTorch CUDA Allocator**:
-```bash
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
-- Reduces memory fragmentation
-- Better for dynamic workloads
 
-**Threading**:
-```bash
-OMP_NUM_THREADS=8
-MKL_NUM_THREADS=8
-```
-- Limit CPU threads to avoid oversubscription
-- Adjust based on Grace CPU cores
+### Notes on Subprocess Mode
 
-**Model-Specific**:
-- Use `fp8` quantization for large models (7B+)
-- Set `--max-model-len` based on use case (32K is good default)
-- Use `--gpu-memory-utilization 0.90-0.92` (leave headroom)
-- Enable `--trust-remote-code` for community models
-
-### Speculative Decoding (Future)
-
-If you enable speculative decoding later:
-- Do it inside vLLM: `--speculative-model <draft-model>`
-- Or SGLang native speculative decoding
-- Keep feature pinned per env to avoid dependency conflicts
-
----
-
-## Health Checks & Monitoring
-
-### HTTP Health Probes
-
-**vLLM**:
-```bash
-# Models endpoint
-curl http://localhost:8021/v1/models
-
-# Health endpoint (if available)
-curl http://localhost:8021/health
-```
-
-**SGLang**:
-```bash
-# Root endpoint
-curl http://localhost:8011/
-
-# Models endpoint
-curl http://localhost:8011/v1/models
-```
-
-### Systemd Watchdog (Optional)
-
-Add to service units:
-```ini
-[Service]
-WatchdogSec=30
-NotifyAccess=main
-```
-
-Create a simple health checker script that calls `sd_notify` if checks pass.
-
-### Prometheus Metrics
-
-Sparkstation exposes metrics at:
-```bash
-curl http://localhost:9001/metrics
-```
-
-Add to Prometheus config:
-```yaml
-scrape_configs:
-  - job_name: 'sparkstation'
-    static_configs:
-      - targets: ['localhost:9001']
-    scrape_interval: 15s
-```
-
-### Grafana Dashboard
-
-Import the pre-built dashboard:
-```bash
-# Dashboard at monitoring/grafana-dashboard.json
-# Import in Grafana UI → Dashboards → Import
-```
-
-Monitors:
-- Unified memory usage
-- GPU temperature and power
-- Model status distribution
-- Request rates and latency
-- Auto-suspend events
-
----
-
-## Logging & Retention
-
-### Log Locations
-
-**Sparkstation**:
-- `/var/log/sparkstation/sparkstation.log` (rotating, 10 MB × 5 files)
-
-**SGLang**:
-- `/var/log/llm/sglang/stdout.log`
-- `/var/log/llm/sglang/stderr.log`
-
-**vLLM**:
-- `/var/log/llm/vllm/stdout.log`
-- `/var/log/llm/vllm/stderr.log`
-
-**Systemd Journal**:
-```bash
-# View logs
-sudo journalctl -u sglang-vision -f
-sudo journalctl -u vllm-text -f
-sudo journalctl -u sparkstation-supervisor -f
-sudo journalctl -u litellm-gateway -f
-```
-
-### Log Rotation
-
-Create `/etc/logrotate.d/llm`:
-
-```
-/var/log/llm/*/*.log {
-    weekly
-    rotate 4
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 llm llm
-    sharedscripts
-    postrotate
-        systemctl reload sglang-vision vllm-text > /dev/null 2>&1 || true
-    endscript
-}
-
-/var/log/sparkstation/*.log {
-    weekly
-    rotate 4
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 $USER $USER
-}
-```
-
-Apply:
-```bash
-sudo logrotate -f /etc/logrotate.d/llm
-```
-
----
-
-## Maintenance
-
-### Daily Maintenance
-
-Sparkstation includes automated maintenance (runs at 3 AM):
-
-```bash
-# Enable maintenance timer
-sudo systemctl enable sparkstation-maintenance.timer
-sudo systemctl start sparkstation-maintenance.timer
-
-# Check timer status
-sudo systemctl list-timers sparkstation-maintenance.timer
-
-# Manual run
-python /opt/sparkstation/scripts/maintenance.py
-
-# Dry run
-python /opt/sparkstation/scripts/maintenance.py --dry-run
-```
-
-Maintenance tasks:
-- Clean old log files (>30 days)
-- Vacuum SQLite database
-- Detect stale models
-- Check for port leaks
-- Generate resource usage snapshot
-
-### Backend Updates
-
-When updating backends:
-
-```bash
-# Stop services
-sudo systemctl stop sglang-vision vllm-text
-
-# Update environment
-micromamba run -p /opt/backends/sglang pip install --upgrade "sglang[all]==0.3.5"
-micromamba run -p /opt/backends/vllm pip install --upgrade "vllm==0.6.5"
-
-# Test in development first!
-# Then restart services
-sudo systemctl start sglang-vision vllm-text
-```
-
-### Model Cache Cleanup
-
-```bash
-# Check cache size
-du -sh /var/lib/models
-
-# Remove unused models
-cd /var/lib/models
-# Manually remove model directories you no longer need
-rm -rf models--old-model-name
-
-# Or use HuggingFace CLI
-pip install huggingface-hub
-huggingface-cli scan-cache
-huggingface-cli delete-cache  # interactive cleanup
-```
-
-### Monitoring Disk Usage
-
-```bash
-# Check key directories
-df -h /opt/backends /var/lib/models /var/log
-
-# Set up alerts in Grafana for:
-# - /var/lib/models > 80% full
-# - /var/log > 80% full
-```
-
----
-
-## Troubleshooting
-
-### Backend Won't Start
-
-```bash
-# Check logs
-sudo journalctl -u sglang-vision -n 100
-tail -100 /var/log/llm/sglang/stderr.log
-
-# Common issues:
-# - CUDA version mismatch → reinstall with correct wheel
-# - Missing model weights → check HF_HOME and download
-# - Port already in use → check port allocation
-# - OOM → reduce gpu-memory-utilization or model size
-```
-
-### Sparkstation Can't Connect to Backend
-
-```bash
-# Check backend is running
-curl http://localhost:8011/v1/models
-
-# Check firewall (if enabled)
-sudo ufw status
-sudo ufw allow 8011/tcp
-
-# Check Sparkstation config
-cat /opt/sparkstation/.env | grep PORT
-```
-
-### Model Loading Slow
-
-```bash
-# Pre-download models
-export HF_HOME=/var/lib/models
-huggingface-cli download Qwen/Qwen2.5-7B-Instruct
-
-# Check network speed to HuggingFace
-wget -O /dev/null https://huggingface.co/Qwen/Qwen2.5-7B-Instruct/resolve/main/config.json
-```
-
-### High GPU Temperature
-
-```bash
-# Check temperature
-nvidia-smi
-
-# Sparkstation auto-suspends at 80°C (sustained)
-# Verify auto-suspend is working
-curl http://localhost:9001/models/detailed | jq '.models[] | {id, status, idle_seconds}'
-
-# Reduce concurrent models
-# Edit /opt/sparkstation/.env: MAX_RESIDENT_MODELS=2
-```
+- More complex setup (manage conda environments)
+- No automatic GPU isolation
+- Requires careful version management
+- Not recommended for production unless you have specific requirements
 
 ---
 
@@ -912,9 +618,26 @@ curl http://localhost:9001/models/detailed | jq '.models[] | {id, status, idle_s
 
 ### Network Binding
 
-- **Backends**: Bind to `0.0.0.0` (accessible from localhost only via firewall)
-- **Sparkstation**: Bind to `127.0.0.1` (localhost only)
-- **LiteLLM**: Bind to `0.0.0.0` (or `127.0.0.1` if accessed locally)
+- **Supervisor**: Binds to `127.0.0.1` (localhost only)
+- **Gateway**: Binds to `127.0.0.1` (localhost only)
+- **Model containers**: Expose ports only to host
+
+### API Key Authentication
+
+Generate strong API key:
+```bash
+openssl rand -hex 32
+```
+
+Add to `.env`:
+```bash
+API_KEY=<generated-key>
+```
+
+Use in requests:
+```bash
+curl -H "X-API-Key: <your-key>" http://localhost:9001/models/start ...
+```
 
 ### Firewall Rules
 
@@ -925,62 +648,49 @@ sudo ufw allow from 127.0.0.1 to any port 8000:9001
 sudo ufw enable
 ```
 
-### API Key Authentication
-
-Set strong API key in Sparkstation:
-```bash
-# Generate random key
-openssl rand -hex 32
-
-# Add to /opt/sparkstation/.env
-API_KEY=<generated-key>
-```
-
-Use key in requests:
-```bash
-curl -H "X-API-Key: <your-key>" http://localhost:9001/models/start ...
-```
-
 ---
 
-## Next Steps After Deployment
+## Performance Tuning
 
-1. **Test End-to-End**:
-   - Start a model via Sparkstation API
-   - Send requests through LiteLLM gateway
-   - Verify auto-suspend/resume cycle
+### Docker Container Limits
 
-2. **Migrate Applications**:
-   - Update Kavi to use `http://localhost:8000` (LiteLLM)
-   - Update image_metadata_indexing to use Sparkstation
+Containers automatically use:
+- `--gpus all` for full GPU access
+- `--shm-size 8g` for adequate shared memory
+- `-v /var/lib/models:/root/.cache/huggingface` for model cache
 
-3. **Setup Monitoring**:
-   - Configure Prometheus scraping
-   - Import Grafana dashboard
-   - Set up alerts for high temp, OOM, failures
+### Model-Specific Settings
 
-4. **Load Testing**:
-   - Use Locust or similar to test concurrent requests
-   - Verify performance targets (<5s response time)
-   - Test auto-suspend under load
+In `models.yaml` `extra_args`:
 
-5. **Documentation**:
-   - Document your specific model choices
-   - Create runbooks for common operations
-   - Document application migration steps
+```yaml
+extra_args:
+  max_model_len: 8192  # Context length
+  max_concurrent_requests: 32  # Batch size
+  gpu_memory_utilization: 0.30  # GPU memory fraction (0.0-1.0)
+  tensor_parallel_size: 1  # Multi-GPU support (future)
+```
+
+### DGX Spark Optimizations
+
+- **Unified memory**: 128 GB shared CPU+GPU pool
+- **Hard limit**: 110 GB (85% of total)
+- **Max concurrent models**: 3 (configurable)
+- **Thermal management**: Auto-suspend at 80°C sustained
+- **Auto-suspend**: Frees GPU after 30 min idle
 
 ---
 
 ## Reference
 
 - **Sparkstation GitHub**: https://github.com/kshetrajna12/sparkstation
-- **SGLang Docs**: https://sglang.readthedocs.io/
 - **vLLM Docs**: https://docs.vllm.ai/
 - **LiteLLM Docs**: https://docs.litellm.ai/
+- **NVIDIA Container Toolkit**: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/
 - **DGX Spark Info**: NVIDIA documentation
 
 ---
 
-**Last Updated**: 2025-10-31
+**Last Updated**: 2025-11-02
 **Version**: 0.1.0
 **Maintainer**: Sparkstation Team
