@@ -450,6 +450,190 @@ def models_logs(model_id, follow, tail):
 
 
 @cli.command()
+@click.option("--force", "-f", is_flag=True, help="Overwrite existing CLAUDE.md")
+@click.pass_context
+def init(ctx, force):
+    """Create CLAUDE.md with instructions for using Sparkstation gateway."""
+    claude_md_path = Path("CLAUDE.md")
+
+    if claude_md_path.exists() and not force:
+        click.echo(f"CLAUDE.md already exists in {Path.cwd()}")
+        click.echo("Use --force to overwrite")
+        return
+
+    # Get available models from supervisor
+    supervisor_url = ctx.obj['supervisor_url']
+    models_info = []
+
+    try:
+        response = httpx.get(f"{supervisor_url}/models/detailed", timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            models = data.get("models", [])
+            for model in models:
+                if model.get("status") == "running":
+                    models_info.append({
+                        "name": model.get("alias") or model.get("model_name", "unknown"),
+                        "full_name": model.get("model_name", "unknown"),
+                        "port": model.get("port", "unknown"),
+                    })
+    except Exception:
+        # If can't connect to supervisor, use defaults
+        models_info = [
+            {"name": "qwen-vl-3b", "full_name": "Qwen/Qwen2.5-VL-3B-Instruct-AWQ", "port": 8001},
+            {"name": "gpt-oss-20b", "full_name": "openai/gpt-oss-20b", "port": 8002},
+        ]
+
+    # Generate model list for documentation
+    model_list_str = "\n".join([f"- `{m['name']}` - {m['full_name']}" for m in models_info])
+
+    claude_md_content = f"""# Sparkstation Local LLM Gateway
+
+This project has access to local LLM models through Sparkstation gateway.
+
+## Available Models
+
+{model_list_str}
+
+## API Endpoint
+
+- **Base URL**: `http://localhost:8000/v1`
+- **Protocol**: OpenAI-compatible API
+- **Authentication**: Use any string as API key (e.g., `"dummy-key"`)
+
+## Usage with OpenAI Python SDK
+
+```python
+from openai import OpenAI
+
+# Initialize client pointing to local Sparkstation gateway
+client = OpenAI(
+    api_key="dummy-key",  # Any value works
+    base_url="http://localhost:8000/v1"
+)
+
+# Make a request
+response = client.chat.completions.create(
+    model="qwen-vl-3b",  # or "gpt-oss-20b"
+    messages=[
+        {{"role": "user", "content": "Hello!"}}
+    ]
+)
+
+print(response.choices[0].message.content)
+```
+
+## Usage with curl
+
+```bash
+curl http://localhost:8000/v1/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer dummy-key" \\
+  -d '{{
+    "model": "qwen-vl-3b",
+    "messages": [{{"role": "user", "content": "Hello!"}}]
+  }}'
+```
+
+## Streaming
+
+```python
+stream = client.chat.completions.create(
+    model="qwen-vl-3b",
+    messages=[{{"role": "user", "content": "Tell me a story"}}],
+    stream=True
+)
+
+for chunk in stream:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+```
+
+## Vision (Image Analysis)
+
+The `qwen-vl-3b` model supports vision capabilities. You can pass images via URL or base64:
+
+### With Image URL
+
+```python
+response = client.chat.completions.create(
+    model="qwen-vl-3b",
+    messages=[
+        {{
+            "role": "user",
+            "content": [
+                {{"type": "text", "text": "What's in this image?"}},
+                {{"type": "image_url", "image_url": {{"url": "https://example.com/image.jpg"}}}}
+            ]
+        }}
+    ]
+)
+```
+
+### With Base64 Encoded Image
+
+```python
+import base64
+
+with open("image.jpg", "rb") as f:
+    image_data = base64.b64encode(f.read()).decode('utf-8')
+
+response = client.chat.completions.create(
+    model="qwen-vl-3b",
+    messages=[
+        {{
+            "role": "user",
+            "content": [
+                {{"type": "text", "text": "Describe this image"}},
+                {{"type": "image_url", "image_url": {{"url": f"data:image/jpeg;base64,{{image_data}}"}}}}
+            ]
+        }}
+    ]
+)
+```
+
+**Note**: Vision requests use more tokens (~5000+ tokens for image processing).
+
+## Reasoning Models
+
+The `gpt-oss-20b` model is a reasoning model that shows its thinking process. Access both the reasoning and final response:
+
+```python
+response = client.chat.completions.create(
+    model="gpt-oss-20b",
+    messages=[{{"role": "user", "content": "What is 2+2?"}}]
+)
+
+# Final answer
+print(response.choices[0].message.content)
+# Output: "4"
+
+# Reasoning process (if available)
+if hasattr(response.choices[0].message, 'reasoning_content'):
+    print(response.choices[0].message.reasoning_content)
+    # Output: "We need to add 2 and 2. That equals 4."
+```
+
+## Important Notes
+
+- **Do not start/stop Sparkstation services** - they are managed by the system
+- Models are already running and ready to use
+- Use the gateway endpoint (`http://localhost:8000/v1`) for all requests
+- All models support the standard OpenAI chat completions API
+- **Vision**: `qwen-vl-3b` supports image analysis (URL and base64)
+- **Reasoning**: `gpt-oss-20b` includes reasoning traces in `reasoning_content` field
+"""
+
+    # Write file
+    with open(claude_md_path, "w") as f:
+        f.write(claude_md_content)
+
+    click.secho(f"\n✓ Created CLAUDE.md in {Path.cwd()}", fg="green")
+    click.echo("\nThis file provides instructions for AI assistants on how to use")
+    click.echo("the Sparkstation gateway without managing the services.")
+
+
+@cli.command()
 @click.option("--force", is_flag=True, help="Force cleanup without confirmation")
 @click.pass_context
 def cleanup(ctx, force):
