@@ -36,6 +36,13 @@ class Backend(str, Enum):
     TRT_LLM = "trt-llm"  # Future support
 
 
+class ModelType(str, Enum):
+    """Model type for different inference tasks."""
+
+    CHAT = "chat"
+    EMBEDDING = "embedding"
+
+
 # SQLAlchemy ORM Model
 class ModelInstanceDB(Base):
     """Database model for model instances."""
@@ -46,6 +53,7 @@ class ModelInstanceDB(Base):
     model_name = Column(String, nullable=False)
     model_alias = Column(String, nullable=True)
     backend = Column(String, nullable=False)
+    model_type = Column(String, nullable=False, default="chat")
     status = Column(String, nullable=False)
     health_status = Column(String, default="unknown")
     port = Column(Integer, nullable=False)
@@ -80,6 +88,7 @@ class ModelConfig(BaseModel):
 
     model_name: str = Field(..., description="HuggingFace model name")
     backend: Backend = Field(..., description="LLM backend to use")
+    model_type: ModelType = Field(ModelType.CHAT, description="Model type (chat or embedding)")
     model_alias: Optional[str] = Field(None, description="Alias for easier reference")
     num_gpus: int = Field(1, description="Number of GPUs to allocate")
     quantization: Optional[str] = Field("fp8", description="Quantization type (fp8, int4, awq)")
@@ -102,6 +111,7 @@ class ModelInstance(BaseModel):
     model_name: str
     model_alias: Optional[str] = None
     backend: Backend
+    model_type: ModelType = ModelType.CHAT
     status: ModelStatus
     health_status: HealthStatus = HealthStatus.UNKNOWN
     port: int
@@ -134,6 +144,7 @@ class ModelStartRequest(BaseModel):
 
     model_name: str
     backend: Backend
+    model_type: ModelType = ModelType.CHAT
     model_alias: Optional[str] = None
     num_gpus: int = 1
     quantization: Optional[str] = "fp8"
@@ -152,6 +163,7 @@ class ModelStartResponse(BaseModel):
     model_id: str
     model_name: str
     backend: str
+    model_type: str
     status: str
     port: int
     gpu_ids: List[int]
@@ -166,6 +178,7 @@ class ModelStatusResponse(BaseModel):
 
     model_id: str
     model_name: str
+    model_type: str
     status: str
     health_status: str
     uptime_seconds: Optional[float] = None

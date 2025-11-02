@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, Optional
 import httpx
 from supervisor.launchers.base import ModelLauncher, LaunchError
-from supervisor.models import ModelConfig, ModelInstance, ModelStatus, HealthStatus, Backend
+from supervisor.models import ModelConfig, ModelInstance, ModelStatus, HealthStatus, Backend, ModelType
 from supervisor.config import settings
 
 logger = logging.getLogger(__name__)
@@ -51,8 +51,11 @@ class VLLMLauncher(ModelLauncher):
         Raises:
             LaunchError: If launch fails
         """
+        # Check if this is an embedding model
+        is_embedding = config.model_type == ModelType.EMBEDDING
+
         # DGX Spark: Quantization (some models have built-in quantization)
-        # Default to fp8 for most models, but allow None for models with built-in quantization
+        # Default to fp8 for chat models, None for embedding models
         vllm_quant = None
 
         if config.quantization:
@@ -64,14 +67,16 @@ class VLLMLauncher(ModelLauncher):
                 )
             vllm_quant = self.QUANTIZATION_MAP[quantization]
         else:
-            # Default to fp8 if not specified (for DGX Spark memory efficiency)
-            vllm_quant = "fp8"
+            # Default to fp8 for chat models (DGX Spark memory efficiency)
+            # Embedding models typically don't need quantization
+            if not is_embedding:
+                vllm_quant = "fp8"
 
-        # Per-model max_model_len (not blanket 8192)
+        # Per-model max_model_len (not blanket 8192) - only for chat models
         max_len = config.extra_args.get("max_model_len", 8192)
         max_concurrent = config.extra_args.get("max_concurrent_requests", 32)
 
-        logger.info(f"Launching vLLM model: {config.model_name} on port {port}")
+        logger.info(f"Launching vLLM {config.model_type.value} model: {config.model_name} on port {port}")
 
         try:
             # Launch using Docker (recommended)
@@ -95,10 +100,20 @@ class VLLMLauncher(ModelLauncher):
                     "--host", "0.0.0.0",  # Bind to all interfaces
                     "--port", str(port),
                     "--trust-remote-code",  # Required for many models
-                    "--max-model-len", str(max_len),
                     "--gpu-memory-utilization", str(config.extra_args.get("gpu_memory_utilization", 0.9)),
-                    "--max-num-seqs", str(max_concurrent),
                 ]
+
+                # Add embedding-specific or chat-specific flags
+                if is_embedding:
+                    # For embedding models, use --task embedding flag (vLLM v0.10+)
+                    docker_cmd.extend(["--task", "embedding"])
+                    logger.info(f"Using embedding mode for {config.model_name}")
+                else:
+                    # For chat models, add max-model-len and max-num-seqs
+                    docker_cmd.extend([
+                        "--max-model-len", str(max_len),
+                        "--max-num-seqs", str(max_concurrent),
+                    ])
 
                 # Only add quantization flag if specified and not auto-detected
                 # AWQ is auto-detected from model config, None means skip quantization
@@ -152,6 +167,7 @@ class VLLMLauncher(ModelLauncher):
                     model_name=config.model_name,
                     model_alias=config.model_alias,
                     backend=Backend.VLLM,
+                    model_type=config.model_type,
                     status=ModelStatus.STARTING,
                     health_status=HealthStatus.UNKNOWN,
                     port=port,
@@ -203,6 +219,7 @@ class VLLMLauncher(ModelLauncher):
                     model_name=config.model_name,
                     model_alias=config.model_alias,
                     backend=Backend.VLLM,
+                    model_type=config.model_type,
                     status=ModelStatus.STARTING,
                     health_status=HealthStatus.UNKNOWN,
                     port=port,
@@ -320,10 +337,9 @@ class VLLMLauncher(ModelLauncher):
 
     async def health_check(self, instance: ModelInstance) -> bool:
         """
-        Perform 1-token chat completion to verify model responsiveness.
-
-        CRITICAL: Use /v1/chat/completions not /v1/completions
-        (most backends reject /completions).
+        Perform health check based on model type.
+        - Chat models: 1-token chat completion
+        - Embedding models: Simple embedding request
 
         Args:
             instance: Model instance
@@ -332,20 +348,31 @@ class VLLMLauncher(ModelLauncher):
             True if healthy
         """
         try:
-            # 1-token chat completion probe
-            response = await self.client.post(
-                f"{instance.base_url}/v1/chat/completions",
-                json={
-                    "model": instance.model_name,
-                    "messages": [{"role": "user", "content": "hi"}],
-                    "max_tokens": 1,
-                    "temperature": 0,
-                },
-                timeout=settings.health_check_timeout_seconds,
-            )
+            if instance.model_type == ModelType.EMBEDDING:
+                # Embedding model health check
+                response = await self.client.post(
+                    f"{instance.base_url}/v1/embeddings",
+                    json={
+                        "input": "test",
+                        "model": instance.model_name,
+                    },
+                    timeout=settings.health_check_timeout_seconds,
+                )
+            else:
+                # Chat model health check (1-token completion)
+                response = await self.client.post(
+                    f"{instance.base_url}/v1/chat/completions",
+                    json={
+                        "model": instance.model_name,
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 1,
+                        "temperature": 0,
+                    },
+                    timeout=settings.health_check_timeout_seconds,
+                )
 
             if response.status_code == 200:
-                logger.debug(f"Health check passed for {instance.id}")
+                logger.debug(f"Health check passed for {instance.id} ({instance.model_type.value})")
                 return True
             else:
                 logger.warning(

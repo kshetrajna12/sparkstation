@@ -15,6 +15,11 @@ model_list:
     api_key: EMPTY
     model: openai/openai/gpt-oss-20b
   model_name: gpt-oss-20b
+- litellm_params:
+    api_base: http://127.0.0.1:8003/v1
+    api_key: EMPTY
+    model: openai/BAAI/bge-large-en-v1.5
+  model_name: bge-large
 router_settings:
   allowed_fails: 3
   cooldown_time: 30

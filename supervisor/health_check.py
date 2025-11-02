@@ -11,7 +11,7 @@ from typing import Optional, Dict
 import httpx
 
 from supervisor.registry import ModelRegistry
-from supervisor.models import ModelStatus, HealthStatus, ModelInstance
+from supervisor.models import ModelStatus, HealthStatus, ModelInstance, ModelType
 from supervisor.config import settings
 
 logger = logging.getLogger(__name__)
@@ -116,15 +116,25 @@ class HealthCheckManager:
 
                 # Try to health check the model (without counting failures)
                 try:
-                    response = await self.client.post(
-                        f"{model.base_url}/v1/chat/completions",
-                        json={
-                            "model": model.model_name,
-                            "messages": [{"role": "user", "content": "hi"}],
-                            "max_tokens": 1,
-                            "temperature": 0,
-                        },
-                    )
+                    # Use appropriate endpoint based on model type
+                    if model.model_type == ModelType.EMBEDDING:
+                        response = await self.client.post(
+                            f"{model.base_url}/v1/embeddings",
+                            json={
+                                "input": "test",
+                                "model": model.model_name,
+                            },
+                        )
+                    else:
+                        response = await self.client.post(
+                            f"{model.base_url}/v1/chat/completions",
+                            json={
+                                "model": model.model_name,
+                                "messages": [{"role": "user", "content": "hi"}],
+                                "max_tokens": 1,
+                                "temperature": 0,
+                            },
+                        )
 
                     if response.status_code == 200:
                         # Model is healthy! Transition to RUNNING
@@ -173,7 +183,8 @@ class HealthCheckManager:
 
     async def _check_model_health(self, model: ModelInstance) -> bool:
         """
-        Perform 1-token chat completion probe to verify model responsiveness.
+        Perform health check probe to verify model responsiveness.
+        Uses appropriate endpoint based on model type (chat vs embedding).
 
         Args:
             model: Model instance to check
@@ -185,17 +196,27 @@ class HealthCheckManager:
         display_name = model.model_alias or model.model_name
 
         try:
-            # 1-token chat completion probe
-            # CRITICAL: Use /v1/chat/completions (most backends don't support /v1/completions)
-            response = await self.client.post(
-                f"{model.base_url}/v1/chat/completions",
-                json={
-                    "model": model.model_name,
-                    "messages": [{"role": "user", "content": "hi"}],
-                    "max_tokens": 1,
-                    "temperature": 0,
-                },
-            )
+            # Use appropriate health check based on model type
+            if model.model_type == ModelType.EMBEDDING:
+                # Embedding model: test with /v1/embeddings
+                response = await self.client.post(
+                    f"{model.base_url}/v1/embeddings",
+                    json={
+                        "input": "test",
+                        "model": model.model_name,
+                    },
+                )
+            else:
+                # Chat model: 1-token chat completion probe
+                response = await self.client.post(
+                    f"{model.base_url}/v1/chat/completions",
+                    json={
+                        "model": model.model_name,
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 1,
+                        "temperature": 0,
+                    },
+                )
 
             if response.status_code == 200:
                 # Health check passed

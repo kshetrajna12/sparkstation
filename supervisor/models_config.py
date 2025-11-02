@@ -16,6 +16,7 @@ class ModelConfigYAML(BaseModel):
     name: str
     alias: Optional[str] = None
     backend: str
+    model_type: str = "chat"  # Default to chat for backward compatibility
     quantization: Optional[str] = "fp8"
     idle_timeout_minutes: int = 30
     auto_suspend_enabled: bool = True

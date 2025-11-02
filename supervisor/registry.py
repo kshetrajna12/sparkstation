@@ -48,6 +48,7 @@ class ModelRegistry:
                 model_name=instance.model_name,
                 model_alias=instance.model_alias,
                 backend=instance.backend,
+                model_type=instance.model_type,
                 status=instance.status,
                 health_status=instance.health_status,
                 port=instance.port,
@@ -123,6 +124,15 @@ class ModelRegistry:
         """List suspended models."""
         return await self.list_by_status(ModelStatus.SUSPENDED)
 
+    async def list_by_type(self, model_type: str) -> List[ModelInstance]:
+        """List models by type (chat or embedding)."""
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(ModelInstanceDB).where(ModelInstanceDB.model_type == model_type)
+            )
+            db_instances = result.scalars().all()
+            return [self._to_pydantic(db_inst) for db_inst in db_instances]
+
     async def update(self, instance: ModelInstance) -> ModelInstance:
         """
         Update model instance.
@@ -189,11 +199,13 @@ class ModelRegistry:
 
     def _to_pydantic(self, db_instance: ModelInstanceDB) -> ModelInstance:
         """Convert SQLAlchemy model to Pydantic model."""
+        from supervisor.models import ModelType
         return ModelInstance(
             id=db_instance.id,
             model_name=db_instance.model_name,
             model_alias=db_instance.model_alias,
             backend=Backend(db_instance.backend),
+            model_type=ModelType(db_instance.model_type) if db_instance.model_type else ModelType.CHAT,
             status=ModelStatus(db_instance.status),
             health_status=HealthStatus(db_instance.health_status),
             port=db_instance.port,
