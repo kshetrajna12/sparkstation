@@ -8,12 +8,12 @@ model_list:
 - litellm_params:
     api_base: http://127.0.0.1:8001/v1
     api_key: EMPTY
-    model: openai/qwen-vl-3b
+    model: openai/Qwen/Qwen2.5-VL-3B-Instruct-AWQ
   model_name: qwen-vl-3b
 - litellm_params:
     api_base: http://127.0.0.1:8002/v1
     api_key: EMPTY
-    model: openai/gpt-oss-20b
+    model: openai/openai/gpt-oss-20b
   model_name: gpt-oss-20b
 router_settings:
   allowed_fails: 3

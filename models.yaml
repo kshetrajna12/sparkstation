@@ -15,7 +15,7 @@ autoload:
       extra_args:
         max_model_len: 8192
         max_concurrent_requests: 32
-        gpu_memory_utilization: 0.15  # Small model, only needs ~15% GPU
+        gpu_memory_utilization: 0.25  # Small model, only needs ~25% GPU
 
     # Reasoning model with built-in MXFP4 quantization
     - name: "openai/gpt-oss-20b"
@@ -27,7 +27,7 @@ autoload:
       extra_args:
         max_model_len: 16384
         max_concurrent_requests: 32
-        gpu_memory_utilization: 0.75  # Large model, uses ~75% GPU
+        gpu_memory_utilization: 0.30  # Large model, uses ~30% GPU
 
 # Named profiles for different use cases
 profiles:

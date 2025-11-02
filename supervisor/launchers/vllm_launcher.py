@@ -96,7 +96,7 @@ class VLLMLauncher(ModelLauncher):
                     "--port", str(port),
                     "--trust-remote-code",  # Required for many models
                     "--max-model-len", str(max_len),
-                    "--gpu-memory-utilization", "0.9",
+                    "--gpu-memory-utilization", str(config.extra_args.get("gpu_memory_utilization", 0.9)),
                     "--max-num-seqs", str(max_concurrent),
                 ]
 

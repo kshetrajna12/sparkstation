@@ -57,6 +57,12 @@ class GatewaySync:
 
     async def _sync_loop(self):
         """Background task: sync every N seconds."""
+        # Sync immediately on startup, then loop
+        try:
+            await self.sync_models()
+        except Exception as e:
+            logger.error(f"Initial gateway sync failed: {e}", exc_info=True)
+
         while True:
             try:
                 await asyncio.sleep(self.sync_interval)
@@ -79,14 +85,14 @@ class GatewaySync:
         # Format for LiteLLM
         model_list = []
         for model in all_models:
-            # Use alias if available, otherwise use last part of model name
+            # Use alias for display name, but actual model_name for the backend
             display_name = model.model_alias or model.model_name.split("/")[-1]
 
             model_list.append(
                 {
                     "model_name": display_name,
                     "litellm_params": {
-                        "model": f"openai/{display_name}",  # openai/ prefix for OpenAI-compatible
+                        "model": f"openai/{model.model_name}",  # Use actual model name from backend
                         "api_base": f"{model.base_url}/v1",
                         "api_key": "EMPTY",
                     },

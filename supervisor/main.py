@@ -103,8 +103,6 @@ async def lifespan(app: FastAPI):
     if settings.auto_suspend_enabled:
         await auto_suspend_manager.start()
 
-    await gateway_sync.start()
-
     if settings.health_check_enabled:
         await health_check_manager.start()
         logger.info("Health check manager activated")
@@ -184,6 +182,10 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.error(f"Failed to auto-load model {model_config.name}: {e}")
                 # Continue with other models
+
+    # Start gateway sync after models are loaded (prevents rewriting yaml with 0 models)
+    await gateway_sync.start()
+    logger.info("Gateway sync activated")
 
     logger.info(f"Supervisor started on {settings.host}:{settings.port}")
 
