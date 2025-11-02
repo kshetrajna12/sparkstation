@@ -139,10 +139,11 @@ async def lifespan(app: FastAPI):
                 port = resource_manager.allocate_model(model_id, memory_estimate)
 
                 # Create model config
-                from supervisor.models import ModelConfig, Backend
+                from supervisor.models import ModelConfig, Backend, ModelType
                 config = ModelConfig(
                     model_name=model_config.name,
                     backend=Backend(model_config.backend),
+                    model_type=ModelType(model_config.model_type),
                     model_alias=model_config.alias,
                     num_gpus=1,
                     quantization=model_config.quantization,
@@ -163,6 +164,7 @@ async def lifespan(app: FastAPI):
                 instance.saved_config = {
                     "model_name": config.model_name,
                     "backend": config.backend.value,
+                    "model_type": config.model_type.value,
                     "model_alias": config.model_alias,
                     "gpu_ids": instance.gpu_ids,
                     "port": port,
@@ -271,6 +273,7 @@ async def list_models_detailed():
                 "model_name": model.model_name,
                 "alias": model.model_alias,
                 "backend": model.backend,
+                "model_type": model.model_type,
                 "status": model.status,
                 "health_status": model.health_status,
                 "port": model.port,
@@ -322,6 +325,7 @@ async def start_model(request: ModelStartRequest):
         config = ModelConfig(
             model_name=request.model_name,
             backend=request.backend,
+            model_type=request.model_type,
             model_alias=request.model_alias,
             num_gpus=request.num_gpus,
             quantization=request.quantization,
@@ -344,6 +348,7 @@ async def start_model(request: ModelStartRequest):
             instance.saved_config = {
                 "model_name": config.model_name,
                 "backend": config.backend.value,
+                "model_type": config.model_type.value,
                 "model_alias": config.model_alias,
                 "gpu_ids": instance.gpu_ids,
                 "port": port,
@@ -380,6 +385,7 @@ async def start_model(request: ModelStartRequest):
             model_id=instance.id,
             model_name=instance.model_name,
             backend=instance.backend.value if hasattr(instance.backend, 'value') else instance.backend,
+            model_type=instance.model_type.value if hasattr(instance.model_type, 'value') else instance.model_type,
             status=instance.status.value if hasattr(instance.status, 'value') else instance.status,
             port=instance.port,
             gpu_ids=instance.gpu_ids,

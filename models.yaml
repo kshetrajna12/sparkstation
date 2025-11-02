@@ -9,6 +9,7 @@ autoload:
     - name: "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
       alias: "qwen-vl-3b"
       backend: "vllm"
+      model_type: "chat"
       quantization: "awq"
       idle_timeout_minutes: 30
       auto_suspend_enabled: true
@@ -21,6 +22,7 @@ autoload:
     - name: "openai/gpt-oss-20b"
       alias: "gpt-oss-20b"
       backend: "vllm"
+      model_type: "chat"
       quantization: "none"  # Uses built-in MXFP4
       idle_timeout_minutes: 60
       auto_suspend_enabled: true
@@ -28,6 +30,17 @@ autoload:
         max_model_len: 16384
         max_concurrent_requests: 32
         gpu_memory_utilization: 0.30  # Large model, uses ~30% GPU
+
+    # Embedding model for semantic search and RAG
+    - name: "BAAI/bge-large-en-v1.5"
+      alias: "bge-large"
+      backend: "vllm"
+      model_type: "embedding"
+      quantization: "none"
+      idle_timeout_minutes: 30
+      auto_suspend_enabled: true
+      extra_args:
+        gpu_memory_utilization: 0.25  # Larger embedding model
 
 # Named profiles for different use cases
 profiles:
