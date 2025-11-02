@@ -94,10 +94,10 @@ def start(ctx, detach):
 
         # Start gateway in background
         click.echo("  → Starting gateway...")
-        # Remove DATABASE_URL from environment - gateway runs as simple router without DB features
+        # Remove SUPERVISOR_DATABASE_URL from environment - gateway runs as simple router without DB features
         # TODO: Add gateway database support for usage tracking, API key management, rate limiting
         gateway_env = os.environ.copy()
-        gateway_env.pop("DATABASE_URL", None)
+        gateway_env.pop("SUPERVISOR_DATABASE_URL", None)
         subprocess.Popen(
             ["uv", "run", "litellm", "--config", "gateway/litellm.yaml",
              "--host", "127.0.0.1", "--port", "8000"],

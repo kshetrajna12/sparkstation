@@ -20,7 +20,7 @@ class ModelRegistry:
     """
 
     def __init__(self, database_url: Optional[str] = None):
-        self.database_url = database_url or settings.database_url
+        self.database_url = database_url or settings.supervisor_database_url
         self.engine = create_async_engine(self.database_url, echo=False)
         self.async_session = async_sessionmaker(
             self.engine, class_=AsyncSession, expire_on_commit=False

@@ -67,8 +67,8 @@ class Settings(BaseSettings):
     litellm_master_key: Optional[str] = None  # For admin API
     gateway_sync_interval_seconds: int = 60  # Sync models every 60s
 
-    # Database
-    database_url: str = "sqlite+aiosqlite:///./data/sparkstation.db"
+    # Database (using SUPERVISOR_DATABASE_URL to avoid conflict with LiteLLM's auto-detection)
+    supervisor_database_url: str = "sqlite+aiosqlite:///./data/sparkstation.db"
 
     # Security
     api_key: Optional[str] = None  # Shared secret for Supervisor API

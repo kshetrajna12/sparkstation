@@ -9,9 +9,11 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_ROOT"
 
-# Load environment variables
+# Load environment variables (filter out comments and empty lines)
 if [ -f .env ]; then
-    export $(grep -v '^#' .env | xargs)
+    set -a
+    source <(grep -v '^#' .env | grep -v '^$' | sed 's/#.*//')
+    set +a
 fi
 
 # Activate virtual environment if using uv

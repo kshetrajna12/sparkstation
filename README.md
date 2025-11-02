@@ -206,10 +206,10 @@ curl -X POST http://localhost:9001/models/start \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-api-key-here" \
   -d '{
-    "model_name": "Qwen/Qwen2.5-7B-Instruct",
+    "model_name": "Qwen/Qwen2.5-VL-3B-Instruct-AWQ",
     "backend": "vllm",
-    "model_alias": "qwen3-8b",
-    "quantization": "fp8",
+    "model_alias": "qwen-vl-3b",
+    "quantization": "awq",
     "idle_timeout_minutes": 30,
     "auto_suspend_enabled": true
   }'
@@ -230,15 +230,32 @@ curl http://localhost:9001/models/detailed
 ### Chat Completion via Gateway
 
 ```bash
+# Using qwen-vl-3b model
 curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "qwen3-8b",
+    "model": "qwen-vl-3b",
     "messages": [
       {"role": "user", "content": "Hello, how are you?"}
-    ]
+    ],
+    "max_tokens": 100
+  }'
+
+# Using gpt-oss-20b model (reasoning model)
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-oss-20b",
+    "messages": [
+      {"role": "user", "content": "Explain why the sky is blue"}
+    ],
+    "max_tokens": 200
   }'
 ```
+
+**Note**: The gateway requires an Authorization header. Use any dummy bearer token (e.g., `sk-1234`) for local development. For production, configure proper API keys in `gateway/litellm.yaml`.
 
 ### Suspend/Resume Model
 
@@ -308,6 +325,9 @@ LOG_FILE_PATH=./data/sparkstation.log
 # LiteLLM Gateway
 LITELLM_ADMIN_URL=http://127.0.0.1:8000
 LITELLM_MASTER_KEY=sk-sparkstation-admin  # Change in production!
+
+# Database (uses SUPERVISOR_DATABASE_URL to avoid conflict with LiteLLM)
+SUPERVISOR_DATABASE_URL=sqlite+aiosqlite:///./data/sparkstation.db
 ```
 
 See `.env.example` for all options.
@@ -368,10 +388,10 @@ Start new model server (requires API key if configured)
 **Request**:
 ```json
 {
-  "model_name": "Qwen/Qwen2.5-7B-Instruct",
+  "model_name": "Qwen/Qwen2.5-VL-3B-Instruct-AWQ",
   "backend": "vllm",
-  "model_alias": "qwen3-8b",
-  "quantization": "fp8",
+  "model_alias": "qwen-vl-3b",
+  "quantization": "awq",
   "idle_timeout_minutes": 30,
   "auto_suspend_enabled": true
 }
@@ -580,32 +600,27 @@ uv run mypy supervisor/
 
 ## Known Issues & Technical Debt
 
-### Gateway Startup Issues (IN PROGRESS)
+### Gateway Database Features (Future Enhancement)
 
-**Status**: Gateway fails to start due to LiteLLM attempting to initialize Prisma/database even when not needed.
+**Status**: Gateway is fully operational for model routing but lacks advanced features that require database support.
 
-**Problem**: LiteLLM proxy automatically detects `DATABASE_URL` from `.env` file and attempts to initialize Prisma client. Even with `allow_requests_on_db_unavailable: true` setting, the proxy hangs during startup when Prisma is installed.
+**Current State**:
+- ✅ Gateway successfully routes requests to model backends
+- ✅ OpenAI-compatible API working without database
+- ✅ Model discovery and failover working
+- ✅ Uses `SUPERVISOR_DATABASE_URL` to avoid conflicts with LiteLLM
 
-**Attempted Solutions**:
-1. ✗ Removing `DATABASE_URL` from environment - LiteLLM loads `.env` automatically
-2. ✗ Using `uv run --no-env-file` - LiteLLM still loads `.env` from project directory
-3. ✗ Setting `database_url: null` in config - Still attempts Prisma initialization
-4. ✗ Installing `prisma` package - Gateway hangs during startup
-
-**Missing Features** (until gateway works):
+**Missing Features** (optional future enhancements):
 - Usage tracking and analytics
 - API key management and authentication
 - Rate limiting per user/key
 - Request logging and audit trails
 - Cost tracking per API key
 
-**Next Steps**:
-1. Investigate why gateway hangs with Prisma installed
-2. Consider separate .env file for gateway without DATABASE_URL
-3. Or set up proper PostgreSQL database for gateway with full Prisma support
-4. Alternative: Use a different routing solution (nginx, custom FastAPI proxy)
-
-**Current Workaround**: Models can be accessed directly via their ports (8001, 8002, etc.) without going through the gateway.
+**Future Options**:
+1. Set up separate PostgreSQL database for gateway with full Prisma support
+2. Use LiteLLM's built-in database features for advanced functionality
+3. Alternative: Implement custom middleware for tracking/auth without database
 
 ---
 
