@@ -1811,7 +1811,7 @@ LiteLLM health check
 
 **Start Supervisor**:
 ```bash
-cd /home/kshetrajna/src/github.com/sparkstation
+cd /opt/sparkstation
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -1896,9 +1896,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=kshetrajna
-WorkingDirectory=/home/kshetrajna/src/github.com/sparkstation/supervisor
-ExecStart=/home/kshetrajna/src/github.com/sparkstation/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 9001
+User=sparkstation
+WorkingDirectory=/opt/sparkstation/supervisor
+ExecStart=/opt/sparkstation/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 9001
 Restart=on-failure
 RestartSec=5s
 
@@ -2091,7 +2091,7 @@ class HealthChecker:
 **Cron Job** (`/etc/cron.d/sparkstation-maintenance`):
 ```bash
 # Run maintenance at 3 AM daily
-0 3 * * * kshetrajna /home/kshetrajna/src/github.com/sparkstation/scripts/daily_maintenance.sh
+0 3 * * * sparkstation /opt/sparkstation/scripts/daily_maintenance.sh
 ```
 
 **Maintenance Script** (`scripts/daily_maintenance.sh`):
