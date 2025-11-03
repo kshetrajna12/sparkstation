@@ -9,6 +9,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [0.2.0] - 2025-11-02
+
+### Added
+
+#### Embeddings Support
+- **Text embeddings** with BAAI/bge-large-en-v1.5 model
+  - 384-dimensional embeddings for semantic search and RAG
+  - OpenAI-compatible `/v1/embeddings` API endpoint
+  - Memory-efficient: ~2.5GB including vLLM overhead
+- **Image embeddings** with OpenAI CLIP (clip-vit-large-patch14)
+  - Visual embeddings for image search and classification
+  - SGLang backend for CLIP support
+  - Memory usage: ~3.5GB including overhead
+- Hybrid vLLM/SGLang architecture supporting both text and image embeddings
+- Auto-load configuration in models.yaml for embedding models
+
+#### Docker Backend Support
+- **Full Docker containerization** for vLLM and SGLang backends
+  - NVIDIA official images with Blackwell support
+  - ARM64 (DGX Spark) architecture support
+  - Automatic platform detection
+  - HuggingFace cache volume mounting
+- Backend setup and verification scripts
+  - `scripts/setup_backends.sh` - Pull and configure Docker images
+  - `scripts/verify_backends.sh` - CUDA verification
+- Subprocess mode still supported for development
+
+#### CLI Enhancements
+- **sparkstation init** command to create CLAUDE.md project documentation
+- **Improved lifecycle management** with real-time status updates
+- **Database reconciliation** at startup for orphaned models
+- **Auto-load models** from models.yaml configuration
+- Better error messages and user feedback
+
+#### Multi-Model Management
+- Support for multiple concurrent models (chat + embeddings)
+- Named model profiles (dev, prod, inference)
+- Per-model configuration with extra_args support
+- Speculative decoding support (num_speculative_tokens parameter)
+
+### Fixed
+- **Gateway sync race condition** - Renamed DATABASE_URL to SUPERVISOR_DATABASE_URL to avoid LiteLLM auto-detection
+- **Model registration issues** - Improved startup reliability
+- **Cleanup code** - Removed dead code from AutoResumeMiddleware
+- Gateway startup issues with database conflicts
+
+### Changed
+- **Upgraded to vLLM 25.10** with full Blackwell support
+- **Docker as recommended deployment** (USE_DOCKER=true by default)
+- Improved documentation for public release
+- Generic path examples in deployment documentation
+
+### Documentation
+- Cleaned up and updated all documentation
+- Added embeddings usage guide (EMBEDDINGS_PLAN.md)
+- Removed personal paths for public release
+- Updated README with embeddings examples
+- Enhanced deployment documentation
+
 ### Verified (October 31, 2025 - Bug Verification)
 
 All critical bugs identified in BUG_REPORT.md have been **verified as fixed**:
@@ -261,5 +322,6 @@ This is the initial scaffolding release implementing the core architecture from 
 
 ---
 
-[Unreleased]: https://github.com/kshetrajna12/sparkstation/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/kshetrajna12/sparkstation/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/kshetrajna12/sparkstation/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/kshetrajna12/sparkstation/releases/tag/v0.1.0

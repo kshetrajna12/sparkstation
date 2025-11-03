@@ -2,7 +2,7 @@
 
 LLM orchestration and gateway service for DGX Spark — manages vLLM and SGLang backends with Docker for seamless model serving under an OpenAI-compatible API.
 
-**Version**: 0.1.0 (Alpha)
+**Version**: 0.2.0 (Alpha)
 **Platform**: NVIDIA DGX Spark (Grace Blackwell)
 **Purpose**: Production-ready LLM gateway for Kavi and image_metadata_indexing projects
 

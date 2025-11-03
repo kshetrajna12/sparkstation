@@ -1,6 +1,6 @@
 [project]
 name = "sparkstation"
-version = "0.1.0"
+version = "0.2.0"
 description = "Unified LLM orchestration and gateway service for DGX Spark"
 readme = "README.md"
 requires-python = ">=3.11"
