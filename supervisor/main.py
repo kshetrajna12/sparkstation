@@ -3,7 +3,9 @@ Sparkstation Supervisor - Main FastAPI application.
 
 DGX Spark-optimized LLM model lifecycle management.
 """
+import asyncio
 import logging
+import time
 from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -74,6 +76,9 @@ auto_suspend_manager: Optional[AutoSuspendManager] = None
 gateway_sync: Optional[GatewaySync] = None
 health_check_manager: Optional[HealthCheckManager] = None
 restart_manager: Optional[RestartManager] = None
+
+# Startup state tracking
+startup_complete: bool = False
 
 
 @asynccontextmanager
@@ -189,11 +194,38 @@ async def lifespan(app: FastAPI):
                 logger.error(f"Failed to auto-load model {model_config.name}: {e}")
                 # Continue with other models
 
-    # Start gateway sync after models are loaded (prevents rewriting yaml with 0 models)
+        # Wait for autoloaded models to finish starting before syncing to gateway
+        # Only wait if we actually launched new models (not skipped due to already running)
+        models = await registry.list_all()
+        starting_models = [m for m in models if m.status == ModelStatus.STARTING]
+
+        if starting_models:
+            logger.info(f"Waiting for {len(starting_models)} model(s) to be ready...")
+            max_wait = 180  # 3 minutes
+            start_time = time.time()
+
+            while time.time() - start_time < max_wait:
+                models = await registry.list_all()
+                starting_models = [m for m in models if m.status == ModelStatus.STARTING]
+
+                if not starting_models:
+                    logger.info(f"All models ready, starting gateway sync")
+                    break
+
+                await asyncio.sleep(2)
+            else:
+                logger.warning("Timed out waiting for models to be ready, starting gateway sync anyway")
+        else:
+            logger.info("No models starting, proceeding with gateway sync")
+
+    # Start gateway sync after models are loaded and running
     await gateway_sync.start()
     logger.info("Gateway sync activated")
 
-    logger.info(f"Supervisor started on {settings.host}:{settings.port}")
+    # Mark startup as complete - health endpoint will now return 200
+    global startup_complete
+    startup_complete = True
+    logger.info(f"Supervisor started on {settings.host}:{settings.port} - startup complete")
 
     yield
 
@@ -217,7 +249,22 @@ app = FastAPI(
 # Health check
 @app.get("/health")
 async def health_check():
-    """Supervisor health check."""
+    """
+    Supervisor health check.
+
+    Returns 503 during startup (while models are loading).
+    Returns 200 only after startup is complete and gateway sync is ready.
+    """
+    if not startup_complete:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "starting",
+                "message": "Supervisor is loading models, not ready yet",
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 

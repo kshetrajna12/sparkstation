@@ -13,7 +13,7 @@ autoload:
       quantization: "awq"
       memory_gb: 32  # AWQ quantized 3B vision model
       idle_timeout_minutes: 30
-      auto_suspend_enabled: true
+      auto_suspend_enabled: false
       extra_args:
         max_model_len: 8192
         max_concurrent_requests: 32
@@ -26,7 +26,7 @@ autoload:
       quantization: "none"  # Uses built-in MXFP4
       memory_gb: 38  # 20B with built-in quantization
       idle_timeout_minutes: 60
-      auto_suspend_enabled: true
+      auto_suspend_enabled: false
       extra_args:
         max_model_len: 16384
         max_concurrent_requests: 32
@@ -39,7 +39,7 @@ autoload:
       quantization: "none"
       memory_gb: 2.5  # 1.34GB model + vLLM overhead
       idle_timeout_minutes: 30
-      auto_suspend_enabled: true
+      auto_suspend_enabled: false
 
     # Image embedding model for vision tasks (CLIP)
     - name: "openai/clip-vit-large-patch14"
@@ -47,9 +47,9 @@ autoload:
       backend: "sglang"  # SGLang for CLIP support
       model_type: "embedding"
       quantization: "none"
-      memory_gb: 3.5  # 815MB model + SGLang overhead (~3.13GB total)
+      memory_gb: 5  # 1.71GB model + SGLang KV cache overhead
       idle_timeout_minutes: 30
-      auto_suspend_enabled: true
+      auto_suspend_enabled: false
 
 # Named profiles for different use cases
 profiles:

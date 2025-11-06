@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Gateway sync race condition**: Resolved critical startup timing issue where gateway would start before models were ready
+  - Supervisor now waits for all autoload models to complete startup before activating gateway sync
+  - Health endpoint (`/health`) returns `503` during model loading, `200` only when ready
+  - CLI properly waits for supervisor startup completion (600s timeout)
+  - Prevents incomplete model list in gateway API
+- **Startup reliability**: Two-phase startup ensures deterministic initialization order
+
+### Added
+- **Structured logging**: Supervisor and gateway logs now saved to `~/.sparkstation/logs/`
+  - `supervisor.log` - Supervisor startup, model loading, and runtime logs
+  - `gateway.log` - LiteLLM gateway logs
+  - CLI displays log file paths during startup for easy debugging
+
 ---
 
 ## [0.2.0] - 2025-11-02

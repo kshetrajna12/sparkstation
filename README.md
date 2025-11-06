@@ -527,6 +527,49 @@ sudo journalctl -u sparkstation-maintenance -n 50
 
 ---
 
+## Logs and Debugging
+
+### Log Files
+
+Sparkstation saves logs to `~/.sparkstation/logs/` when running in detached mode:
+
+```bash
+# View supervisor logs (startup, model loading, errors)
+tail -f ~/.sparkstation/logs/supervisor.log
+
+# View gateway logs (LiteLLM routing, requests)
+tail -f ~/.sparkstation/logs/gateway.log
+
+# View both logs simultaneously
+tail -f ~/.sparkstation/logs/*.log
+```
+
+**Log locations are displayed during startup:**
+```
+Starting Sparkstation...
+  → Starting supervisor...
+     Logs: /home/user/.sparkstation/logs/supervisor.log
+  → Starting gateway...
+     Logs: /home/user/.sparkstation/logs/gateway.log
+```
+
+### Debugging Startup Issues
+
+If `sparkstation start -d` fails, check the logs:
+
+```bash
+# Check supervisor startup
+cat ~/.sparkstation/logs/supervisor.log | grep -i error
+
+# Check gateway startup
+cat ~/.sparkstation/logs/gateway.log | grep -i error
+
+# Or run in foreground to see live output
+sparkstation start  # without -d
+```
+
+---
+
 ## Monitoring
 
 ### Prometheus Metrics

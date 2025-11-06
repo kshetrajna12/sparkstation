@@ -36,20 +36,32 @@ def start(ctx, detach):
     if detach:
         # Start supervisor in background
         click.echo("  → Starting supervisor...")
-        subprocess.Popen(
-            ["uv", "run", "uvicorn", "supervisor.main:app", "--host", "127.0.0.1", "--port", "9001"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
 
-        # Wait for supervisor to be ready
+        # Create logs directory
+        log_dir = Path.home() / ".sparkstation" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        supervisor_log = log_dir / "supervisor.log"
+
+        with open(supervisor_log, "w") as log_file:
+            subprocess.Popen(
+                ["uv", "run", "uvicorn", "supervisor.main:app", "--host", "127.0.0.1", "--port", "9001"],
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+            )
+
+        click.echo(f"     Logs: {supervisor_log}")
+
+        # Wait for supervisor to be ready (with models loaded)
         supervisor_url = ctx.obj['supervisor_url']
-        for i in range(30):  # Try for 30 seconds
+        for i in range(600):  # Try for 600 seconds (10 minutes max for model loading)
             try:
                 response = httpx.get(f"{supervisor_url}/health", timeout=2)
                 if response.status_code == 200:
                     click.echo("     Supervisor is running")
                     break
+                elif response.status_code == 503:
+                    # Supervisor is starting, continue waiting
+                    pass
             except:
                 pass
             time.sleep(1)
@@ -98,13 +110,18 @@ def start(ctx, detach):
         # TODO: Add gateway database support for usage tracking, API key management, rate limiting
         gateway_env = os.environ.copy()
         gateway_env.pop("SUPERVISOR_DATABASE_URL", None)
-        subprocess.Popen(
-            ["uv", "run", "litellm", "--config", "gateway/litellm.yaml",
-             "--host", "127.0.0.1", "--port", "8000"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=gateway_env,
-        )
+
+        gateway_log = log_dir / "gateway.log"
+        with open(gateway_log, "w") as log_file:
+            subprocess.Popen(
+                ["uv", "run", "litellm", "--config", "gateway/litellm.yaml",
+                 "--host", "127.0.0.1", "--port", "8000"],
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                env=gateway_env,
+            )
+
+        click.echo(f"     Logs: {gateway_log}")
 
         # Wait for gateway to be ready
         gateway_url = "http://localhost:8000"
