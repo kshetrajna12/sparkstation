@@ -344,6 +344,29 @@ curl -H "Authorization: Bearer YOUR_API_KEY" \
 
 ---
 
+## TODO / Future Enhancements
+
+### Request Metrics (Not Yet Implemented)
+
+The following metrics are defined but not yet instrumented:
+- `model_requests_total` - Total requests served by model
+- `model_requests_failed` - Failed requests by model
+- `model_request_latency_seconds` - Request latency histogram
+
+**Dashboard panels affected:**
+- "Request Rate by Model (5m)" - Shows "No data"
+- "Request Latency (p50, p95)" - Shows "No data"
+
+**Implementation options:**
+1. **Gateway middleware** - Add LiteLLM middleware to track requests
+2. **Proxy layer** - Intercept requests between gateway and backends
+3. **Backend polling** - Query vLLM/SGLang metrics endpoints (they expose their own metrics)
+
+**Current workaround:**
+These panels can be safely ignored. All critical monitoring (memory, temperature, power, model status) is fully functional.
+
+---
+
 ## Additional Resources
 
 - [Prometheus Docs](https://prometheus.io/docs/)

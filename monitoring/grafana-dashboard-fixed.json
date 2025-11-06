@@ -250,39 +250,21 @@
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "red",
-                  "text": "Stopped"
-                },
-                "1": {
-                  "color": "yellow",
-                  "text": "Starting"
-                },
-                "2": {
-                  "color": "green",
-                  "text": "Running"
-                },
-                "3": {
-                  "color": "blue",
-                  "text": "Suspended"
-                },
-                "4": {
-                  "color": "red",
-                  "text": "Failed"
-                }
-              },
-              "type": "value"
-            }
-          ],
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 2
+              },
+              {
+                "color": "red",
+                "value": 3
               }
             ]
           },

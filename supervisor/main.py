@@ -287,25 +287,38 @@ async def get_metrics():
 
         # Update per-model metrics
         all_models = await registry.list_all()
+        # Status mapping: string -> numeric for Prometheus
+        status_map = {
+            "stopped": 0,
+            "starting": 1,
+            "running": 2,
+            "suspended": 3,
+            "failed": 4,
+        }
         for model in all_models:
             # Set model status
-            status_value = model.status.value
+            # Handle both enum and string status values
+            if hasattr(model.status, 'value'):
+                status_str = model.status.value
+            else:
+                status_str = str(model.status)
+            status_value = status_map.get(status_str.lower(), 0)
             metrics.model_status.labels(
-                model_name=model.alias or model.model_name,
+                model_name=model.model_alias or model.model_name,
                 model_id=model.id
             ).set(status_value)
 
             # Set model memory usage
             if model.memory_gb:
                 metrics.model_memory_used_bytes.labels(
-                    model_name=model.alias or model.model_name
+                    model_name=model.model_alias or model.model_name
                 ).set(model.memory_gb * 1024**3)
 
             # Set last request timestamp
             if model.last_request_time:
                 timestamp = model.last_request_time.timestamp()
                 metrics.model_last_request_timestamp.labels(
-                    model_name=model.alias or model.model_name
+                    model_name=model.model_alias or model.model_name
                 ).set(timestamp)
 
     return metrics.metrics_response()
