@@ -653,16 +653,18 @@ print(f"Embedding dimensions: {{len(embedding)}}")
 
 ### Image Embeddings (CLIP)
 
-The `clip-vit` model generates embeddings for images using OpenAI's CLIP. Supports both URLs and base64:
+The `clip-vit` model generates embeddings for images using OpenAI's CLIP.
+
+**Important**: CLIP embeddings use a structured array format (different from standard OpenAI embeddings API).
 
 #### With Image URL
 ```python
 response = client.embeddings.create(
     model="clip-vit",
-    input="https://example.com/image.jpg"
+    input=[{{"image": "https://example.com/image.jpg"}}]
 )
 
-embedding = response.data[0].embedding
+embedding = response.data[0].embedding  # 768 dimensions
 ```
 
 #### With Base64 Encoded Image
@@ -672,13 +674,22 @@ import base64
 with open("image.jpg", "rb") as f:
     image_data = base64.b64encode(f.read()).decode('utf-8')
 
+# Option 1: Raw base64 (simplest)
 response = client.embeddings.create(
     model="clip-vit",
-    input=f"data:image/jpeg;base64,{{image_data}}"
+    input=[{{"image": image_data}}]
 )
 
-embedding = response.data[0].embedding
+# Option 2: With data URL prefix (also works)
+response = client.embeddings.create(
+    model="clip-vit",
+    input=[{{"image": f"data:image/jpeg;base64,{{image_data}}"}}]
+)
+
+embedding = response.data[0].embedding  # 768 dimensions
 ```
+
+**Note**: The input must be an array of objects with `"image"` keys, not flat strings.
 
 ### Batch Embeddings
 
@@ -699,21 +710,21 @@ for i, data in enumerate(response.data):
 CLIP embeddings enable searching images with text or finding similar images:
 
 ```python
-# Embed text query
+# Embed text query (text uses simple string format)
 text_response = client.embeddings.create(
     model="clip-vit",
     input="a red car"
 )
 text_embedding = text_response.data[0].embedding
 
-# Embed image
+# Embed image (images use structured format)
 image_response = client.embeddings.create(
     model="clip-vit",
-    input="https://example.com/car.jpg"
+    input=[{{"image": "https://example.com/car.jpg"}}]
 )
 image_embedding = image_response.data[0].embedding
 
-# Compare via cosine similarity (both in same embedding space)
+# Compare via cosine similarity (both in same 768-dim embedding space)
 from numpy import dot
 from numpy.linalg import norm
 
@@ -737,10 +748,25 @@ print(f"Similarity: {{similarity}}")
 - All models support standard OpenAI APIs:
   - Chat: `/v1/chat/completions` (qwen-vl-3b, gpt-oss-20b)
   - Embeddings: `/v1/embeddings` (bge-large, clip-vit)
-- **Vision Chat**: `qwen-vl-3b` supports image analysis (URL and base64)
-- **Reasoning**: `gpt-oss-20b` includes reasoning traces in `reasoning_content` field
-- **Text Embeddings**: `bge-large` generates 1024-dim embeddings for text semantic tasks
-- **Image Embeddings**: `clip-vit` generates embeddings for images and cross-modal search (URL and base64)
+
+### Model-Specific Details
+
+- **Vision Chat** (`qwen-vl-3b`):
+  - Supports image analysis via URL or base64
+  - Uses standard OpenAI vision format: `{{"type": "image_url", "image_url": {{"url": "..."}}}}`
+
+- **Reasoning** (`gpt-oss-20b`):
+  - Includes reasoning traces in `reasoning_content` field
+
+- **Text Embeddings** (`bge-large`):
+  - Generates 1024-dim embeddings for text semantic tasks
+  - Standard format: `input="text"` or `input=["text1", "text2"]`
+
+- **Image Embeddings** (`clip-vit`):
+  - Generates 768-dim embeddings for images and cross-modal search
+  - **Special format required**: Images must use `input=[{{"image": "..."}}]` (not flat strings)
+  - Text queries use simple format: `input="text query"`
+  - Supports URL, base64 with data URL prefix, or raw base64
 """
 
     # Write file
