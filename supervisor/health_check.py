@@ -156,7 +156,7 @@ class HealthCheckManager:
                     logger.debug(f"Model {display_name} not ready yet (connection/timeout), will retry...")
 
             except Exception as e:
-                logger.error(f"Error checking starting model {model.id}: {e}")
+                logger.error(f"Error checking starting model {model.id}: {e}", exc_info=True)
 
     async def _check_all_models(self):
         """Check health of all running models."""
