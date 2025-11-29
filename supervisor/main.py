@@ -127,6 +127,7 @@ async def lifespan(app: FastAPI):
         other_models = [m for m in autoload_models if m.backend != "flux"]
 
         logger.info(f"Auto-loading {len(other_models)} model(s) from config (FLUX models loaded after)...")
+        launched_model_ids = []  # Track models we actually launched
         for model_config in other_models:
             try:
                 # Check if model already exists in database
@@ -196,7 +197,8 @@ async def lifespan(app: FastAPI):
 
                 # Save to registry
                 await registry.create(instance)
-                logger.info(f"Auto-loaded model: {model_config.alias or model_config.name}")
+                launched_model_ids.append(instance.id)
+                logger.info(f"Auto-loaded model: {model_config.alias or model_config.name} (id: {instance.id})")
 
                 # Small delay between launches to stagger GPU memory allocation
                 # This avoids race conditions while still allowing parallel loading
@@ -206,27 +208,34 @@ async def lifespan(app: FastAPI):
                 logger.error(f"Failed to auto-load model {model_config.name}: {e}")
                 # Continue with other models
 
-        # Wait for autoloaded models to finish starting before syncing to gateway
-        # Only wait if we actually launched new models (not skipped due to already running)
-        models = await registry.list_all()
-        starting_models = [m for m in models if m.status == ModelStatus.STARTING]
-
-        if starting_models:
-            logger.info(f"Waiting for {len(starting_models)} model(s) to be ready before loading FLUX...")
+        # Wait for ALL launched models to finish starting before loading FLUX
+        # This ensures we don't start FLUX while other models are still initializing
+        if launched_model_ids:
+            logger.info(f"Waiting for {len(launched_model_ids)} launched model(s) to be ready before loading FLUX...")
 
             while True:
                 models = await registry.list_all()
-                # Check for models that are still starting (not RUNNING or FAILED)
-                starting_models = [m for m in models if m.status == ModelStatus.STARTING]
+                # Check specifically for models WE launched that are still STARTING
+                models_by_id = {m.id: m for m in models}
+                pending_models = []
+                for model_id in launched_model_ids:
+                    model = models_by_id.get(model_id)
+                    if model and model.status == ModelStatus.STARTING:
+                        pending_models.append(model)
 
-                if not starting_models:
-                    logger.info("All models ready, proceeding to load FLUX")
+                if not pending_models:
+                    # All launched models are either RUNNING or FAILED
+                    running_count = sum(1 for mid in launched_model_ids
+                                       if models_by_id.get(mid) and models_by_id[mid].status == ModelStatus.RUNNING)
+                    failed_count = sum(1 for mid in launched_model_ids
+                                      if models_by_id.get(mid) and models_by_id[mid].status == ModelStatus.FAILED)
+                    logger.info(f"All models ready ({running_count} running, {failed_count} failed), proceeding to load FLUX")
                     break
 
-                logger.info(f"Still waiting for {len(starting_models)} model(s): {[m.model_alias or m.model_name for m in starting_models]}")
+                logger.info(f"Still waiting for {len(pending_models)} model(s): {[m.model_alias or m.model_name for m in pending_models]}")
                 await asyncio.sleep(10)
         else:
-            logger.info("No models starting, proceeding to load FLUX")
+            logger.info("No new models launched, proceeding to load FLUX")
 
         # Now load FLUX models (after other models are ready to avoid memory race condition)
         if flux_models:

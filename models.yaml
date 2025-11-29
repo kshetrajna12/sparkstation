@@ -11,7 +11,7 @@ autoload:
       backend: "vllm"
       model_type: "chat"
       quantization: "none"  # Uses built-in MXFP4
-      memory_gb: 32  # 20B with built-in quantization (actual ~22GB + headroom)
+      memory_gb: 35  # 20B with built-in quantization (needs headroom for KV cache)
       idle_timeout_minutes: 60
       auto_suspend_enabled: false
       extra_args:
@@ -34,7 +34,7 @@ autoload:
       backend: "sglang"  # SGLang for CLIP support
       model_type: "embedding"
       quantization: "none"
-      memory_gb: 4  # 1.71GB model + SGLang KV cache overhead (actual ~3GB)
+      memory_gb: 5  # 1.71GB model + SGLang KV cache overhead
       idle_timeout_minutes: 30
       auto_suspend_enabled: false
 
