@@ -497,7 +497,7 @@ def init(ctx, force):
     except Exception:
         # If can't connect to supervisor, use defaults
         models_info = [
-            {"name": "qwen-vl-3b", "full_name": "Qwen/Qwen2.5-VL-3B-Instruct-AWQ", "port": 8001},
+            {"name": "qwen3-vl-4b", "full_name": "Qwen/Qwen3-VL-4B-Instruct-FP8", "port": 8001},
             {"name": "gpt-oss-20b", "full_name": "openai/gpt-oss-20b", "port": 8002},
             {"name": "bge-large", "full_name": "BAAI/bge-large-en-v1.5", "port": 8003},
             {"name": "clip-vit", "full_name": "openai/clip-vit-large-patch14", "port": 8004},
@@ -534,7 +534,7 @@ client = OpenAI(
 
 # Make a request
 response = client.chat.completions.create(
-    model="qwen-vl-3b",  # or "gpt-oss-20b"
+    model="qwen3-vl-4b",  # or "gpt-oss-20b"
     messages=[
         {{"role": "user", "content": "Hello!"}}
     ]
@@ -550,7 +550,7 @@ curl http://localhost:8000/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer dummy-key" \\
   -d '{{
-    "model": "qwen-vl-3b",
+    "model": "qwen3-vl-4b",
     "messages": [{{"role": "user", "content": "Hello!"}}]
   }}'
 ```
@@ -559,7 +559,7 @@ curl http://localhost:8000/v1/chat/completions \\
 
 ```python
 stream = client.chat.completions.create(
-    model="qwen-vl-3b",
+    model="qwen3-vl-4b",
     messages=[{{"role": "user", "content": "Tell me a story"}}],
     stream=True
 )
@@ -571,13 +571,13 @@ for chunk in stream:
 
 ## Vision (Image Analysis)
 
-The `qwen-vl-3b` model supports vision capabilities. You can pass images via URL or base64:
+The `qwen3-vl-4b` model supports vision capabilities. You can pass images via URL or base64:
 
 ### With Image URL
 
 ```python
 response = client.chat.completions.create(
-    model="qwen-vl-3b",
+    model="qwen3-vl-4b",
     messages=[
         {{
             "role": "user",
@@ -599,7 +599,7 @@ with open("image.jpg", "rb") as f:
     image_data = base64.b64encode(f.read()).decode('utf-8')
 
 response = client.chat.completions.create(
-    model="qwen-vl-3b",
+    model="qwen3-vl-4b",
     messages=[
         {{
             "role": "user",
@@ -832,13 +832,13 @@ if response.ok:
 - Models are already running and ready to use
 - Use the gateway endpoint (`http://localhost:8000/v1`) for all requests
 - All models support standard OpenAI APIs:
-  - Chat: `/v1/chat/completions` (qwen-vl-3b, gpt-oss-20b)
+  - Chat: `/v1/chat/completions` (qwen3-vl-4b, gpt-oss-20b)
   - Embeddings: `/v1/embeddings` (bge-large, clip-vit)
   - Image Generation: `/v1/images/generations` (flux-dev)
 
 ### Model-Specific Details
 
-- **Vision Chat** (`qwen-vl-3b`):
+- **Vision Chat** (`qwen3-vl-4b`):
   - Supports image analysis via URL or base64
   - Uses standard OpenAI vision format: `{{"type": "image_url", "image_url": {{"url": "..."}}}}`
 

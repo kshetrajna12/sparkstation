@@ -162,10 +162,10 @@ Edit `models.yaml` to define auto-load models:
 autoload:
   enabled: true
   models:
-    - name: "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
-      alias: "qwen-vl-3b"
+    - name: "Qwen/Qwen3-VL-4B-Instruct-FP8"
+      alias: "qwen3-vl-4b"
       backend: "vllm"
-      quantization: "awq"
+      quantization: "none"
       idle_timeout_minutes: 30
       auto_suspend_enabled: true
       extra_args:
@@ -216,7 +216,7 @@ sparkstation models list
 └── models.yaml                 # Model configuration
 
 /var/lib/models/                # HuggingFace model cache (shared)
-├── models--Qwen--Qwen2.5-VL-3B-Instruct-AWQ/
+├── models--Qwen--Qwen3-VL-4B-Instruct-FP8/
 └── models--openai--gpt-oss-20b/
 
 /var/log/sparkstation/          # Sparkstation logs (if configured)
@@ -243,7 +243,7 @@ VLLM_DOCKER_IMAGE=nvcr.io/nvidia/vllm:25.11-py3
 # DGX Spark Constraints
 TOTAL_UNIFIED_MEMORY_GB=128
 MEMORY_HARD_LIMIT_GB=110  # 85% of total
-MAX_RESIDENT_MODELS=3
+MAX_RESIDENT_MODELS=5
 
 # Auto-suspend
 AUTO_SUSPEND_ENABLED=true
@@ -284,7 +284,7 @@ sudo chown -R $USER:$USER /var/lib/models
 
 # Pre-download models (optional but recommended)
 export HF_HOME=/var/lib/models
-huggingface-cli download Qwen/Qwen2.5-VL-3B-Instruct-AWQ
+huggingface-cli download Qwen/Qwen3-VL-4B-Instruct-FP8
 ```
 
 Docker containers automatically mount this directory via `-v /var/lib/models:/root/.cache/huggingface`.
@@ -341,10 +341,10 @@ autoload:
   enabled: true
   models:
     # Vision model
-    - name: "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
-      alias: "qwen-vl-3b"
+    - name: "Qwen/Qwen3-VL-4B-Instruct-FP8"
+      alias: "qwen3-vl-4b"
       backend: "vllm"
-      quantization: "awq"
+      quantization: "none"
       idle_timeout_minutes: 30
       auto_suspend_enabled: true
       extra_args:
@@ -375,17 +375,17 @@ curl -X POST http://localhost:9001/models/start \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-api-key-here" \
   -d '{
-    "model_name": "Qwen/Qwen2.5-VL-3B-Instruct-AWQ",
+    "model_name": "Qwen/Qwen3-VL-4B-Instruct-FP8",
     "backend": "vllm",
-    "model_alias": "qwen-vl-3b",
-    "quantization": "awq"
+    "model_alias": "qwen3-vl-4b",
+    "quantization": "none"
   }'
 
 # Or via CLI
-sparkstation models start Qwen/Qwen2.5-VL-3B-Instruct-AWQ \
-  --alias qwen-vl-3b \
+sparkstation models start Qwen/Qwen3-VL-4B-Instruct-FP8 \
+  --alias qwen3-vl-4b \
   --backend vllm \
-  --quantization awq
+  --quantization none
 ```
 
 ---

@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 
 from supervisor.config import settings
 from supervisor.models import (
+    Backend,
     ModelStartRequest,
     ModelStartResponse,
     ModelStatusResponse,
@@ -120,7 +121,8 @@ async def lifespan(app: FastAPI):
     if autoload_models:
         # Separate FLUX models - they must load AFTER other models due to memory allocation differences
         # FLUX uses Diffusers/PyTorch which grabs memory immediately, while vLLM calculates
-        # gpu_memory_utilization as percentage of TOTAL memory. Loading in parallel causes race conditions.
+        # gpu_memory_utilization as percentage of TOTAL memory.
+        # All other models (including vision models) load with staggered delays to avoid race conditions.
         flux_models = [m for m in autoload_models if m.backend == "flux"]
         other_models = [m for m in autoload_models if m.backend != "flux"]
 
@@ -196,6 +198,10 @@ async def lifespan(app: FastAPI):
                 await registry.create(instance)
                 logger.info(f"Auto-loaded model: {model_config.alias or model_config.name}")
 
+                # Small delay between launches to stagger GPU memory allocation
+                # This avoids race conditions while still allowing parallel loading
+                await asyncio.sleep(15)
+
             except Exception as e:
                 logger.error(f"Failed to auto-load model {model_config.name}: {e}")
                 # Continue with other models
@@ -206,23 +212,21 @@ async def lifespan(app: FastAPI):
         starting_models = [m for m in models if m.status == ModelStatus.STARTING]
 
         if starting_models:
-            logger.info(f"Waiting for {len(starting_models)} model(s) to be ready...")
-            max_wait = 180  # 3 minutes
-            start_time = time.time()
+            logger.info(f"Waiting for {len(starting_models)} model(s) to be ready before loading FLUX...")
 
-            while time.time() - start_time < max_wait:
+            while True:
                 models = await registry.list_all()
+                # Check for models that are still starting (not RUNNING or FAILED)
                 starting_models = [m for m in models if m.status == ModelStatus.STARTING]
 
                 if not starting_models:
-                    logger.info(f"All models ready, starting gateway sync")
+                    logger.info("All models ready, proceeding to load FLUX")
                     break
 
-                await asyncio.sleep(2)
-            else:
-                logger.warning("Timed out waiting for models to be ready, starting gateway sync anyway")
+                logger.info(f"Still waiting for {len(starting_models)} model(s): {[m.model_alias or m.model_name for m in starting_models]}")
+                await asyncio.sleep(10)
         else:
-            logger.info("No models starting, proceeding with gateway sync")
+            logger.info("No models starting, proceeding to load FLUX")
 
         # Now load FLUX models (after other models are ready to avoid memory race condition)
         if flux_models:

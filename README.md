@@ -208,10 +208,10 @@ curl -X POST http://localhost:9001/models/start \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-api-key-here" \
   -d '{
-    "model_name": "Qwen/Qwen2.5-VL-3B-Instruct-AWQ",
+    "model_name": "Qwen/Qwen3-VL-4B-Instruct-FP8",
     "backend": "vllm",
-    "model_alias": "qwen-vl-3b",
-    "quantization": "awq",
+    "model_alias": "qwen3-vl-4b",
+    "quantization": "none",
     "idle_timeout_minutes": 30,
     "auto_suspend_enabled": true
   }'
@@ -234,12 +234,12 @@ curl http://localhost:9001/models/detailed
 #### curl Examples
 
 ```bash
-# Using qwen-vl-3b model
+# Using qwen3-vl-4b model
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Authorization: Bearer sk-1234" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "qwen-vl-3b",
+    "model": "qwen3-vl-4b",
     "messages": [
       {"role": "user", "content": "Hello, how are you?"}
     ],
@@ -272,7 +272,7 @@ client = openai.OpenAI(
 
 # Chat completion
 response = client.chat.completions.create(
-    model="qwen-vl-3b",
+    model="qwen3-vl-4b",
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "What is the capital of France?"}
@@ -517,7 +517,7 @@ PORT=9001
 # DGX Spark Constraints
 TOTAL_UNIFIED_MEMORY_GB=128
 MEMORY_HARD_LIMIT_GB=110  # 85% of total
-MAX_RESIDENT_MODELS=3
+MAX_RESIDENT_MODELS=5
 
 # Auto-suspend
 AUTO_SUSPEND_ENABLED=true
@@ -610,10 +610,10 @@ Start new model server (requires API key if configured)
 **Request**:
 ```json
 {
-  "model_name": "Qwen/Qwen2.5-VL-3B-Instruct-AWQ",
+  "model_name": "Qwen/Qwen3-VL-4B-Instruct-FP8",
   "backend": "vllm",
-  "model_alias": "qwen-vl-3b",
-  "quantization": "awq",
+  "model_alias": "qwen3-vl-4b",
+  "quantization": "none",
   "idle_timeout_minutes": 30,
   "auto_suspend_enabled": true
 }
