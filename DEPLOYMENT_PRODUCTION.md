@@ -60,7 +60,7 @@
 │  ├── sparkstation-{model-id-1} - Port 8001                      │
 │  ├── sparkstation-{model-id-2} - Port 8002                      │
 │  └── sparkstation-{model-id-3} - Port 8003                      │
-│      └── Image: nvcr.io/nvidia/vllm:25.10-py3                   │
+│      └── Image: nvcr.io/nvidia/vllm:25.11-py3                   │
 │                                                                  │
 │  Shared Resources                                               │
 │  ├── /var/lib/models - HuggingFace cache (shared via volumes)  │
@@ -135,7 +135,7 @@ mkdir -p data
 ./scripts/setup_backends.sh
 
 # OR manual pull
-docker pull nvcr.io/nvidia/vllm:25.10-py3
+docker pull nvcr.io/nvidia/vllm:25.11-py3
 
 # Verify
 ./scripts/verify_backends.sh
@@ -238,7 +238,7 @@ Key settings in `.env`:
 ```bash
 # Backend mode (Docker is recommended)
 USE_DOCKER=true
-VLLM_DOCKER_IMAGE=nvcr.io/nvidia/vllm:25.10-py3
+VLLM_DOCKER_IMAGE=nvcr.io/nvidia/vllm:25.11-py3
 
 # DGX Spark Constraints
 TOTAL_UNIFIED_MEMORY_GB=128

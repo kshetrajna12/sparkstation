@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Prevents incomplete model list in gateway API
 - **Startup reliability**: Two-phase startup ensures deterministic initialization order
 
+### Changed
+- **Upgraded to NVIDIA containers 25.11**
+  - vLLM: 0.10.2 → 0.11.0 (flashinfer 0.5.0, transformers 4.57.1)
+  - SGLang: 0.5.3rc1 → 0.5.4.post1 (stable release)
+  - PyTorch 2.10.0 with CUDA 13.0.2
+
 ### Added
 - **Structured logging**: Supervisor and gateway logs now saved to `~/.sparkstation/logs/`
   - `supervisor.log` - Supervisor startup, model loading, and runtime logs

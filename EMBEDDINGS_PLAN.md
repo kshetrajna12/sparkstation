@@ -29,7 +29,7 @@ Enable Sparkstation to serve embedding models alongside chat models, providing a
 ### The V0/V1 Issue
 
 **Current Situation:**
-- Our NVIDIA image (`nvcr.io/nvidia/vllm:25.10-py3`) uses **vLLM v0.10.2** ✅
+- Our NVIDIA image (`nvcr.io/nvidia/vllm:25.11-py3`) uses **vLLM v0.11.0** ✅
 - vLLM **V0** supports embeddings (via `--runner pooling` or auto-detection)
 - vLLM **V1** (released Jan 2025, v1.0.0+) does **NOT** support embeddings yet
 - vLLM is gradually migrating from V0 to V1
@@ -66,7 +66,7 @@ Enable Sparkstation to serve embedding models alongside chat models, providing a
 
 **Phase 1 (Immediate - This Plan):**
 - Implement embeddings with **vLLM V0** (current image)
-- Pin Docker image to `nvcr.io/nvidia/vllm:25.10-py3` or specific v0.x tag
+- Pin Docker image to `nvcr.io/nvidia/vllm:25.11-py3` or specific v0.x tag
 - Get embeddings working quickly with minimal changes
 
 **Phase 2 (Future - Separate Plan):**
@@ -465,7 +465,7 @@ We implemented a **hybrid backend approach** for embeddings support:
 
 #### Image Embeddings: SGLang
 - **Model**: openai/clip-vit-large-patch14
-- **Backend**: SGLang (NVIDIA image v25.10-py3)
+- **Backend**: SGLang (NVIDIA image v25.11-py3)
 - **Dimensions**: 768
 - **Status**: ✅ Working perfectly
 - **Why SGLang**: vLLM v0.10.2 has incomplete CLIP support (NotImplementedError in get_input_embeddings)

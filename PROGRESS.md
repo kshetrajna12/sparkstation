@@ -23,7 +23,7 @@ Sparkstation is **production-ready** with all core features implemented and test
 - ✅ Unit test suite (24 tests, all passing)
 
 **Deployment Mode**: Docker-first (recommended)
-- Uses official NVIDIA vLLM image: `nvcr.io/nvidia/vllm:25.10-py3`
+- Uses official NVIDIA vLLM image: `nvcr.io/nvidia/vllm:25.11-py3`
 - Automatic Blackwell GPU support
 - Simplified setup with `./scripts/setup_backends.sh`
 

@@ -1,6 +1,6 @@
 # FLUX.1-dev Image Generation Server
 # Uses Diffusers library for maximum compatibility
-FROM nvcr.io/nvidia/pytorch:25.10-py3
+FROM nvcr.io/nvidia/pytorch:25.11-py3
 
 # Install dependencies
 RUN pip install --no-cache-dir \
