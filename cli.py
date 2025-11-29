@@ -499,6 +499,9 @@ def init(ctx, force):
         models_info = [
             {"name": "qwen-vl-3b", "full_name": "Qwen/Qwen2.5-VL-3B-Instruct-AWQ", "port": 8001},
             {"name": "gpt-oss-20b", "full_name": "openai/gpt-oss-20b", "port": 8002},
+            {"name": "bge-large", "full_name": "BAAI/bge-large-en-v1.5", "port": 8003},
+            {"name": "clip-vit", "full_name": "openai/clip-vit-large-patch14", "port": 8004},
+            {"name": "flux-dev", "full_name": "black-forest-labs/FLUX.1-dev", "port": 8005},
         ]
 
     # Generate model list for documentation
@@ -740,6 +743,89 @@ print(f"Similarity: {{similarity}}")
 - **Cross-Modal Retrieval**: Search images with text queries or text with image queries
 - **Classification**: Use embeddings as features for downstream ML tasks
 
+## Image Generation
+
+Sparkstation provides FLUX.1-dev for high-quality image generation via the OpenAI-compatible `/v1/images/generations` endpoint.
+
+### Basic Image Generation
+
+```python
+import base64
+
+# Generate an image
+response = client.images.generate(
+    model="flux-dev",
+    prompt="A photorealistic image of a red robot in a garden",
+    n=1,
+    size="512x512",
+    response_format="b64_json"
+)
+
+# Save the generated image
+image_data = base64.b64decode(response.data[0].b64_json)
+with open("generated_image.png", "wb") as f:
+    f.write(image_data)
+print("Image saved to generated_image.png")
+```
+
+### With curl
+
+```bash
+curl http://localhost:8000/v1/images/generations \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer dummy-key" \\
+  -d '{{
+    "model": "flux-dev",
+    "prompt": "A cyberpunk city at night with neon lights",
+    "n": 1,
+    "size": "512x512"
+  }}'
+```
+
+### Using requests
+
+```python
+import requests
+import base64
+
+response = requests.post(
+    "http://localhost:8000/v1/images/generations",
+    headers={{
+        "Authorization": "Bearer dummy-key",
+        "Content-Type": "application/json"
+    }},
+    json={{
+        "model": "flux-dev",
+        "prompt": "A watercolor painting of mountains at sunset",
+        "n": 1,
+        "size": "1024x1024"
+    }},
+    timeout=120  # Image generation takes 20-60 seconds
+)
+
+if response.ok:
+    data = response.json()
+    image_b64 = data["data"][0]["b64_json"]
+    with open("output.png", "wb") as f:
+        f.write(base64.b64decode(image_b64))
+    print("Image saved to output.png")
+```
+
+### Supported Parameters
+
+| Parameter | Values | Description |
+|-----------|--------|-------------|
+| `model` | `flux-dev` | FLUX.1-dev image model |
+| `prompt` | string | Text description of image to generate |
+| `n` | 1 | Number of images (currently 1 supported) |
+| `size` | `512x512`, `1024x1024` | Image dimensions |
+| `response_format` | `b64_json` | Response format (base64 JSON) |
+
+**Notes**:
+- Image generation takes 20-60 seconds depending on size
+- FLUX.1-dev produces high-quality photorealistic images
+- First request may be slower (model warmup)
+
 ## Important Notes
 
 - **Do not start/stop Sparkstation services** - they are managed by the system
@@ -748,6 +834,7 @@ print(f"Similarity: {{similarity}}")
 - All models support standard OpenAI APIs:
   - Chat: `/v1/chat/completions` (qwen-vl-3b, gpt-oss-20b)
   - Embeddings: `/v1/embeddings` (bge-large, clip-vit)
+  - Image Generation: `/v1/images/generations` (flux-dev)
 
 ### Model-Specific Details
 
@@ -767,6 +854,12 @@ print(f"Similarity: {{similarity}}")
   - **Special format required**: Images must use `input=[{{"image": "..."}}]` (not flat strings)
   - Text queries use simple format: `input="text query"`
   - Supports URL, base64 with data URL prefix, or raw base64
+
+- **Image Generation** (`flux-dev`):
+  - Generates high-quality images from text prompts using FLUX.1-dev
+  - Supports sizes: 512x512, 1024x1024
+  - Takes 20-60 seconds per image
+  - Returns base64-encoded PNG
 """
 
     # Write file

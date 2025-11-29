@@ -34,6 +34,7 @@ class Backend(str, Enum):
 
     VLLM = "vllm"
     SGLANG = "sglang"
+    FLUX = "flux"
     TRT_LLM = "trt-llm"  # Future support
 
 
@@ -42,6 +43,7 @@ class ModelType(str, Enum):
 
     CHAT = "chat"
     EMBEDDING = "embedding"
+    IMAGE = "image"
 
 
 # SQLAlchemy ORM Model

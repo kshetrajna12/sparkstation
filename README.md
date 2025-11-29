@@ -11,8 +11,9 @@ LLM orchestration and gateway service for DGX Spark — manages vLLM and SGLang 
 ## Features
 
 - **vLLM & SGLang backends**: NVIDIA-optimized backends with official Blackwell support via Docker
-- **OpenAI-compatible API**: Drop-in replacement via LiteLLM gateway (chat + embeddings)
+- **OpenAI-compatible API**: Drop-in replacement via LiteLLM gateway (chat, embeddings, image generation)
 - **Embeddings support**: Text (bge-large) and image (CLIP) embeddings for RAG and search
+- **Image generation**: FLUX.1-dev for high-quality image synthesis via OpenAI-compatible API
 - **Auto-suspend/resume**: Idle models auto-suspend to free GPU resources (~15s resume time)
 - **Health monitoring**: Periodic 1-token probes detect unresponsive models
 - **Auto-restart**: Failed models automatically restart with exponential backoff
@@ -42,7 +43,7 @@ Model Backends (vLLM, SGLang, TRT-LLM)
 
 1. **Supervisor** (Port 9001): FastAPI service managing model lifecycle
 2. **LiteLLM Gateway** (Port 8000): OpenAI-compatible routing layer
-3. **Model Backends**: vLLM/SGLang/TRT-LLM servers on ports 8001-8100
+3. **Model Backends**: vLLM/SGLang/FLUX servers on ports 8001-8100
 
 ---
 
@@ -230,6 +231,8 @@ curl http://localhost:9001/models/detailed
 
 ### Chat Completion via Gateway
 
+#### curl Examples
+
 ```bash
 # Using qwen-vl-3b model
 curl -X POST http://localhost:8000/v1/chat/completions \
@@ -256,11 +259,47 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   }'
 ```
 
+#### Python Examples
+
+```python
+import openai
+
+# Configure client for Sparkstation gateway
+client = openai.OpenAI(
+    api_key="sk-1234",  # Any token works for local dev
+    base_url="http://localhost:8000/v1"
+)
+
+# Chat completion
+response = client.chat.completions.create(
+    model="qwen-vl-3b",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is the capital of France?"}
+    ],
+    max_tokens=100,
+    temperature=0.7
+)
+
+print(response.choices[0].message.content)
+
+# Streaming response
+for chunk in client.chat.completions.create(
+    model="gpt-oss-20b",
+    messages=[{"role": "user", "content": "Write a haiku about coding"}],
+    stream=True
+):
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
+```
+
 **Note**: The gateway requires an Authorization header. Use any dummy bearer token (e.g., `sk-1234`) for local development. For production, configure proper API keys in `gateway/litellm.yaml`.
 
 ### Embeddings
 
 Sparkstation supports both text and image embeddings via OpenAI-compatible `/v1/embeddings` endpoint:
+
+#### curl Examples
 
 ```bash
 # Text embeddings (bge-large)
@@ -291,6 +330,51 @@ curl -X POST http://localhost:8000/v1/embeddings \
   }'
 ```
 
+#### Python Examples
+
+```python
+import openai
+import numpy as np
+
+# Configure client for Sparkstation gateway
+client = openai.OpenAI(
+    api_key="sk-1234",  # Any token works for local dev
+    base_url="http://localhost:8000/v1"
+)
+
+# Text embeddings
+response = client.embeddings.create(
+    model="bge-large",
+    input="The quick brown fox jumps over the lazy dog"
+)
+embedding = response.data[0].embedding
+print(f"Text embedding dimension: {len(embedding)}")  # 1024
+
+# Batch text embeddings
+texts = ["First document", "Second document", "Third document"]
+response = client.embeddings.create(
+    model="bge-large",
+    input=texts
+)
+embeddings = [d.embedding for d in response.data]
+print(f"Generated {len(embeddings)} embeddings")
+
+# Image embeddings (CLIP)
+response = client.embeddings.create(
+    model="clip-vit",
+    input="https://example.com/image.jpg"
+)
+image_embedding = response.data[0].embedding
+print(f"Image embedding dimension: {len(image_embedding)}")  # 768
+
+# Compute similarity between embeddings
+def cosine_similarity(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+similarity = cosine_similarity(embeddings[0], embeddings[1])
+print(f"Similarity: {similarity:.4f}")
+```
+
 **Supported embedding models:**
 - `bge-large`: Text embeddings (1024 dimensions, vLLM) - for semantic search, RAG
 - `clip-vit`: Image embeddings (768 dimensions, SGLang) - for image search, cross-modal retrieval
@@ -300,6 +384,100 @@ curl -X POST http://localhost:8000/v1/embeddings \
 - RAG (Retrieval Augmented Generation)
 - Image search by text description
 - Document classification
+
+### Image Generation
+
+Sparkstation supports FLUX.1-dev image generation via the OpenAI-compatible `/v1/images/generations` endpoint:
+
+#### curl Examples
+
+```bash
+# Basic image generation
+curl -X POST http://localhost:8000/v1/images/generations \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "flux-dev",
+    "prompt": "A photorealistic image of a red robot in a garden",
+    "n": 1,
+    "size": "512x512"
+  }'
+
+# With custom parameters
+curl -X POST http://localhost:8000/v1/images/generations \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "flux-dev",
+    "prompt": "A watercolor painting of a mountain landscape at sunset",
+    "n": 1,
+    "size": "1024x1024",
+    "response_format": "b64_json"
+  }'
+```
+
+#### Python Examples
+
+```python
+import openai
+import base64
+
+# Configure client for Sparkstation gateway
+client = openai.OpenAI(
+    api_key="sk-1234",  # Any token works for local dev
+    base_url="http://localhost:8000/v1"
+)
+
+# Generate an image
+response = client.images.generate(
+    model="flux-dev",
+    prompt="A cyberpunk city at night with neon lights",
+    n=1,
+    size="512x512",
+    response_format="b64_json"
+)
+
+# Save the generated image
+image_data = base64.b64decode(response.data[0].b64_json)
+with open("generated_image.png", "wb") as f:
+    f.write(image_data)
+print("Image saved to generated_image.png")
+
+# Or using requests directly
+import requests
+
+response = requests.post(
+    "http://localhost:8000/v1/images/generations",
+    headers={
+        "Authorization": "Bearer sk-1234",
+        "Content-Type": "application/json"
+    },
+    json={
+        "model": "flux-dev",
+        "prompt": "A serene Japanese garden with cherry blossoms",
+        "n": 1,
+        "size": "512x512"
+    }
+)
+
+if response.ok:
+    data = response.json()
+    image_b64 = data["data"][0]["b64_json"]
+    with open("output.png", "wb") as f:
+        f.write(base64.b64decode(image_b64))
+```
+
+**Supported parameters:**
+- `model`: `flux-dev` (FLUX.1-dev)
+- `prompt`: Text description of the image to generate
+- `n`: Number of images (default: 1)
+- `size`: Image dimensions (`512x512`, `1024x1024`, etc.)
+- `response_format`: `b64_json` (default) or `url`
+
+**Notes:**
+- Image generation takes 20-60 seconds depending on size and complexity
+- FLUX.1-dev requires ~35GB GPU memory
+- Requires `HF_TOKEN` in `.env` for HuggingFace gated model access
 
 ### Suspend/Resume Model
 

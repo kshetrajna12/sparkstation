@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     vllm_docker_image: str = "nvcr.io/nvidia/vllm:25.10-py3"  # NVIDIA official image with Blackwell support
     sglang_docker_image: str = "nvcr.io/nvidia/sglang:25.10-py3"  # NVIDIA SGLang image with Blackwell support
 
+    # HuggingFace token for gated models (FLUX.1-dev, etc.)
+    hf_token: Optional[str] = None
+
     # Backend Python path (for subprocess mode only)
     # If use_docker=False, this path points to conda/micromamba environment
     vllm_python_path: Optional[str] = None
