@@ -5,26 +5,13 @@
 autoload:
   enabled: true
   models:
-    # Vision model for image analysis
-    - name: "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
-      alias: "qwen-vl-3b"
-      backend: "vllm"
-      model_type: "chat"
-      quantization: "awq"
-      memory_gb: 32  # AWQ quantized 3B vision model
-      idle_timeout_minutes: 30
-      auto_suspend_enabled: false
-      extra_args:
-        max_model_len: 8192
-        max_concurrent_requests: 32
-
     # Reasoning model with built-in MXFP4 quantization
     - name: "openai/gpt-oss-20b"
       alias: "gpt-oss-20b"
       backend: "vllm"
       model_type: "chat"
       quantization: "none"  # Uses built-in MXFP4
-      memory_gb: 38  # 20B with built-in quantization
+      memory_gb: 32  # 20B with built-in quantization (actual ~22GB + headroom)
       idle_timeout_minutes: 60
       auto_suspend_enabled: false
       extra_args:
@@ -47,9 +34,24 @@ autoload:
       backend: "sglang"  # SGLang for CLIP support
       model_type: "embedding"
       quantization: "none"
-      memory_gb: 5  # 1.71GB model + SGLang KV cache overhead
+      memory_gb: 4  # 1.71GB model + SGLang KV cache overhead (actual ~3GB)
       idle_timeout_minutes: 30
       auto_suspend_enabled: false
+
+    # Vision model for image analysis (Qwen3-VL with FP8 quantization)
+    # NOTE: Loaded LAST among vLLM models - vision encoder profiling is slow,
+    # other models must finish loading first to avoid memory race condition
+    - name: "Qwen/Qwen3-VL-4B-Instruct-FP8"
+      alias: "qwen3-vl-4b"
+      backend: "vllm"
+      model_type: "chat"
+      quantization: "none"  # FP8 is built into model weights
+      memory_gb: 23  # FP8 5B vision model (actual ~20GB)
+      idle_timeout_minutes: 30
+      auto_suspend_enabled: false
+      extra_args:
+        max_model_len: 4096  # Reduced from 8192 due to KV cache memory constraints
+        max_concurrent_requests: 32
 
     # Image generation model using FLUX.1-dev
     # NOTE: Loaded AFTER other models to avoid memory race condition
@@ -69,19 +71,19 @@ autoload:
 profiles:
   # Development profile - lightweight models
   dev:
-    - name: "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
-      alias: "qwen-vl-3b"
+    - name: "Qwen/Qwen3-VL-4B-Instruct-FP8"
+      alias: "qwen3-vl-4b"
       backend: "vllm"
-      quantization: "awq"
+      quantization: "none"
 
   # Production profile - full model set
   prod:
-    - name: "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
-      alias: "qwen-vl-3b"
+    - name: "Qwen/Qwen3-VL-4B-Instruct-FP8"
+      alias: "qwen3-vl-4b"
       backend: "vllm"
-      quantization: "awq"
+      quantization: "none"
       extra_args:
-        max_model_len: 8192
+        max_model_len: 4096
 
     - name: "openai/gpt-oss-20b"
       alias: "gpt-oss-20b"
@@ -92,10 +94,10 @@ profiles:
 
   # Inference only - no auto-suspend
   inference:
-    - name: "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
-      alias: "qwen-vl-3b"
+    - name: "Qwen/Qwen3-VL-4B-Instruct-FP8"
+      alias: "qwen3-vl-4b"
       backend: "vllm"
-      quantization: "awq"
+      quantization: "none"
       auto_suspend_enabled: false
       extra_args:
-        max_model_len: 8192
+        max_model_len: 4096

@@ -84,6 +84,9 @@ class VLLMLauncher(ModelLauncher):
             if settings.use_docker:
                 # Build docker run command for vLLM
                 # Build vLLM command - skip quantization flag for AWQ (auto-detected)
+                # Check if this is a vision-language model (has conv3d for video processing)
+                is_vision_model = "VL" in config.model_name.upper() or "vision" in config.model_name.lower()
+
                 docker_cmd = [
                     "docker",
                     "run",
@@ -94,6 +97,13 @@ class VLLMLauncher(ModelLauncher):
                     "--ipc=host",  # IPC mode host
                     "-p", f"{port}:{port}",  # Port mapping
                     "-v", f"{Path.home()}/.cache/huggingface:/root/.cache/huggingface",  # HuggingFace cache
+                ]
+
+                # Vision models need cuDNN V8 API disabled for conv3d on Blackwell GPUs
+                if is_vision_model:
+                    docker_cmd.extend(["-e", "TORCH_CUDNN_V8_API_DISABLED=1"])
+
+                docker_cmd.extend([
                     "--name", f"sparkstation-{model_id}",  # Container name
                     settings.vllm_docker_image,
                     "vllm", "serve",
@@ -101,7 +111,7 @@ class VLLMLauncher(ModelLauncher):
                     "--host", "0.0.0.0",  # Bind to all interfaces
                     "--port", str(port),
                     "--trust-remote-code",  # Required for many models
-                ]
+                ])
 
                 # Calculate gpu_memory_utilization from allocated memory_gb
                 # DGX Spark: 119 GB usable memory (128 GB total - system overhead)

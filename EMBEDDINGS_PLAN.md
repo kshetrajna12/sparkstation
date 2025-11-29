@@ -276,7 +276,7 @@ chat_models = await registry.list_by_type(ModelType.CHAT)
 ```
 Model ID              Status    Type       Alias       Port
 -----------------------------------------------------------
-qwen-vl-3b-abc123     running   chat       qwen-vl     8001
+qwen3-vl-4b-abc123    running   chat       qwen3-vl    8001
 bge-small-def456      running   embedding  bge-small   8002
 ```
 
@@ -520,7 +520,7 @@ Client → LiteLLM Gateway (Port 8000)
 ### Testing Results
 
 All 4 models load successfully:
-- ✅ qwen-vl-3b (chat, vLLM)
+- ✅ qwen3-vl-4b (chat, vLLM)
 - ✅ gpt-oss-20b (chat, vLLM)
 - ✅ bge-large (text embeddings, vLLM)
 - ✅ clip-vit (image embeddings, SGLang)

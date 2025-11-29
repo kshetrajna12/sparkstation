@@ -1,7 +1,7 @@
 # Sparkstation Implementation Progress
 
-**Last Updated**: 2025-11-02
-**Current Version**: 0.1.0 (Production Ready)
+**Last Updated**: 2025-11-28
+**Current Version**: 0.2.0 (Production Ready)
 **Status**: Phase 1-4 Complete, Ready for Production Use
 
 ---
@@ -56,6 +56,15 @@ Sparkstation is **production-ready** with all core features implemented and test
 ---
 
 ## What's New (Since Oct 27)
+
+### November 28, 2025 Updates
+- ✅ **NVIDIA containers 25.11**: Upgraded vLLM 0.11.0, SGLang 0.5.4, PyTorch 2.10.0
+- ✅ **Qwen3-VL-4B-Instruct-FP8**: Upgraded vision model with FP8 quantization
+- ✅ **FLUX.1-dev image generation**: Added OpenAI-compatible image generation API
+- ✅ **Staggered model loading**: Fixed memory race condition with 15s delays between launches
+- ✅ **Blackwell GPU fixes**: Added `TORCH_CUDNN_V8_API_DISABLED=1` for vision model conv3d
+- ✅ **Memory tuning**: Optimized memory_gb values based on actual GPU usage
+- ✅ **Per-model Grafana metrics**: Fixed metrics export for dashboard panels
 
 ### November 2, 2025 Updates
 - ✅ **Docker-first deployment**: Changed default from subprocess to Docker mode
@@ -178,7 +187,7 @@ USE_DOCKER=true  # Default: Docker mode
 # DGX Spark constraints
 TOTAL_UNIFIED_MEMORY_GB=128
 MEMORY_HARD_LIMIT_GB=110
-MAX_RESIDENT_MODELS=3
+MAX_RESIDENT_MODELS=5
 
 # Auto-suspend
 AUTO_SUSPEND_ENABLED=true
@@ -201,10 +210,26 @@ Auto-loads models on startup:
 autoload:
   enabled: true
   models:
-    - name: "Qwen/Qwen2.5-VL-3B-Instruct-AWQ"
-      alias: "qwen-vl-3b"
+    - name: "openai/gpt-oss-20b"
+      alias: "gpt-oss-20b"
       backend: "vllm"
-      quantization: "awq"
+      memory_gb: 32
+    - name: "BAAI/bge-large-en-v1.5"
+      alias: "bge-large"
+      backend: "vllm"
+      memory_gb: 2.5
+    - name: "openai/clip-vit-large-patch14"
+      alias: "clip-vit"
+      backend: "sglang"
+      memory_gb: 4
+    - name: "Qwen/Qwen3-VL-4B-Instruct-FP8"
+      alias: "qwen3-vl-4b"
+      backend: "vllm"
+      memory_gb: 23
+    - name: "black-forest-labs/FLUX.1-dev"
+      alias: "flux-dev"
+      backend: "flux"
+      memory_gb: 35
 ```
 
 ---

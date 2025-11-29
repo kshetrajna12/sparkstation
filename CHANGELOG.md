@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Upgraded to NVIDIA containers 25.11**
+  - vLLM: 0.10.2 → 0.11.0 (flashinfer 0.5.0, transformers 4.57.1)
+  - SGLang: 0.5.3rc1 → 0.5.4.post1 (stable release)
+  - PyTorch 2.10.0 with CUDA 13.0.2
+- **Upgraded vision model to Qwen3-VL-4B-Instruct-FP8**
+  - Replaced Qwen2.5-VL-3B-Instruct-AWQ with Qwen3-VL-4B-Instruct-FP8
+  - FP8 quantization for better memory efficiency
+  - Added `TORCH_CUDNN_V8_API_DISABLED=1` env var for Blackwell GPU conv3d compatibility
+- **Tuned memory_gb values based on actual usage**
+  - gpt-oss-20b: 38 → 32 GB (actual ~17 GB)
+  - clip-vit: 5 → 4 GB (actual ~2.4 GB)
+  - qwen3-vl-4b: 30 → 23 GB (actual ~16 GB)
+  - Total allocation: 96.5 GB (fits within 110 GB limit with FLUX)
+
+### Added
+- **FLUX.1-dev image generation support**
+  - OpenAI-compatible `/v1/images/generations` endpoint
+  - FluxLauncher for Docker container lifecycle management
+  - Supports 512x512 and 1024x1024 image sizes
+  - Returns base64-encoded PNG images
+  - Generation takes 20-60 seconds depending on size
+- **Structured logging**: Supervisor and gateway logs now saved to `~/.sparkstation/logs/`
+  - `supervisor.log` - Supervisor startup, model loading, and runtime logs
+  - `gateway.log` - LiteLLM gateway logs
+  - CLI displays log file paths during startup for easy debugging
+
 ### Fixed
 - **Gateway sync race condition**: Resolved critical startup timing issue where gateway would start before models were ready
   - Supervisor now waits for all autoload models to complete startup before activating gateway sync
@@ -16,18 +43,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - CLI properly waits for supervisor startup completion (600s timeout)
   - Prevents incomplete model list in gateway API
 - **Startup reliability**: Two-phase startup ensures deterministic initialization order
+- **Model loading memory race condition**: Fixed GPU memory contention when multiple vLLM containers start simultaneously
+  - Added 15-second staggered delays between model launches
+  - FLUX image model now loads only after all other models are RUNNING
+  - Prevents negative KV cache memory errors during concurrent model initialization
+  - Vision model encoder profiling no longer competes with other models for memory
+- **Per-model Grafana metrics**: Fixed metrics endpoint to export per-model data
+  - Model status, memory usage, and last request timestamp now properly exposed
+  - Fixed status string-to-numeric conversion for dashboard panels
+  - Fixed "Running Models" panel to show actual count instead of "Failed"
+- **Startup health check logging**: Added full exception logging with stack traces
+  - Improves debugging when models get stuck in STARTING state
+- **Gitignore**: Added pattern for rotated log files (`*.log.[0-9]*`)
 
-### Changed
-- **Upgraded to NVIDIA containers 25.11**
-  - vLLM: 0.10.2 → 0.11.0 (flashinfer 0.5.0, transformers 4.57.1)
-  - SGLang: 0.5.3rc1 → 0.5.4.post1 (stable release)
-  - PyTorch 2.10.0 with CUDA 13.0.2
-
-### Added
-- **Structured logging**: Supervisor and gateway logs now saved to `~/.sparkstation/logs/`
-  - `supervisor.log` - Supervisor startup, model loading, and runtime logs
-  - `gateway.log` - LiteLLM gateway logs
-  - CLI displays log file paths during startup for easy debugging
+### Documentation
+- **CLIP embeddings API format**: Fixed examples to show correct array-of-objects format
+  - Images must use `input=[{"image": "..."}]` not flat strings
+  - Added note about CLIP using different format than standard OpenAI API
 
 ---
 
@@ -37,7 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Embeddings Support
 - **Text embeddings** with BAAI/bge-large-en-v1.5 model
-  - 384-dimensional embeddings for semantic search and RAG
+  - 1024-dimensional embeddings for semantic search and RAG
   - OpenAI-compatible `/v1/embeddings` API endpoint
   - Memory-efficient: ~2.5GB including vLLM overhead
 - **Image embeddings** with OpenAI CLIP (clip-vit-large-patch14)
