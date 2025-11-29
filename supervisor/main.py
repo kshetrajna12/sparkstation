@@ -118,8 +118,14 @@ async def lifespan(app: FastAPI):
 
     autoload_models = get_autoload_models()
     if autoload_models:
-        logger.info(f"Auto-loading {len(autoload_models)} model(s) from config...")
-        for model_config in autoload_models:
+        # Separate FLUX models - they must load AFTER other models due to memory allocation differences
+        # FLUX uses Diffusers/PyTorch which grabs memory immediately, while vLLM calculates
+        # gpu_memory_utilization as percentage of TOTAL memory. Loading in parallel causes race conditions.
+        flux_models = [m for m in autoload_models if m.backend == "flux"]
+        other_models = [m for m in autoload_models if m.backend != "flux"]
+
+        logger.info(f"Auto-loading {len(other_models)} model(s) from config (FLUX models loaded after)...")
+        for model_config in other_models:
             try:
                 # Check if model already exists in database
                 existing = await registry.get_by_alias(model_config.alias or model_config.name)
@@ -217,6 +223,59 @@ async def lifespan(app: FastAPI):
                 logger.warning("Timed out waiting for models to be ready, starting gateway sync anyway")
         else:
             logger.info("No models starting, proceeding with gateway sync")
+
+        # Now load FLUX models (after other models are ready to avoid memory race condition)
+        if flux_models:
+            logger.info(f"Loading {len(flux_models)} FLUX model(s) after other models are ready...")
+            for model_config in flux_models:
+                try:
+                    existing = await registry.get_by_alias(model_config.alias or model_config.name)
+                    if existing:
+                        if existing.status in [ModelStatus.RUNNING, ModelStatus.STARTING]:
+                            logger.info(f"Model {model_config.alias or model_config.name} already running, skipping")
+                            continue
+                        else:
+                            await registry.delete(existing.id)
+
+                    model_id = registry.generate_id(model_config.name)
+                    memory_estimate = model_config.memory_gb if model_config.memory_gb is not None else 35.0
+
+                    port = resource_manager.allocate_model(model_id, memory_estimate)
+
+                    from supervisor.models import ModelConfig, Backend, ModelType
+                    config = ModelConfig(
+                        model_name=model_config.name,
+                        backend=Backend(model_config.backend),
+                        model_type=ModelType(model_config.model_type),
+                        model_alias=model_config.alias,
+                        num_gpus=1,
+                        quantization=model_config.quantization,
+                        idle_timeout_minutes=model_config.idle_timeout_minutes,
+                        auto_suspend_enabled=model_config.auto_suspend_enabled,
+                        extra_args=model_config.extra_args,
+                    )
+
+                    launcher = launcher_factory.get_launcher(config.backend)
+                    instance = await launcher.launch(config, model_id, port, memory_gb=memory_estimate)
+                    instance.memory_gb = memory_estimate
+                    instance.saved_config = {
+                        "model_name": config.model_name,
+                        "backend": config.backend.value,
+                        "model_type": config.model_type.value,
+                        "model_alias": config.model_alias,
+                        "gpu_ids": instance.gpu_ids,
+                        "port": port,
+                        "quantization": config.quantization,
+                        "auto_suspend_enabled": config.auto_suspend_enabled,
+                        "idle_timeout_minutes": config.idle_timeout_minutes,
+                        "extra_args": config.extra_args,
+                    }
+
+                    await registry.create(instance)
+                    logger.info(f"Auto-loaded FLUX model: {model_config.alias or model_config.name}")
+
+                except Exception as e:
+                    logger.error(f"Failed to auto-load FLUX model {model_config.name}: {e}")
 
     # Start gateway sync after models are loaded and running
     await gateway_sync.start()

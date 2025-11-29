@@ -4,6 +4,7 @@ Factory for creating model launchers based on backend type.
 from supervisor.launchers.base import ModelLauncher
 from supervisor.launchers.vllm_launcher import VLLMLauncher
 from supervisor.launchers.sglang_launcher import SGLangLauncher
+from supervisor.launchers.flux_launcher import FluxLauncher
 from supervisor.models import Backend
 
 
@@ -14,6 +15,7 @@ class LauncherFactory:
         self._launchers = {
             Backend.VLLM: VLLMLauncher(),
             Backend.SGLANG: SGLangLauncher(),
+            Backend.FLUX: FluxLauncher(),
             # Backend.TRT_LLM: TRTLLMLauncher(),  # TODO: Implement
         }
 

@@ -25,6 +25,11 @@ model_list:
     api_key: EMPTY
     model: openai/openai/clip-vit-large-patch14
   model_name: clip-vit
+- litellm_params:
+    api_base: http://127.0.0.1:8005/v1
+    api_key: EMPTY
+    model: openai/black-forest-labs/FLUX.1-dev
+  model_name: flux-dev
 router_settings:
   allowed_fails: 3
   cooldown_time: 30

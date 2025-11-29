@@ -125,6 +125,11 @@ class HealthCheckManager:
                                 "model": model.model_name,
                             },
                         )
+                    elif model.model_type == ModelType.IMAGE:
+                        # Image generation models (FLUX) use /health endpoint
+                        response = await self.client.get(
+                            f"{model.base_url}/health",
+                        )
                     else:
                         response = await self.client.post(
                             f"{model.base_url}/v1/chat/completions",
@@ -205,6 +210,11 @@ class HealthCheckManager:
                         "input": "test",
                         "model": model.model_name,
                     },
+                )
+            elif model.model_type == ModelType.IMAGE:
+                # Image generation models (FLUX) use /health endpoint
+                response = await self.client.get(
+                    f"{model.base_url}/health",
                 )
             else:
                 # Chat model: 1-token chat completion probe
