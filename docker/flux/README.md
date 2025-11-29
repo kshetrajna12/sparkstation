@@ -11,7 +11,7 @@ docker build --platform linux/arm64 -t flux-server:latest .
 
 ## Requirements
 
-- NVIDIA PyTorch 25.10 base image
+- NVIDIA PyTorch 25.11 base image
 - HuggingFace token with access to FLUX.1-dev (gated model)
 - ~35GB GPU memory
 - ~20GB disk space for model weights
