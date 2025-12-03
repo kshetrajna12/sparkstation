@@ -11,7 +11,7 @@ from typing import Optional, Dict
 import httpx
 
 from supervisor.registry import ModelRegistry
-from supervisor.models import ModelStatus, HealthStatus, ModelInstance, ModelType
+from supervisor.models import ModelStatus, HealthStatus, ModelInstance
 from supervisor.config import settings
 
 logger = logging.getLogger(__name__)
@@ -116,30 +116,8 @@ class HealthCheckManager:
 
                 # Try to health check the model (without counting failures)
                 try:
-                    # Use appropriate endpoint based on model type
-                    if model.model_type == ModelType.EMBEDDING:
-                        response = await self.client.post(
-                            f"{model.base_url}/v1/embeddings",
-                            json={
-                                "input": "test",
-                                "model": model.model_name,
-                            },
-                        )
-                    elif model.model_type == ModelType.IMAGE:
-                        # Image generation models (FLUX) use /health endpoint
-                        response = await self.client.get(
-                            f"{model.base_url}/health",
-                        )
-                    else:
-                        response = await self.client.post(
-                            f"{model.base_url}/v1/chat/completions",
-                            json={
-                                "model": model.model_name,
-                                "messages": [{"role": "user", "content": "hi"}],
-                                "max_tokens": 1,
-                                "temperature": 0,
-                            },
-                        )
+                    # Use /health endpoint for all models (liveness check)
+                    response = await self.client.get(f"{model.base_url}/health")
 
                     if response.status_code == 200:
                         # Model is healthy! Transition to RUNNING
@@ -188,8 +166,11 @@ class HealthCheckManager:
 
     async def _check_model_health(self, model: ModelInstance) -> bool:
         """
-        Perform health check probe to verify model responsiveness.
-        Uses appropriate endpoint based on model type (chat vs embedding).
+        Perform liveness check to verify model server is alive.
+
+        Uses /health endpoint for all model types - this is a lightweight check
+        that doesn't queue behind inference requests. This prevents false positives
+        when models are busy processing long-running requests (e.g., VLMs with images).
 
         Args:
             model: Model instance to check
@@ -201,32 +182,9 @@ class HealthCheckManager:
         display_name = model.model_alias or model.model_name
 
         try:
-            # Use appropriate health check based on model type
-            if model.model_type == ModelType.EMBEDDING:
-                # Embedding model: test with /v1/embeddings
-                response = await self.client.post(
-                    f"{model.base_url}/v1/embeddings",
-                    json={
-                        "input": "test",
-                        "model": model.model_name,
-                    },
-                )
-            elif model.model_type == ModelType.IMAGE:
-                # Image generation models (FLUX) use /health endpoint
-                response = await self.client.get(
-                    f"{model.base_url}/health",
-                )
-            else:
-                # Chat model: 1-token chat completion probe
-                response = await self.client.post(
-                    f"{model.base_url}/v1/chat/completions",
-                    json={
-                        "model": model.model_name,
-                        "messages": [{"role": "user", "content": "hi"}],
-                        "max_tokens": 1,
-                        "temperature": 0,
-                    },
-                )
+            # Use /health endpoint for all models (liveness check)
+            # This is lightweight and doesn't queue behind inference requests
+            response = await self.client.get(f"{model.base_url}/health")
 
             if response.status_code == 200:
                 # Health check passed
