@@ -466,48 +466,44 @@ def models_logs(model_id, follow, tail):
         pass
 
 
+SPARKSTATION_START_MARKER = "<!-- SPARKSTATION-START -->"
+SPARKSTATION_END_MARKER = "<!-- SPARKSTATION-END -->"
+
+
 @cli.command()
-@click.option("--force", "-f", is_flag=True, help="Overwrite existing CLAUDE.md")
-@click.pass_context
-def init(ctx, force):
-    """Create CLAUDE.md with instructions for using Sparkstation gateway."""
+def init():
+    """Add Sparkstation instructions to CLAUDE.md (creates, appends, or updates)."""
     claude_md_path = Path("CLAUDE.md")
 
-    if claude_md_path.exists() and not force:
-        click.echo(f"CLAUDE.md already exists in {Path.cwd()}")
-        click.echo("Use --force to overwrite")
-        return
-
-    # Get available models from supervisor
-    supervisor_url = ctx.obj['supervisor_url']
+    # Get available models from models.yaml (documents all configured models, not just running)
     models_info = []
 
     try:
-        response = httpx.get(f"{supervisor_url}/models/detailed", timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            models = data.get("models", [])
-            for model in models:
-                if model.get("status") == "running":
-                    models_info.append({
-                        "name": model.get("alias") or model.get("model_name", "unknown"),
-                        "full_name": model.get("model_name", "unknown"),
-                        "port": model.get("port", "unknown"),
-                    })
+        import yaml
+        with open("models.yaml") as f:
+            config = yaml.safe_load(f)
+            autoload_models = config.get("autoload", {}).get("models", [])
+
+        for model in autoload_models:
+            models_info.append({
+                "name": model.get("alias") or model.get("name", "unknown").split("/")[-1],
+                "full_name": model.get("name", "unknown"),
+            })
     except Exception:
-        # If can't connect to supervisor, use defaults
+        # Fallback if models.yaml doesn't exist or can't be parsed
         models_info = [
-            {"name": "qwen3-vl-4b", "full_name": "Qwen/Qwen3-VL-4B-Instruct-FP8", "port": 8001},
-            {"name": "gpt-oss-20b", "full_name": "openai/gpt-oss-20b", "port": 8002},
-            {"name": "bge-large", "full_name": "BAAI/bge-large-en-v1.5", "port": 8003},
-            {"name": "clip-vit", "full_name": "openai/clip-vit-large-patch14", "port": 8004},
-            {"name": "flux-dev", "full_name": "black-forest-labs/FLUX.1-dev", "port": 8005},
+            {"name": "gpt-oss-20b", "full_name": "openai/gpt-oss-20b"},
+            {"name": "bge-large", "full_name": "BAAI/bge-large-en-v1.5"},
+            {"name": "clip-vit", "full_name": "openai/clip-vit-large-patch14"},
+            {"name": "qwen3-vl-4b", "full_name": "Qwen/Qwen3-VL-4B-Instruct-FP8"},
+            {"name": "flux-dev", "full_name": "black-forest-labs/FLUX.1-dev"},
         ]
 
     # Generate model list for documentation
     model_list_str = "\n".join([f"- `{m['name']}` - {m['full_name']}" for m in models_info])
 
-    claude_md_content = f"""# Sparkstation Local LLM Gateway
+    sparkstation_section = f"""{SPARKSTATION_START_MARKER}
+# Sparkstation Local LLM Gateway
 
 This project has access to local LLM models through Sparkstation gateway.
 
@@ -860,15 +856,31 @@ if response.ok:
   - Supports sizes: 512x512, 1024x1024
   - Takes 20-60 seconds per image
   - Returns base64-encoded PNG
-"""
+{SPARKSTATION_END_MARKER}"""
 
-    # Write file
-    with open(claude_md_path, "w") as f:
-        f.write(claude_md_content)
+    # Handle the three cases: create, append, or update
+    if claude_md_path.exists():
+        existing_content = claude_md_path.read_text()
 
-    click.secho(f"\n✓ Created CLAUDE.md in {Path.cwd()}", fg="green")
-    click.echo("\nThis file provides instructions for AI assistants on how to use")
-    click.echo("the Sparkstation gateway without managing the services.")
+        if SPARKSTATION_START_MARKER in existing_content and SPARKSTATION_END_MARKER in existing_content:
+            # Case 3: Update existing Sparkstation section
+            import re
+            pattern = re.escape(SPARKSTATION_START_MARKER) + r".*?" + re.escape(SPARKSTATION_END_MARKER)
+            new_content = re.sub(pattern, sparkstation_section, existing_content, flags=re.DOTALL)
+            claude_md_path.write_text(new_content)
+            click.secho(f"✓ Updated Sparkstation section in {claude_md_path}", fg="green")
+        else:
+            # Case 2: Append to existing file
+            with open(claude_md_path, "a") as f:
+                f.write("\n\n" + sparkstation_section)
+            click.secho(f"✓ Added Sparkstation section to {claude_md_path}", fg="green")
+    else:
+        # Case 1: Create new file
+        claude_md_path.write_text(sparkstation_section)
+        click.secho(f"✓ Created {claude_md_path}", fg="green")
+
+    click.echo("\nThis section provides instructions for AI assistants on how to use")
+    click.echo("the Sparkstation gateway.")
 
 
 @cli.command()
