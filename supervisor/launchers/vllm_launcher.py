@@ -136,6 +136,16 @@ class VLLMLauncher(ModelLauncher):
                         "--max-num-seqs", str(max_concurrent),
                     ])
 
+                    # Enable tool calling if tool_call_parser is specified in config
+                    # Supported parsers: hermes, llama3_json, mistral, granite, etc.
+                    tool_parser = config.extra_args.get("tool_call_parser")
+                    if tool_parser:
+                        docker_cmd.extend([
+                            "--enable-auto-tool-choice",
+                            "--tool-call-parser", tool_parser,
+                        ])
+                        logger.info(f"Enabled tool calling with parser: {tool_parser}")
+
                 # Only add quantization flag if specified and not auto-detected
                 # AWQ is auto-detected from model config, None means skip quantization
                 if vllm_quant and vllm_quant.lower() != "awq":

@@ -17,6 +17,7 @@ autoload:
       extra_args:
         max_model_len: 16384
         max_concurrent_requests: 32
+        tool_call_parser: "openai"
 
     # Text embedding model for semantic search and RAG
     - name: "BAAI/bge-large-en-v1.5"
@@ -52,6 +53,7 @@ autoload:
       extra_args:
         max_model_len: 4096  # Reduced from 8192 due to KV cache memory constraints
         max_concurrent_requests: 32
+        tool_call_parser: "hermes"  # Qwen uses hermes-style tool calling
 
     # Image generation model using FLUX.1-dev
     # NOTE: Loaded AFTER other models to avoid memory race condition
