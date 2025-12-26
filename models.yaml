@@ -18,6 +18,7 @@ autoload:
         max_model_len: 16384
         max_concurrent_requests: 32
         tool_call_parser: "openai"
+        reasoning_parser: "openai_gptoss"  # Required for Harmony format multi-turn tool calling
 
     # Text embedding model for semantic search and RAG
     - name: "BAAI/bge-large-en-v1.5"
@@ -93,6 +94,8 @@ profiles:
       quantization: "none"
       extra_args:
         max_model_len: 16384
+        tool_call_parser: "openai"
+        reasoning_parser: "openai_gptoss"
 
   # Inference only - no auto-suspend
   inference:

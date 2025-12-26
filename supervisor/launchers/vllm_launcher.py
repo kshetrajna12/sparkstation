@@ -146,6 +146,15 @@ class VLLMLauncher(ModelLauncher):
                         ])
                         logger.info(f"Enabled tool calling with parser: {tool_parser}")
 
+                    # Enable reasoning parser for models that use Harmony format (e.g., gpt-oss)
+                    # This is required for proper multi-turn tool calling with gpt-oss models
+                    reasoning_parser = config.extra_args.get("reasoning_parser")
+                    if reasoning_parser:
+                        docker_cmd.extend([
+                            "--reasoning-parser", reasoning_parser,
+                        ])
+                        logger.info(f"Enabled reasoning parser: {reasoning_parser}")
+
                 # Only add quantization flag if specified and not auto-detected
                 # AWQ is auto-detected from model config, None means skip quantization
                 if vllm_quant and vllm_quant.lower() != "awq":
