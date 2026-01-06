@@ -5,6 +5,7 @@ from supervisor.launchers.base import ModelLauncher
 from supervisor.launchers.vllm_launcher import VLLMLauncher
 from supervisor.launchers.sglang_launcher import SGLangLauncher
 from supervisor.launchers.flux_launcher import FluxLauncher
+from supervisor.launchers.clip_launcher import CLIPLauncher
 from supervisor.models import Backend
 
 
@@ -16,6 +17,7 @@ class LauncherFactory:
             Backend.VLLM: VLLMLauncher(),
             Backend.SGLANG: SGLangLauncher(),
             Backend.FLUX: FluxLauncher(),
+            Backend.CLIP: CLIPLauncher(),
             # Backend.TRT_LLM: TRTLLMLauncher(),  # TODO: Implement
         }
 

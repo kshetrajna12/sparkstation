@@ -119,16 +119,20 @@ async def lifespan(app: FastAPI):
 
     autoload_models = get_autoload_models()
     if autoload_models:
-        # Separate FLUX models - they must load AFTER other models due to memory allocation differences
-        # FLUX uses Diffusers/PyTorch which grabs memory immediately, while vLLM calculates
-        # gpu_memory_utilization as percentage of TOTAL memory.
-        # All other models (including vision models) load with staggered delays to avoid race conditions.
+        # Separate models by backend for ordered loading:
+        # 1. vLLM/SGLang first - they calculate gpu_memory_utilization as percentage of TOTAL memory
+        # 2. CLIP next - Docker container that grabs memory immediately
+        # 3. FLUX last - largest Docker container, must load after vLLM has reserved its memory
+        vllm_sglang_models = [m for m in autoload_models if m.backend in ("vllm", "sglang")]
+        clip_models = [m for m in autoload_models if m.backend == "clip"]
         flux_models = [m for m in autoload_models if m.backend == "flux"]
-        other_models = [m for m in autoload_models if m.backend != "flux"]
 
-        logger.info(f"Auto-loading {len(other_models)} model(s) from config (FLUX models loaded after)...")
+        logger.info(f"Auto-loading models: {len(vllm_sglang_models)} vLLM/SGLang, {len(clip_models)} CLIP, {len(flux_models)} FLUX")
         launched_model_ids = []  # Track models we actually launched
-        for model_config in other_models:
+
+        # Phase 1: Load vLLM/SGLang models first (sequential with delays)
+        logger.info("=== PHASE 1: Loading vLLM/SGLang models ===")
+        for i, model_config in enumerate(vllm_sglang_models):
             try:
                 # Check if model already exists in database
                 existing = await registry.get_by_alias(model_config.alias or model_config.name)
@@ -202,42 +206,115 @@ async def lifespan(app: FastAPI):
 
                 # Small delay between launches to stagger GPU memory allocation
                 # This avoids race conditions while still allowing parallel loading
-                await asyncio.sleep(15)
+                if i < len(vllm_sglang_models) - 1:  # Don't sleep after the last model
+                    logger.info(f"Sleeping 15s before next vLLM/SGLang model...")
+                    await asyncio.sleep(15)
 
             except Exception as e:
                 logger.error(f"Failed to auto-load model {model_config.name}: {e}")
                 # Continue with other models
 
-        # Wait for ALL launched models to finish starting before loading FLUX
-        # This ensures we don't start FLUX while other models are still initializing
-        if launched_model_ids:
-            logger.info(f"Waiting for {len(launched_model_ids)} launched model(s) to be ready before loading FLUX...")
+        logger.info(f"=== PHASE 1 COMPLETE: Launched {len(launched_model_ids)} vLLM/SGLang models ===")
 
+        # Helper function to wait for models to be ready
+        async def wait_for_models(model_ids: list, next_phase: str):
+            if not model_ids:
+                logger.info(f"No models to wait for, proceeding to {next_phase}")
+                return
+            logger.info(f"Waiting for {len(model_ids)} model(s) to be ready before {next_phase}...")
             while True:
                 models = await registry.list_all()
-                # Check specifically for models WE launched that are still STARTING
                 models_by_id = {m.id: m for m in models}
                 pending_models = []
-                for model_id in launched_model_ids:
+                for model_id in model_ids:
                     model = models_by_id.get(model_id)
-                    if model and model.status == ModelStatus.STARTING:
-                        pending_models.append(model)
-
+                    # Model is pending if: not in registry yet, OR still in STARTING state
+                    if model is None or model.status == ModelStatus.STARTING:
+                        pending_models.append(model_id)
                 if not pending_models:
-                    # All launched models are either RUNNING or FAILED
-                    running_count = sum(1 for mid in launched_model_ids
+                    running_count = sum(1 for mid in model_ids
                                        if models_by_id.get(mid) and models_by_id[mid].status == ModelStatus.RUNNING)
-                    failed_count = sum(1 for mid in launched_model_ids
+                    failed_count = sum(1 for mid in model_ids
                                       if models_by_id.get(mid) and models_by_id[mid].status == ModelStatus.FAILED)
-                    logger.info(f"All models ready ({running_count} running, {failed_count} failed), proceeding to load FLUX")
+                    logger.info(f"All models ready ({running_count} running, {failed_count} failed), proceeding to {next_phase}")
                     break
-
-                logger.info(f"Still waiting for {len(pending_models)} model(s): {[m.model_alias or m.model_name for m in pending_models]}")
+                # Get names for logging
+                pending_names = []
+                for model_id in pending_models:
+                    model = models_by_id.get(model_id) if isinstance(model_id, str) else None
+                    if model:
+                        pending_names.append(model.model_alias or model.model_name)
+                    else:
+                        pending_names.append(model_id if isinstance(model_id, str) else "unknown")
+                logger.info(f"Still waiting for {len(pending_models)} model(s): {pending_names}")
                 await asyncio.sleep(10)
-        else:
-            logger.info("No new models launched, proceeding to load FLUX")
 
-        # Now load FLUX models (after other models are ready to avoid memory race condition)
+        # Wait for vLLM/SGLang models before loading CLIP
+        logger.info("=== Waiting for vLLM/SGLang models to be RUNNING ===")
+        await wait_for_models(launched_model_ids, "load CLIP")
+
+        # Phase 2: Load CLIP models
+        logger.info("=== PHASE 2: Loading CLIP models ===")
+        clip_model_ids = []
+        for model_config in clip_models:
+            try:
+                existing = await registry.get_by_alias(model_config.alias or model_config.name)
+                if existing:
+                    if existing.status in [ModelStatus.RUNNING, ModelStatus.STARTING]:
+                        logger.info(f"Model {model_config.alias or model_config.name} already running, skipping")
+                        continue
+                    else:
+                        await registry.delete(existing.id)
+
+                model_id = registry.generate_id(model_config.name)
+                memory_estimate = model_config.memory_gb if model_config.memory_gb is not None else 5.0
+
+                port = resource_manager.allocate_model(model_id, memory_estimate)
+
+                from supervisor.models import ModelConfig, Backend, ModelType
+                config = ModelConfig(
+                    model_name=model_config.name,
+                    backend=Backend(model_config.backend),
+                    model_type=ModelType(model_config.model_type),
+                    model_alias=model_config.alias,
+                    num_gpus=1,
+                    quantization=model_config.quantization,
+                    idle_timeout_minutes=model_config.idle_timeout_minutes,
+                    auto_suspend_enabled=model_config.auto_suspend_enabled,
+                    extra_args=model_config.extra_args,
+                )
+
+                launcher = launcher_factory.get_launcher(config.backend)
+                instance = await launcher.launch(config, model_id, port, memory_gb=memory_estimate)
+                instance.memory_gb = memory_estimate
+                instance.saved_config = {
+                    "model_name": config.model_name,
+                    "backend": config.backend.value,
+                    "model_type": config.model_type.value,
+                    "model_alias": config.model_alias,
+                    "gpu_ids": instance.gpu_ids,
+                    "port": port,
+                    "quantization": config.quantization,
+                    "auto_suspend_enabled": config.auto_suspend_enabled,
+                    "idle_timeout_minutes": config.idle_timeout_minutes,
+                    "extra_args": config.extra_args,
+                }
+
+                await registry.create(instance)
+                clip_model_ids.append(instance.id)
+                logger.info(f"Auto-loaded CLIP model: {model_config.alias or model_config.name} (id: {instance.id})")
+
+            except Exception as e:
+                logger.error(f"Failed to auto-load CLIP model {model_config.name}: {e}")
+
+        logger.info(f"=== PHASE 2 COMPLETE: Launched {len(clip_model_ids)} CLIP models ===")
+
+        # Wait for CLIP models before loading FLUX
+        logger.info("=== Waiting for CLIP models to be RUNNING ===")
+        await wait_for_models(clip_model_ids, "load FLUX")
+
+        # Phase 3: Load FLUX models (last due to large memory footprint)
+        logger.info("=== PHASE 3: Loading FLUX models ===")
         if flux_models:
             logger.info(f"Loading {len(flux_models)} FLUX model(s) after other models are ready...")
             for model_config in flux_models:

@@ -35,6 +35,7 @@ class Backend(str, Enum):
     VLLM = "vllm"
     SGLANG = "sglang"
     FLUX = "flux"
+    CLIP = "clip"
     TRT_LLM = "trt-llm"  # Future support
 
 

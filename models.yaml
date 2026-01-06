@@ -31,12 +31,13 @@ autoload:
       auto_suspend_enabled: false
 
     # Image embedding model for vision tasks (CLIP)
+    # Uses custom transformers-based server for proper image+text embeddings
     - name: "openai/clip-vit-large-patch14"
       alias: "clip-vit"
-      backend: "sglang"  # SGLang for CLIP support
+      backend: "clip"
       model_type: "embedding"
       quantization: "none"
-      memory_gb: 5  # 1.71GB model + SGLang KV cache overhead
+      memory_gb: 5  # 1.71GB model + overhead
       idle_timeout_minutes: 30
       auto_suspend_enabled: false
 
