@@ -106,6 +106,9 @@ class ModelConfig(BaseModel):
     extra_args: Dict[str, Any] = Field(
         default_factory=dict, description="Additional backend-specific args"
     )
+    docker_image: Optional[str] = Field(None, description="Per-model Docker image override")
+    env_vars: Dict[str, str] = Field(default_factory=dict, description="Extra container env vars")
+    volumes: List[str] = Field(default_factory=list, description="Extra volume mounts (host:container)")
 
 
 class ModelInstance(BaseModel):

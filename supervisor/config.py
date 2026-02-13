@@ -24,8 +24,8 @@ class Settings(BaseSettings):
     # Docker mode: Use Docker containers for vLLM backend (recommended for production)
     # Subprocess mode: Use direct Python execution from conda/micromamba environments
     use_docker: bool = True  # Default to Docker for better isolation and easier setup
-    vllm_docker_image: str = "nvcr.io/nvidia/vllm:25.11-py3"  # NVIDIA official image with Blackwell support
-    sglang_docker_image: str = "nvcr.io/nvidia/sglang:25.11-py3"  # NVIDIA SGLang image with Blackwell support
+    vllm_docker_image: str = "nvcr.io/nvidia/vllm:26.01-py3"  # NVIDIA official image with Blackwell support
+    sglang_docker_image: str = "nvcr.io/nvidia/sglang:26.01-py3"  # NVIDIA SGLang image with Blackwell support
 
     # HuggingFace token for gated models (FLUX.1-dev, etc.)
     hf_token: Optional[str] = None
@@ -82,6 +82,9 @@ class Settings(BaseSettings):
     log_file_path: str = "./data/sparkstation.log"  # Log file location
     log_max_bytes: int = 10 * 1024 * 1024  # 10 MB per file
     log_backup_count: int = 5  # Keep 5 backup files
+
+    # Startup profile (load named profile instead of autoload models)
+    startup_profile: Optional[str] = None
 
     # Optional auto-sleep (unload all if system idle > 1 hour)
     auto_sleep_enabled: bool = False

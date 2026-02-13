@@ -28,10 +28,14 @@ def cli(ctx, supervisor_url):
 
 @cli.command()
 @click.option("--detach", "-d", is_flag=True, help="Run in background")
+@click.option("--profile", "-p", help="Load models from named profile (e.g. openclaw)")
 @click.pass_context
-def start(ctx, detach):
+def start(ctx, detach, profile):
     """Start Sparkstation (supervisor + gateway) and wait for models to be ready."""
-    click.echo("Starting Sparkstation...")
+    if profile:
+        click.echo(f"Starting Sparkstation with profile: {profile}")
+    else:
+        click.echo("Starting Sparkstation...")
 
     if detach:
         # Start supervisor in background
@@ -42,11 +46,17 @@ def start(ctx, detach):
         log_dir.mkdir(parents=True, exist_ok=True)
         supervisor_log = log_dir / "supervisor.log"
 
+        # Build env for supervisor (pass profile if set)
+        supervisor_env = os.environ.copy()
+        if profile:
+            supervisor_env["STARTUP_PROFILE"] = profile
+
         with open(supervisor_log, "w") as log_file:
             subprocess.Popen(
                 ["uv", "run", "uvicorn", "supervisor.main:app", "--host", "127.0.0.1", "--port", "9001"],
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
+                env=supervisor_env,
             )
 
         click.echo(f"     Logs: {supervisor_log}")
@@ -160,8 +170,12 @@ def start(ctx, detach):
         # Start in foreground (supervisor only)
         click.echo("Starting supervisor in foreground...")
         click.echo("Note: Run with -d to also start gateway")
+        foreground_env = os.environ.copy()
+        if profile:
+            foreground_env["STARTUP_PROFILE"] = profile
         subprocess.run(
-            ["uv", "run", "uvicorn", "supervisor.main:app", "--host", "127.0.0.1", "--port", "9001"]
+            ["uv", "run", "uvicorn", "supervisor.main:app", "--host", "127.0.0.1", "--port", "9001"],
+            env=foreground_env,
         )
 
 
@@ -471,24 +485,46 @@ SPARKSTATION_END_MARKER = "<!-- SPARKSTATION-END -->"
 
 
 @cli.command()
-def init():
+@click.option("--profile", "-p", help="Generate docs for a specific profile (default: autoload models)")
+def init(profile):
     """Add Sparkstation instructions to CLAUDE.md (creates, appends, or updates)."""
     claude_md_path = Path("CLAUDE.md")
 
-    # Get available models from models.yaml (documents all configured models, not just running)
+    # Get available models from models.yaml
     models_info = []
+    profiles_info = {}
 
     try:
         import yaml
         with open("models.yaml") as f:
             config = yaml.safe_load(f)
-            autoload_models = config.get("autoload", {}).get("models", [])
 
-        for model in autoload_models:
-            models_info.append({
-                "name": model.get("alias") or model.get("name", "unknown").split("/")[-1],
-                "full_name": model.get("name", "unknown"),
-            })
+        # Build profile info for all profiles
+        for profile_name, profile_models in config.get("profiles", {}).items():
+            profiles_info[profile_name] = []
+            for model in profile_models:
+                profiles_info[profile_name].append({
+                    "name": model.get("alias") or model.get("name", "unknown").split("/")[-1],
+                    "full_name": model.get("name", "unknown"),
+                    "model_type": model.get("model_type", "chat"),
+                })
+
+        if profile:
+            # Use specific profile's models
+            if profile in profiles_info:
+                for m in profiles_info[profile]:
+                    models_info.append({"name": m["name"], "full_name": m["full_name"]})
+            else:
+                click.secho(f"Profile '{profile}' not found. Available: {', '.join(profiles_info.keys())}", fg="red")
+                sys.exit(1)
+        else:
+            # Use autoload models (default)
+            autoload_models = config.get("autoload", {}).get("models", [])
+            for model in autoload_models:
+                models_info.append({
+                    "name": model.get("alias") or model.get("name", "unknown").split("/")[-1],
+                    "full_name": model.get("name", "unknown"),
+                })
     except Exception:
         # Fallback if models.yaml doesn't exist or can't be parsed
         models_info = [
@@ -502,15 +538,230 @@ def init():
     # Generate model list for documentation
     model_list_str = "\n".join([f"- `{m['name']}` - {m['full_name']}" for m in models_info])
 
+    # Generate profiles section
+    profiles_section = ""
+    if profiles_info:
+        profile_lines = []
+        for pname, pmodels in profiles_info.items():
+            model_names = ", ".join([m["name"] for m in pmodels])
+            profile_lines.append(f"- **{pname}**: {model_names}")
+        profiles_section = f"""
+## Available Profiles
+
+Switch profiles with `sparkstation start -d --profile <name>`:
+
+{chr(10).join(profile_lines)}
+"""
+
+    active_profile_note = f"\n**Active profile**: `{profile}`\n" if profile else ""
+
+    # Determine which models are available for conditional sections
+    model_aliases = {m["name"] for m in models_info}
+    has_clip = "clip-vit" in model_aliases
+    has_flux = "flux-dev" in model_aliases
+    has_gpt_oss = "gpt-oss-20b" in model_aliases
+    has_nemotron = "nemotron3-nano" in model_aliases
+
+    # Pick the primary chat model for examples
+    chat_model = "qwen3-vl-4b"
+    for name in ["qwen3-vl-4b", "nemotron3-nano", "gpt-oss-20b"]:
+        if name in model_aliases:
+            chat_model = name
+            break
+
+    # Pick the reasoning model for examples
+    reasoning_model = None
+    if has_nemotron:
+        reasoning_model = "nemotron3-nano"
+    elif has_gpt_oss:
+        reasoning_model = "gpt-oss-20b"
+
+    # Build reasoning section
+    reasoning_section = ""
+    if reasoning_model:
+        reasoning_section = f"""
+## Reasoning Models
+
+The `{reasoning_model}` model is a reasoning model that shows its thinking process. Access both the reasoning and final response:
+
+```python
+response = client.chat.completions.create(
+    model="{reasoning_model}",
+    messages=[{{"role": "user", "content": "What is 2+2?"}}]
+)
+
+# Final answer
+print(response.choices[0].message.content)
+
+# Reasoning process (if available)
+if hasattr(response.choices[0].message, 'reasoning_content'):
+    print(response.choices[0].message.reasoning_content)
+```
+"""
+
+    # Build CLIP section
+    clip_section = ""
+    if has_clip:
+        clip_section = """
+### Image Embeddings (CLIP)
+
+The `clip-vit` model generates embeddings for images using OpenAI's CLIP.
+
+**Important**: CLIP embeddings use a structured array format (different from standard OpenAI embeddings API).
+
+#### With Image URL
+```python
+response = client.embeddings.create(
+    model="clip-vit",
+    input=[{"image": "https://example.com/image.jpg"}]
+)
+
+embedding = response.data[0].embedding  # 768 dimensions
+```
+
+#### With Base64 Encoded Image
+```python
+import base64
+
+with open("image.jpg", "rb") as f:
+    image_data = base64.b64encode(f.read()).decode('utf-8')
+
+response = client.embeddings.create(
+    model="clip-vit",
+    input=[{"image": image_data}]
+)
+
+embedding = response.data[0].embedding  # 768 dimensions
+```
+
+**Note**: The input must be an array of objects with `"image"` keys, not flat strings.
+
+### Cross-Modal Search with CLIP
+
+CLIP embeddings enable searching images with text or finding similar images:
+
+```python
+# Embed text query
+text_response = client.embeddings.create(
+    model="clip-vit",
+    input="a red car"
+)
+text_embedding = text_response.data[0].embedding
+
+# Embed image
+image_response = client.embeddings.create(
+    model="clip-vit",
+    input=[{"image": "https://example.com/car.jpg"}]
+)
+image_embedding = image_response.data[0].embedding
+
+# Compare via cosine similarity (both in same 768-dim embedding space)
+from numpy import dot
+from numpy.linalg import norm
+
+similarity = dot(text_embedding, image_embedding) / (norm(text_embedding) * norm(image_embedding))
+print(f"Similarity: {similarity}")
+```
+"""
+
+    # Build FLUX section
+    flux_section = ""
+    if has_flux:
+        flux_section = """
+## Image Generation
+
+Sparkstation provides FLUX.1-dev for high-quality image generation via the OpenAI-compatible `/v1/images/generations` endpoint.
+
+### Basic Image Generation
+
+```python
+import base64
+
+response = client.images.generate(
+    model="flux-dev",
+    prompt="A photorealistic image of a red robot in a garden",
+    n=1,
+    size="512x512",
+    response_format="b64_json"
+)
+
+image_data = base64.b64decode(response.data[0].b64_json)
+with open("generated_image.png", "wb") as f:
+    f.write(image_data)
+```
+
+### With curl
+
+```bash
+curl http://localhost:8000/v1/images/generations \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer dummy-key" \\
+  -d '{
+    "model": "flux-dev",
+    "prompt": "A cyberpunk city at night with neon lights",
+    "n": 1,
+    "size": "512x512"
+  }'
+```
+
+**Notes**:
+- Image generation takes 20-60 seconds depending on size
+- FLUX.1-dev produces high-quality photorealistic images
+- First request may be slower (model warmup)
+"""
+
+    # Build model-specific details
+    model_details_lines = []
+    if "qwen3-vl-4b" in model_aliases:
+        model_details_lines.append("""- **Vision Chat** (`qwen3-vl-4b`):
+  - Supports image analysis via URL or base64
+  - Uses standard OpenAI vision format: `{"type": "image_url", "image_url": {"url": "..."}}`""")
+    if has_nemotron:
+        model_details_lines.append("""- **Reasoning + Tool Calling** (`nemotron3-nano`):
+  - NVIDIA Nemotron 3 Nano 30B with NVFP4 quantization
+  - 65k context window, includes reasoning traces in `reasoning_content` field
+  - Supports tool calling via qwen3_coder parser""")
+    if has_gpt_oss:
+        model_details_lines.append("""- **Reasoning** (`gpt-oss-20b`):
+  - Includes reasoning traces in `reasoning_content` field""")
+    if "bge-large" in model_aliases:
+        model_details_lines.append("""- **Text Embeddings** (`bge-large`):
+  - Generates 1024-dim embeddings for text semantic tasks
+  - Standard format: `input="text"` or `input=["text1", "text2"]`""")
+    if has_clip:
+        model_details_lines.append("""- **Image Embeddings** (`clip-vit`):
+  - Generates 768-dim embeddings for images and cross-modal search
+  - **Special format required**: Images must use `input=[{"image": "..."}]` (not flat strings)
+  - Text queries use simple format: `input="text query"`""")
+    if has_flux:
+        model_details_lines.append("""- **Image Generation** (`flux-dev`):
+  - Generates high-quality images from text prompts using FLUX.1-dev
+  - Supports sizes: 512x512, 1024x1024
+  - Takes 20-60 seconds per image""")
+
+    model_details_str = "\n\n".join(model_details_lines)
+
+    # Build API capabilities list
+    api_lines = []
+    chat_models = [m["name"] for m in models_info if m["name"] not in ("bge-large", "clip-vit", "flux-dev")]
+    if chat_models:
+        api_lines.append(f"  - Chat: `/v1/chat/completions` ({', '.join(chat_models)})")
+    embed_models = [m["name"] for m in models_info if m["name"] in ("bge-large", "clip-vit")]
+    if embed_models:
+        api_lines.append(f"  - Embeddings: `/v1/embeddings` ({', '.join(embed_models)})")
+    if has_flux:
+        api_lines.append("  - Image Generation: `/v1/images/generations` (flux-dev)")
+    api_capabilities_str = "\n".join(api_lines)
+
     sparkstation_section = f"""{SPARKSTATION_START_MARKER}
 # Sparkstation Local LLM Gateway
 
 This project has access to local LLM models through Sparkstation gateway.
-
+{active_profile_note}
 ## Available Models
 
 {model_list_str}
-
+{profiles_section}
 ## API Endpoint
 
 - **Base URL**: `http://localhost:8000/v1`
@@ -530,7 +781,7 @@ client = OpenAI(
 
 # Make a request
 response = client.chat.completions.create(
-    model="qwen3-vl-4b",  # or "gpt-oss-20b"
+    model="{chat_model}",
     messages=[
         {{"role": "user", "content": "Hello!"}}
     ]
@@ -546,7 +797,7 @@ curl http://localhost:8000/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer dummy-key" \\
   -d '{{
-    "model": "qwen3-vl-4b",
+    "model": "{chat_model}",
     "messages": [{{"role": "user", "content": "Hello!"}}]
   }}'
 ```
@@ -555,7 +806,7 @@ curl http://localhost:8000/v1/chat/completions \\
 
 ```python
 stream = client.chat.completions.create(
-    model="qwen3-vl-4b",
+    model="{chat_model}",
     messages=[{{"role": "user", "content": "Tell me a story"}}],
     stream=True
 )
@@ -609,30 +860,10 @@ response = client.chat.completions.create(
 ```
 
 **Note**: Vision requests use more tokens (~5000+ tokens for image processing).
-
-## Reasoning Models
-
-The `gpt-oss-20b` model is a reasoning model that shows its thinking process. Access both the reasoning and final response:
-
-```python
-response = client.chat.completions.create(
-    model="gpt-oss-20b",
-    messages=[{{"role": "user", "content": "What is 2+2?"}}]
-)
-
-# Final answer
-print(response.choices[0].message.content)
-# Output: "4"
-
-# Reasoning process (if available)
-if hasattr(response.choices[0].message, 'reasoning_content'):
-    print(response.choices[0].message.reasoning_content)
-    # Output: "We need to add 2 and 2. That equals 4."
-```
-
+{reasoning_section}
 ## Embeddings
 
-Sparkstation provides both text and image embedding models for semantic search, RAG, and similarity tasks.
+Sparkstation provides text embedding models for semantic search, RAG, and similarity tasks.
 
 ### Text Embeddings (bge-large)
 
@@ -650,46 +881,6 @@ embedding = response.data[0].embedding
 print(f"Embedding dimensions: {{len(embedding)}}")
 ```
 
-### Image Embeddings (CLIP)
-
-The `clip-vit` model generates embeddings for images using OpenAI's CLIP.
-
-**Important**: CLIP embeddings use a structured array format (different from standard OpenAI embeddings API).
-
-#### With Image URL
-```python
-response = client.embeddings.create(
-    model="clip-vit",
-    input=[{{"image": "https://example.com/image.jpg"}}]
-)
-
-embedding = response.data[0].embedding  # 768 dimensions
-```
-
-#### With Base64 Encoded Image
-```python
-import base64
-
-with open("image.jpg", "rb") as f:
-    image_data = base64.b64encode(f.read()).decode('utf-8')
-
-# Option 1: Raw base64 (simplest)
-response = client.embeddings.create(
-    model="clip-vit",
-    input=[{{"image": image_data}}]
-)
-
-# Option 2: With data URL prefix (also works)
-response = client.embeddings.create(
-    model="clip-vit",
-    input=[{{"image": f"data:image/jpeg;base64,{{image_data}}"}}]
-)
-
-embedding = response.data[0].embedding  # 768 dimensions
-```
-
-**Note**: The input must be an array of objects with `"image"` keys, not flat strings.
-
 ### Batch Embeddings
 
 Generate embeddings for multiple inputs at once:
@@ -703,159 +894,24 @@ response = client.embeddings.create(
 for i, data in enumerate(response.data):
     print(f"Document {{i}}: {{len(data.embedding)}} dimensions")
 ```
-
-### Cross-Modal Search with CLIP
-
-CLIP embeddings enable searching images with text or finding similar images:
-
-```python
-# Embed text query (text uses simple string format)
-text_response = client.embeddings.create(
-    model="clip-vit",
-    input="a red car"
-)
-text_embedding = text_response.data[0].embedding
-
-# Embed image (images use structured format)
-image_response = client.embeddings.create(
-    model="clip-vit",
-    input=[{{"image": "https://example.com/car.jpg"}}]
-)
-image_embedding = image_response.data[0].embedding
-
-# Compare via cosine similarity (both in same 768-dim embedding space)
-from numpy import dot
-from numpy.linalg import norm
-
-similarity = dot(text_embedding, image_embedding) / (norm(text_embedding) * norm(image_embedding))
-print(f"Similarity: {{similarity}}")
-```
-
+{clip_section}
 ### Use Cases
 
 - **Semantic Search**: Embed documents and queries, find similar content via cosine similarity
 - **RAG (Retrieval Augmented Generation)**: Embed knowledge base for context retrieval
-- **Image Search**: Use CLIP to search images by text description or find similar images
-- **Cross-Modal Retrieval**: Search images with text queries or text with image queries
 - **Classification**: Use embeddings as features for downstream ML tasks
-
-## Image Generation
-
-Sparkstation provides FLUX.1-dev for high-quality image generation via the OpenAI-compatible `/v1/images/generations` endpoint.
-
-### Basic Image Generation
-
-```python
-import base64
-
-# Generate an image
-response = client.images.generate(
-    model="flux-dev",
-    prompt="A photorealistic image of a red robot in a garden",
-    n=1,
-    size="512x512",
-    response_format="b64_json"
-)
-
-# Save the generated image
-image_data = base64.b64decode(response.data[0].b64_json)
-with open("generated_image.png", "wb") as f:
-    f.write(image_data)
-print("Image saved to generated_image.png")
-```
-
-### With curl
-
-```bash
-curl http://localhost:8000/v1/images/generations \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer dummy-key" \\
-  -d '{{
-    "model": "flux-dev",
-    "prompt": "A cyberpunk city at night with neon lights",
-    "n": 1,
-    "size": "512x512"
-  }}'
-```
-
-### Using requests
-
-```python
-import requests
-import base64
-
-response = requests.post(
-    "http://localhost:8000/v1/images/generations",
-    headers={{
-        "Authorization": "Bearer dummy-key",
-        "Content-Type": "application/json"
-    }},
-    json={{
-        "model": "flux-dev",
-        "prompt": "A watercolor painting of mountains at sunset",
-        "n": 1,
-        "size": "1024x1024"
-    }},
-    timeout=120  # Image generation takes 20-60 seconds
-)
-
-if response.ok:
-    data = response.json()
-    image_b64 = data["data"][0]["b64_json"]
-    with open("output.png", "wb") as f:
-        f.write(base64.b64decode(image_b64))
-    print("Image saved to output.png")
-```
-
-### Supported Parameters
-
-| Parameter | Values | Description |
-|-----------|--------|-------------|
-| `model` | `flux-dev` | FLUX.1-dev image model |
-| `prompt` | string | Text description of image to generate |
-| `n` | 1 | Number of images (currently 1 supported) |
-| `size` | `512x512`, `1024x1024` | Image dimensions |
-| `response_format` | `b64_json` | Response format (base64 JSON) |
-
-**Notes**:
-- Image generation takes 20-60 seconds depending on size
-- FLUX.1-dev produces high-quality photorealistic images
-- First request may be slower (model warmup)
-
+{flux_section}
 ## Important Notes
 
 - **Do not start/stop Sparkstation services** - they are managed by the system
 - Models are already running and ready to use
 - Use the gateway endpoint (`http://localhost:8000/v1`) for all requests
 - All models support standard OpenAI APIs:
-  - Chat: `/v1/chat/completions` (qwen3-vl-4b, gpt-oss-20b)
-  - Embeddings: `/v1/embeddings` (bge-large, clip-vit)
-  - Image Generation: `/v1/images/generations` (flux-dev)
+{api_capabilities_str}
 
 ### Model-Specific Details
 
-- **Vision Chat** (`qwen3-vl-4b`):
-  - Supports image analysis via URL or base64
-  - Uses standard OpenAI vision format: `{{"type": "image_url", "image_url": {{"url": "..."}}}}`
-
-- **Reasoning** (`gpt-oss-20b`):
-  - Includes reasoning traces in `reasoning_content` field
-
-- **Text Embeddings** (`bge-large`):
-  - Generates 1024-dim embeddings for text semantic tasks
-  - Standard format: `input="text"` or `input=["text1", "text2"]`
-
-- **Image Embeddings** (`clip-vit`):
-  - Generates 768-dim embeddings for images and cross-modal search
-  - **Special format required**: Images must use `input=[{{"image": "..."}}]` (not flat strings)
-  - Text queries use simple format: `input="text query"`
-  - Supports URL, base64 with data URL prefix, or raw base64
-
-- **Image Generation** (`flux-dev`):
-  - Generates high-quality images from text prompts using FLUX.1-dev
-  - Supports sizes: 512x512, 1024x1024
-  - Takes 20-60 seconds per image
-  - Returns base64-encoded PNG
+{model_details_str}
 {SPARKSTATION_END_MARKER}"""
 
     # Handle the three cases: create, append, or update

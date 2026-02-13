@@ -107,3 +107,47 @@ profiles:
       auto_suspend_enabled: false
       extra_args:
         max_model_len: 4096
+
+  # OpenClaw mode - Nemotron 3 Nano 30B + embeddings + vision (~53 GiB total)
+  openclaw:
+    - name: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4"
+      alias: "nemotron3-nano"
+      backend: "vllm"
+      model_type: "chat"
+      quantization: "none"
+      memory_gb: 36
+      idle_timeout_minutes: 60
+      auto_suspend_enabled: false
+      docker_image: "nvcr.io/nvidia/vllm:26.01-py3"
+      env_vars:
+        VLLM_USE_FLASHINFER_MOE_FP4: "1"
+      volumes:
+        - "nano_v3_reasoning_parser.py:/workspace/nano_v3_reasoning_parser.py"
+      extra_args:
+        max_model_len: 65536
+        max_concurrent_requests: 8
+        tool_call_parser: "qwen3_coder"
+        reasoning_parser: "nano_v3"
+        reasoning_parser_plugin: "/workspace/nano_v3_reasoning_parser.py"
+        kv_cache_dtype: "fp8"
+        shm_size: "64g"
+
+    - name: "BAAI/bge-large-en-v1.5"
+      alias: "bge-large"
+      backend: "vllm"
+      model_type: "embedding"
+      quantization: "none"
+      memory_gb: 2.5
+      docker_image: "nvcr.io/nvidia/vllm:26.01-py3"
+
+    - name: "Qwen/Qwen3-VL-4B-Instruct-FP8"
+      alias: "qwen3-vl-4b"
+      backend: "vllm"
+      model_type: "chat"
+      quantization: "none"
+      memory_gb: 14
+      docker_image: "nvcr.io/nvidia/vllm:26.01-py3"
+      extra_args:
+        max_model_len: 4096
+        max_concurrent_requests: 4
+        tool_call_parser: "hermes"

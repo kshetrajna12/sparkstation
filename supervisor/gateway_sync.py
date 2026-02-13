@@ -95,6 +95,7 @@ class GatewaySync:
                         "model": f"openai/{model.model_name}",  # Use actual model name from backend
                         "api_base": f"{model.base_url}/v1",
                         "api_key": "EMPTY",
+                        "drop_params": True,  # Silently drop unsupported params (e.g. reasoning_effort)
                     },
                 }
             )

@@ -154,30 +154,52 @@ Sparkstation includes a unified CLI for easier management:
 ### Start/Stop Sparkstation
 
 ```bash
-# Start supervisor in background
-uv run python cli.py start -d
+# Start with default models (general purpose)
+sparkstation start -d
+
+# Start with a named profile
+sparkstation start -d --profile openclaw
 
 # Check status
-uv run python cli.py status
+sparkstation status
 
-# Stop supervisor
-uv run python cli.py stop
+# Stop all services and containers
+sparkstation stop
 
-# Restart supervisor
-uv run python cli.py restart
+# Restart
+sparkstation restart
+```
+
+### Model Profiles
+
+Sparkstation supports named profiles for different model configurations. Profiles are defined in `models.yaml` under the `profiles:` section.
+
+| Profile | Models | Memory | Use Case |
+|---------|--------|--------|----------|
+| *(default)* | gpt-oss-20b, bge-large, clip-vit, qwen3-vl-4b, flux-dev | ~100 GiB | General purpose: reasoning, embeddings, vision, image gen |
+| `openclaw` | nemotron3-nano (30B), bge-large, qwen3-vl-4b | ~53 GiB | OpenClaw: tool calling, reasoning, vision, embeddings |
+| `dev` | qwen3-vl-4b | ~14 GiB | Lightweight development |
+| `prod` | qwen3-vl-4b, gpt-oss-20b | ~58 GiB | Production chat + reasoning |
+
+```bash
+# Start with openclaw profile
+sparkstation start -d --profile openclaw
+
+# Load a profile's models into a running supervisor
+sparkstation models start --profile openclaw
 ```
 
 ### Manage Models
 
 ```bash
 # List all models
-uv run python cli.py models list
+sparkstation models list
 
 # Stop a model
-uv run python cli.py models stop <model-id>
+sparkstation models stop <model-id>
 
 # View model logs (streaming)
-uv run python cli.py models logs -f <model-id>
+sparkstation models logs -f <model-id>
 ```
 
 ### Cleanup Database Issues

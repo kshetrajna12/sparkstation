@@ -87,13 +87,16 @@ class VLLMLauncher(ModelLauncher):
                 # Check if this is a vision-language model (has conv3d for video processing)
                 is_vision_model = "VL" in config.model_name.upper() or "vision" in config.model_name.lower()
 
+                # Determine shm-size (can be overridden by extra_args)
+                shm_size = config.extra_args.get("shm_size", "32g")
+
                 docker_cmd = [
                     "docker",
                     "run",
                     "-d",  # Detached mode
                     "--platform", "linux/arm64",  # Explicit ARM64 for DGX Spark
                     "--gpus", "all",  # GPU passthrough
-                    "--shm-size", "32g",  # Shared memory for model loading
+                    "--shm-size", shm_size,  # Shared memory for model loading
                     "--ipc=host",  # IPC mode host
                     "-p", f"{port}:{port}",  # Port mapping
                     "-v", f"{Path.home()}/.cache/huggingface:/root/.cache/huggingface",  # HuggingFace cache
@@ -103,9 +106,30 @@ class VLLMLauncher(ModelLauncher):
                 if is_vision_model:
                     docker_cmd.extend(["-e", "TORCH_CUDNN_V8_API_DISABLED=1"])
 
+                # Add per-model env vars
+                for env_key, env_val in config.env_vars.items():
+                    docker_cmd.extend(["-e", f"{env_key}={env_val}"])
+
+                # Add per-model volume mounts (resolve relative paths to project dir)
+                project_dir = Path.cwd()
+                for vol in config.volumes:
+                    parts = vol.split(":", 1)
+                    if len(parts) == 2:
+                        host_path, container_path = parts
+                        # Resolve relative host paths against project directory
+                        host_resolved = Path(host_path)
+                        if not host_resolved.is_absolute():
+                            host_resolved = project_dir / host_resolved
+                        docker_cmd.extend(["-v", f"{host_resolved}:{container_path}"])
+                    else:
+                        docker_cmd.extend(["-v", vol])
+
+                # Use per-model docker image if specified, otherwise fall back to settings
+                docker_image = config.docker_image or settings.vllm_docker_image
+
                 docker_cmd.extend([
                     "--name", f"sparkstation-{model_id}",  # Container name
-                    settings.vllm_docker_image,
+                    docker_image,
                     "vllm", "serve",
                     config.model_name,
                     "--host", "0.0.0.0",  # Bind to all interfaces
@@ -126,8 +150,7 @@ class VLLMLauncher(ModelLauncher):
 
                 # Add embedding-specific or chat-specific flags
                 if is_embedding:
-                    # For embedding models, use --task embedding flag (vLLM v0.10+)
-                    docker_cmd.extend(["--task", "embedding"])
+                    # Embedding models are auto-detected by vLLM from model config
                     logger.info(f"Using embedding mode for {config.model_name}")
                 else:
                     # For chat models, add max-model-len and max-num-seqs
@@ -154,6 +177,22 @@ class VLLMLauncher(ModelLauncher):
                             "--reasoning-parser", reasoning_parser,
                         ])
                         logger.info(f"Enabled reasoning parser: {reasoning_parser}")
+
+                    # Support reasoning parser plugin (external parser file)
+                    reasoning_parser_plugin = config.extra_args.get("reasoning_parser_plugin")
+                    if reasoning_parser_plugin:
+                        docker_cmd.extend([
+                            "--reasoning-parser-plugin", reasoning_parser_plugin,
+                        ])
+                        logger.info(f"Enabled reasoning parser plugin: {reasoning_parser_plugin}")
+
+                    # Support KV cache dtype override (e.g., fp8 for memory efficiency)
+                    kv_cache_dtype = config.extra_args.get("kv_cache_dtype")
+                    if kv_cache_dtype:
+                        docker_cmd.extend([
+                            "--kv-cache-dtype", kv_cache_dtype,
+                        ])
+                        logger.info(f"Using KV cache dtype: {kv_cache_dtype}")
 
                 # Only add quantization flag if specified and not auto-detected
                 # AWQ is auto-detected from model config, None means skip quantization

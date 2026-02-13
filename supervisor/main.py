@@ -98,6 +98,14 @@ async def lifespan(app: FastAPI):
     if reconcile_summary["fixed_stopped"] or reconcile_summary["fixed_running"] or reconcile_summary["removed_orphaned"]:
         logger.warning(f"Database reconciliation found inconsistencies: {reconcile_summary}")
 
+    # Purge stale DB entries (stopped/failed/starting with no container)
+    # This prevents confusion when switching between profiles
+    all_models = await registry.list_all()
+    for model in all_models:
+        if model.status not in [ModelStatus.RUNNING]:
+            logger.info(f"Purging stale DB entry: {model.model_alias or model.model_name} (status: {model.status})")
+            await registry.delete(model.id)
+
     resource_manager = ResourceManager()
     launcher_factory = LauncherFactory()
     auto_suspend_manager = AutoSuspendManager(registry, launcher_factory, resource_manager)
@@ -113,11 +121,15 @@ async def lifespan(app: FastAPI):
         await health_check_manager.start()
         logger.info("Health check manager activated")
 
-    # Auto-load models from config
-    from supervisor.models_config import get_autoload_models
+    # Auto-load models from config (or from named profile)
+    from supervisor.models_config import get_autoload_models, get_profile_models
     from supervisor.models import ModelStartRequest
 
-    autoload_models = get_autoload_models()
+    if settings.startup_profile:
+        autoload_models = get_profile_models(settings.startup_profile)
+        logger.info(f"Loading profile: {settings.startup_profile} ({len(autoload_models)} models)")
+    else:
+        autoload_models = get_autoload_models()
     if autoload_models:
         # Separate models by backend for ordered loading:
         # 1. vLLM/SGLang first - they calculate gpu_memory_utilization as percentage of TOTAL memory
@@ -130,7 +142,40 @@ async def lifespan(app: FastAPI):
         logger.info(f"Auto-loading models: {len(vllm_sglang_models)} vLLM/SGLang, {len(clip_models)} CLIP, {len(flux_models)} FLUX")
         launched_model_ids = []  # Track models we actually launched
 
-        # Phase 1: Load vLLM/SGLang models first (sequential with delays)
+        # Helper function to wait for models to be ready
+        async def wait_for_models(model_ids: list, next_phase: str):
+            if not model_ids:
+                logger.info(f"No models to wait for, proceeding to {next_phase}")
+                return
+            logger.info(f"Waiting for {len(model_ids)} model(s) to be ready before {next_phase}...")
+            while True:
+                models = await registry.list_all()
+                models_by_id = {m.id: m for m in models}
+                pending_models = []
+                for model_id in model_ids:
+                    model = models_by_id.get(model_id)
+                    # Model is pending if: not in registry yet, OR still in STARTING state
+                    if model is None or model.status == ModelStatus.STARTING:
+                        pending_models.append(model_id)
+                if not pending_models:
+                    running_count = sum(1 for mid in model_ids
+                                       if models_by_id.get(mid) and models_by_id[mid].status == ModelStatus.RUNNING)
+                    failed_count = sum(1 for mid in model_ids
+                                      if models_by_id.get(mid) and models_by_id[mid].status == ModelStatus.FAILED)
+                    logger.info(f"All models ready ({running_count} running, {failed_count} failed), proceeding to {next_phase}")
+                    break
+                # Get names for logging
+                pending_names = []
+                for model_id in pending_models:
+                    model = models_by_id.get(model_id) if isinstance(model_id, str) else None
+                    if model:
+                        pending_names.append(model.model_alias or model.model_name)
+                    else:
+                        pending_names.append(model_id if isinstance(model_id, str) else "unknown")
+                logger.info(f"Still waiting for {len(pending_models)} model(s): {pending_names}")
+                await asyncio.sleep(10)
+
+        # Phase 1: Load vLLM/SGLang models first (sequential - wait for each to be ready)
         logger.info("=== PHASE 1: Loading vLLM/SGLang models ===")
         for i, model_config in enumerate(vllm_sglang_models):
             try:
@@ -175,6 +220,9 @@ async def lifespan(app: FastAPI):
                     num_speculative_tokens=model_config.num_speculative_tokens,
                     speculative_method=model_config.speculative_method,
                     extra_args=model_config.extra_args,
+                    docker_image=model_config.docker_image,
+                    env_vars=model_config.env_vars,
+                    volumes=model_config.volumes,
                 )
 
                 # Launch model
@@ -197,6 +245,9 @@ async def lifespan(app: FastAPI):
                     "num_speculative_tokens": config.num_speculative_tokens,
                     "speculative_method": config.speculative_method,
                     "extra_args": config.extra_args,
+                    "docker_image": config.docker_image,
+                    "env_vars": config.env_vars,
+                    "volumes": config.volumes,
                 }
 
                 # Save to registry
@@ -204,50 +255,18 @@ async def lifespan(app: FastAPI):
                 launched_model_ids.append(instance.id)
                 logger.info(f"Auto-loaded model: {model_config.alias or model_config.name} (id: {instance.id})")
 
-                # Small delay between launches to stagger GPU memory allocation
-                # This avoids race conditions while still allowing parallel loading
-                if i < len(vllm_sglang_models) - 1:  # Don't sleep after the last model
-                    logger.info(f"Sleeping 15s before next vLLM/SGLang model...")
-                    await asyncio.sleep(15)
+                # Wait for this model to be RUNNING before starting the next one.
+                # This prevents memory race conditions where later models grab memory
+                # while earlier models are still in torch.compile/KV cache allocation.
+                if i < len(vllm_sglang_models) - 1:  # Don't wait after the last model
+                    logger.info(f"Waiting for {model_config.alias or model_config.name} to be ready before next model...")
+                    await wait_for_models([instance.id], f"launch model {i+2}/{len(vllm_sglang_models)}")
 
             except Exception as e:
                 logger.error(f"Failed to auto-load model {model_config.name}: {e}")
                 # Continue with other models
 
         logger.info(f"=== PHASE 1 COMPLETE: Launched {len(launched_model_ids)} vLLM/SGLang models ===")
-
-        # Helper function to wait for models to be ready
-        async def wait_for_models(model_ids: list, next_phase: str):
-            if not model_ids:
-                logger.info(f"No models to wait for, proceeding to {next_phase}")
-                return
-            logger.info(f"Waiting for {len(model_ids)} model(s) to be ready before {next_phase}...")
-            while True:
-                models = await registry.list_all()
-                models_by_id = {m.id: m for m in models}
-                pending_models = []
-                for model_id in model_ids:
-                    model = models_by_id.get(model_id)
-                    # Model is pending if: not in registry yet, OR still in STARTING state
-                    if model is None or model.status == ModelStatus.STARTING:
-                        pending_models.append(model_id)
-                if not pending_models:
-                    running_count = sum(1 for mid in model_ids
-                                       if models_by_id.get(mid) and models_by_id[mid].status == ModelStatus.RUNNING)
-                    failed_count = sum(1 for mid in model_ids
-                                      if models_by_id.get(mid) and models_by_id[mid].status == ModelStatus.FAILED)
-                    logger.info(f"All models ready ({running_count} running, {failed_count} failed), proceeding to {next_phase}")
-                    break
-                # Get names for logging
-                pending_names = []
-                for model_id in pending_models:
-                    model = models_by_id.get(model_id) if isinstance(model_id, str) else None
-                    if model:
-                        pending_names.append(model.model_alias or model.model_name)
-                    else:
-                        pending_names.append(model_id if isinstance(model_id, str) else "unknown")
-                logger.info(f"Still waiting for {len(pending_models)} model(s): {pending_names}")
-                await asyncio.sleep(10)
 
         # Wait for vLLM/SGLang models before loading CLIP
         logger.info("=== Waiting for vLLM/SGLang models to be RUNNING ===")
@@ -282,6 +301,9 @@ async def lifespan(app: FastAPI):
                     idle_timeout_minutes=model_config.idle_timeout_minutes,
                     auto_suspend_enabled=model_config.auto_suspend_enabled,
                     extra_args=model_config.extra_args,
+                    docker_image=model_config.docker_image,
+                    env_vars=model_config.env_vars,
+                    volumes=model_config.volumes,
                 )
 
                 launcher = launcher_factory.get_launcher(config.backend)
@@ -298,6 +320,9 @@ async def lifespan(app: FastAPI):
                     "auto_suspend_enabled": config.auto_suspend_enabled,
                     "idle_timeout_minutes": config.idle_timeout_minutes,
                     "extra_args": config.extra_args,
+                    "docker_image": config.docker_image,
+                    "env_vars": config.env_vars,
+                    "volumes": config.volumes,
                 }
 
                 await registry.create(instance)
@@ -343,6 +368,9 @@ async def lifespan(app: FastAPI):
                         idle_timeout_minutes=model_config.idle_timeout_minutes,
                         auto_suspend_enabled=model_config.auto_suspend_enabled,
                         extra_args=model_config.extra_args,
+                        docker_image=model_config.docker_image,
+                        env_vars=model_config.env_vars,
+                        volumes=model_config.volumes,
                     )
 
                     launcher = launcher_factory.get_launcher(config.backend)
@@ -359,6 +387,9 @@ async def lifespan(app: FastAPI):
                         "auto_suspend_enabled": config.auto_suspend_enabled,
                         "idle_timeout_minutes": config.idle_timeout_minutes,
                         "extra_args": config.extra_args,
+                        "docker_image": config.docker_image,
+                        "env_vars": config.env_vars,
+                        "volumes": config.volumes,
                     }
 
                     await registry.create(instance)

@@ -25,6 +25,9 @@ class ModelConfigYAML(BaseModel):
     num_speculative_tokens: int = 5
     speculative_method: Optional[str] = None
     extra_args: Dict[str, Any] = Field(default_factory=dict)
+    docker_image: Optional[str] = None  # Per-model Docker image override
+    env_vars: Dict[str, str] = Field(default_factory=dict)  # Extra container env vars
+    volumes: List[str] = Field(default_factory=list)  # Extra volume mounts (host:container)
 
 
 class ModelsConfiguration(BaseModel):
