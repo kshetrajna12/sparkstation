@@ -178,6 +178,7 @@ Sparkstation supports named profiles for different model configurations. Profile
 |---------|--------|--------|----------|
 | *(default)* | gpt-oss-20b, bge-large, clip-vit, qwen3-vl-4b, flux-dev | ~100 GiB | General purpose: reasoning, embeddings, vision, image gen |
 | `openclaw` | nemotron3-nano (30B), bge-large, qwen3-vl-4b | ~53 GiB | OpenClaw: tool calling, reasoning, vision, embeddings |
+| `image-indexing` | qwen3-vl-30b (30B-A3B), bge-large, clip-vit | ~42.5 GiB | Image indexing: vision chat, text + image embeddings |
 | `dev` | qwen3-vl-4b | ~14 GiB | Lightweight development |
 | `prod` | qwen3-vl-4b, gpt-oss-20b | ~58 GiB | Production chat + reasoning |
 
@@ -399,7 +400,7 @@ print(f"Similarity: {similarity:.4f}")
 
 **Supported embedding models:**
 - `bge-large`: Text embeddings (1024 dimensions, vLLM) - for semantic search, RAG
-- `clip-vit`: Image embeddings (768 dimensions, SGLang) - for image search, cross-modal retrieval
+- `clip-vit`: Image embeddings (768 dimensions, CLIP backend) - for image search, cross-modal retrieval
 
 **Use cases:**
 - Semantic search and similarity matching
