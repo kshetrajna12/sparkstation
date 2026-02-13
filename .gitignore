@@ -253,3 +253,6 @@ model_logs/
 # OS-specific
 .DS_Store
 Thumbs.db
+
+# Litellm yaml
+litellm.yaml

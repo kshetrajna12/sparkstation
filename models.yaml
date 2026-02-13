@@ -151,3 +151,35 @@ profiles:
         max_model_len: 4096
         max_concurrent_requests: 4
         tool_call_parser: "hermes"
+
+  # Image indexing mode - VL-30B + text embeddings + CLIP (~42.5 GiB total)
+  image-indexing:
+    - name: "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"
+      alias: "qwen3-vl-30b"
+      backend: "vllm"
+      model_type: "chat"
+      quantization: "none"
+      memory_gb: 35
+      idle_timeout_minutes: 60
+      auto_suspend_enabled: false
+      extra_args:
+        max_model_len: 4096
+        max_concurrent_requests: 4
+        tool_call_parser: "hermes"
+        # EAGLE3 spec decoding - blocked by vLLM bug (image_token_index vs image_token_id)
+        # speculative_model: "modal-labs/qwen3-vl-30b-a3b-eagle3-v0"
+        # num_speculative_tokens: 5
+
+    - name: "BAAI/bge-large-en-v1.5"
+      alias: "bge-large"
+      backend: "vllm"
+      model_type: "embedding"
+      quantization: "none"
+      memory_gb: 2.5
+
+    - name: "openai/clip-vit-large-patch14"
+      alias: "clip-vit"
+      backend: "clip"
+      model_type: "embedding"
+      quantization: "none"
+      memory_gb: 5

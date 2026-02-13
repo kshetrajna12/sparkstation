@@ -564,9 +564,16 @@ Switch profiles with `sparkstation start -d --profile <name>`:
 
     # Pick the primary chat model for examples
     chat_model = "qwen3-vl-4b"
-    for name in ["qwen3-vl-4b", "nemotron3-nano", "gpt-oss-20b"]:
+    for name in ["qwen3-vl-30b", "qwen3-vl-4b", "nemotron3-nano", "gpt-oss-20b"]:
         if name in model_aliases:
             chat_model = name
+            break
+
+    # Detect vision-capable model (any qwen3-vl variant)
+    vision_model = None
+    for name in model_aliases:
+        if name.startswith("qwen3-vl"):
+            vision_model = name
             break
 
     # Pick the reasoning model for examples
@@ -712,10 +719,10 @@ curl http://localhost:8000/v1/images/generations \\
 
     # Build model-specific details
     model_details_lines = []
-    if "qwen3-vl-4b" in model_aliases:
-        model_details_lines.append("""- **Vision Chat** (`qwen3-vl-4b`):
+    if vision_model:
+        model_details_lines.append(f"""- **Vision Chat** (`{vision_model}`):
   - Supports image analysis via URL or base64
-  - Uses standard OpenAI vision format: `{"type": "image_url", "image_url": {"url": "..."}}`""")
+  - Uses standard OpenAI vision format: `{{"type": "image_url", "image_url": {{"url": "..."}}}}`""")
     if has_nemotron:
         model_details_lines.append("""- **Reasoning + Tool Calling** (`nemotron3-nano`):
   - NVIDIA Nemotron 3 Nano 30B with NVFP4 quantization
@@ -818,13 +825,13 @@ for chunk in stream:
 
 ## Vision (Image Analysis)
 
-The `qwen3-vl-4b` model supports vision capabilities. You can pass images via URL or base64:
+The `{vision_model}` model supports vision capabilities. You can pass images via URL or base64:
 
 ### With Image URL
 
 ```python
 response = client.chat.completions.create(
-    model="qwen3-vl-4b",
+    model="{vision_model}",
     messages=[
         {{
             "role": "user",
@@ -846,7 +853,7 @@ with open("image.jpg", "rb") as f:
     image_data = base64.b64encode(f.read()).decode('utf-8')
 
 response = client.chat.completions.create(
-    model="qwen3-vl-4b",
+    model="{vision_model}",
     messages=[
         {{
             "role": "user",

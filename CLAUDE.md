@@ -3,13 +3,13 @@
 
 This project has access to local LLM models through Sparkstation gateway.
 
-**Active profile**: `openclaw`
+**Active profile**: `image-indexing`
 
 ## Available Models
 
-- `nemotron3-nano` - nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4
+- `qwen3-vl-30b` - Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
 - `bge-large` - BAAI/bge-large-en-v1.5
-- `qwen3-vl-4b` - Qwen/Qwen3-VL-4B-Instruct-FP8
+- `clip-vit` - openai/clip-vit-large-patch14
 
 ## Available Profiles
 
@@ -19,6 +19,7 @@ Switch profiles with `sparkstation start -d --profile <name>`:
 - **prod**: qwen3-vl-4b, gpt-oss-20b
 - **inference**: qwen3-vl-4b
 - **openclaw**: nemotron3-nano, bge-large, qwen3-vl-4b
+- **image-indexing**: qwen3-vl-30b, bge-large, clip-vit
 
 ## API Endpoint
 
@@ -39,7 +40,7 @@ client = OpenAI(
 
 # Make a request
 response = client.chat.completions.create(
-    model="qwen3-vl-4b",
+    model="qwen3-vl-30b",
     messages=[
         {"role": "user", "content": "Hello!"}
     ]
@@ -55,7 +56,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer dummy-key" \
   -d '{
-    "model": "qwen3-vl-4b",
+    "model": "qwen3-vl-30b",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -64,7 +65,7 @@ curl http://localhost:8000/v1/chat/completions \
 
 ```python
 stream = client.chat.completions.create(
-    model="qwen3-vl-4b",
+    model="qwen3-vl-30b",
     messages=[{"role": "user", "content": "Tell me a story"}],
     stream=True
 )
@@ -76,13 +77,13 @@ for chunk in stream:
 
 ## Vision (Image Analysis)
 
-The `qwen3-vl-4b` model supports vision capabilities. You can pass images via URL or base64:
+The `qwen3-vl-30b` model supports vision capabilities. You can pass images via URL or base64:
 
 ### With Image URL
 
 ```python
 response = client.chat.completions.create(
-    model="qwen3-vl-4b",
+    model="qwen3-vl-30b",
     messages=[
         {
             "role": "user",
@@ -104,7 +105,7 @@ with open("image.jpg", "rb") as f:
     image_data = base64.b64encode(f.read()).decode('utf-8')
 
 response = client.chat.completions.create(
-    model="qwen3-vl-4b",
+    model="qwen3-vl-30b",
     messages=[
         {
             "role": "user",
@@ -118,24 +119,6 @@ response = client.chat.completions.create(
 ```
 
 **Note**: Vision requests use more tokens (~5000+ tokens for image processing).
-
-## Reasoning Models
-
-The `nemotron3-nano` model is a reasoning model that shows its thinking process. Access both the reasoning and final response:
-
-```python
-response = client.chat.completions.create(
-    model="nemotron3-nano",
-    messages=[{"role": "user", "content": "What is 2+2?"}]
-)
-
-# Final answer
-print(response.choices[0].message.content)
-
-# Reasoning process (if available)
-if hasattr(response.choices[0].message, 'reasoning_content'):
-    print(response.choices[0].message.reasoning_content)
-```
 
 ## Embeddings
 
@@ -171,6 +154,66 @@ for i, data in enumerate(response.data):
     print(f"Document {i}: {len(data.embedding)} dimensions")
 ```
 
+### Image Embeddings (CLIP)
+
+The `clip-vit` model generates embeddings for images using OpenAI's CLIP.
+
+**Important**: CLIP embeddings use a structured array format (different from standard OpenAI embeddings API).
+
+#### With Image URL
+```python
+response = client.embeddings.create(
+    model="clip-vit",
+    input=[{"image": "https://example.com/image.jpg"}]
+)
+
+embedding = response.data[0].embedding  # 768 dimensions
+```
+
+#### With Base64 Encoded Image
+```python
+import base64
+
+with open("image.jpg", "rb") as f:
+    image_data = base64.b64encode(f.read()).decode('utf-8')
+
+response = client.embeddings.create(
+    model="clip-vit",
+    input=[{"image": image_data}]
+)
+
+embedding = response.data[0].embedding  # 768 dimensions
+```
+
+**Note**: The input must be an array of objects with `"image"` keys, not flat strings.
+
+### Cross-Modal Search with CLIP
+
+CLIP embeddings enable searching images with text or finding similar images:
+
+```python
+# Embed text query
+text_response = client.embeddings.create(
+    model="clip-vit",
+    input="a red car"
+)
+text_embedding = text_response.data[0].embedding
+
+# Embed image
+image_response = client.embeddings.create(
+    model="clip-vit",
+    input=[{"image": "https://example.com/car.jpg"}]
+)
+image_embedding = image_response.data[0].embedding
+
+# Compare via cosine similarity (both in same 768-dim embedding space)
+from numpy import dot
+from numpy.linalg import norm
+
+similarity = dot(text_embedding, image_embedding) / (norm(text_embedding) * norm(image_embedding))
+print(f"Similarity: {similarity}")
+```
+
 ### Use Cases
 
 - **Semantic Search**: Embed documents and queries, find similar content via cosine similarity
@@ -183,21 +226,21 @@ for i, data in enumerate(response.data):
 - Models are already running and ready to use
 - Use the gateway endpoint (`http://localhost:8000/v1`) for all requests
 - All models support standard OpenAI APIs:
-  - Chat: `/v1/chat/completions` (nemotron3-nano, qwen3-vl-4b)
-  - Embeddings: `/v1/embeddings` (bge-large)
+  - Chat: `/v1/chat/completions` (qwen3-vl-30b)
+  - Embeddings: `/v1/embeddings` (bge-large, clip-vit)
 
 ### Model-Specific Details
 
-- **Vision Chat** (`qwen3-vl-4b`):
+- **Vision Chat** (`qwen3-vl-30b`):
   - Supports image analysis via URL or base64
   - Uses standard OpenAI vision format: `{"type": "image_url", "image_url": {"url": "..."}}`
-
-- **Reasoning + Tool Calling** (`nemotron3-nano`):
-  - NVIDIA Nemotron 3 Nano 30B with NVFP4 quantization
-  - 65k context window, includes reasoning traces in `reasoning_content` field
-  - Supports tool calling via qwen3_coder parser
 
 - **Text Embeddings** (`bge-large`):
   - Generates 1024-dim embeddings for text semantic tasks
   - Standard format: `input="text"` or `input=["text1", "text2"]`
+
+- **Image Embeddings** (`clip-vit`):
+  - Generates 768-dim embeddings for images and cross-modal search
+  - **Special format required**: Images must use `input=[{"image": "..."}]` (not flat strings)
+  - Text queries use simple format: `input="text query"`
 <!-- SPARKSTATION-END -->
