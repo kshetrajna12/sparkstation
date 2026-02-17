@@ -7,27 +7,39 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv for reliable dependency resolution
+# Install setuptools <70 (needed for pkg_resources used by yolov5)
+RUN pip install --no-cache-dir "setuptools<70"
+
+# Install uv for fast, reliable dependency resolution
 RUN pip install --no-cache-dir uv
 
-# Create a venv that inherits base image packages (torch, onnx, numpy, etc.)
-RUN uv venv /opt/species --python $(which python3) --seed
-ENV VIRTUAL_ENV=/opt/species
-ENV PATH="/opt/species/bin:$PATH"
+# Install all deps directly into system python, but exclude torch/onnx
+# (already in base image as CUDA-enabled builds — must not be overwritten)
+RUN uv pip install --system \
+    --no-deps megadetector speciesnet
 
-# Install setuptools <70 into venv (needed for pkg_resources used by yolov5)
-RUN uv pip install "setuptools<70"
-
-# Install all deps into the venv — uv resolves cleanly and uses
-# existing system packages where compatible
-RUN uv pip install \
-    megadetector \
-    speciesnet \
+RUN uv pip install --system \
+    --exclude-newer 2026-02-18 \
     fastapi \
     "uvicorn[standard]" \
     pillow \
     timm \
-    httpx
+    httpx \
+    humanfriendly \
+    cloudpathlib \
+    kagglehub \
+    yolov5 \
+    sahi \
+    supervision \
+    jsonpickle \
+    pyqtree \
+    seaborn \
+    scikit-learn \
+    python-dateutil \
+    reverse_geocoder \
+    absl-py \
+    onnx2torch \
+    opencv-python-headless
 
 # Copy server code
 WORKDIR /app
