@@ -152,7 +152,7 @@ profiles:
         max_concurrent_requests: 4
         tool_call_parser: "hermes"
 
-  # Image indexing mode - VL-30B + text embeddings + CLIP (~42.5 GiB total)
+  # Image indexing mode - VL-30B + text embeddings + CLIP + species detection (~47.5 GiB total)
   image-indexing:
     - name: "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"
       alias: "qwen3-vl-30b"
@@ -183,3 +183,12 @@ profiles:
       model_type: "embedding"
       quantization: "none"
       memory_gb: 5
+
+    - name: "species-ensemble"
+      alias: "species-detect"
+      backend: "species"
+      model_type: "detection"
+      quantization: "none"
+      memory_gb: 5  # MegaDetector (~0.3GB) + SpeciesNet classifier (~0.2GB) + iNat21 ViT-L (~1.2GB) + overhead
+      idle_timeout_minutes: 60
+      auto_suspend_enabled: false

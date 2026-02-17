@@ -36,6 +36,7 @@ class Backend(str, Enum):
     SGLANG = "sglang"
     FLUX = "flux"
     CLIP = "clip"
+    SPECIES = "species"
     TRT_LLM = "trt-llm"  # Future support
 
 
@@ -45,6 +46,7 @@ class ModelType(str, Enum):
     CHAT = "chat"
     EMBEDDING = "embedding"
     IMAGE = "image"
+    DETECTION = "detection"
 
 
 # SQLAlchemy ORM Model
