@@ -138,8 +138,9 @@ async def lifespan(app: FastAPI):
         vllm_sglang_models = [m for m in autoload_models if m.backend in ("vllm", "sglang")]
         clip_models = [m for m in autoload_models if m.backend == "clip"]
         flux_models = [m for m in autoload_models if m.backend == "flux"]
+        species_models = [m for m in autoload_models if m.backend == "species"]
 
-        logger.info(f"Auto-loading models: {len(vllm_sglang_models)} vLLM/SGLang, {len(clip_models)} CLIP, {len(flux_models)} FLUX")
+        logger.info(f"Auto-loading models: {len(vllm_sglang_models)} vLLM/SGLang, {len(clip_models)} CLIP, {len(species_models)} Species, {len(flux_models)} FLUX")
         launched_model_ids = []  # Track models we actually launched
 
         # Helper function to wait for models to be ready
@@ -334,9 +335,71 @@ async def lifespan(app: FastAPI):
 
         logger.info(f"=== PHASE 2 COMPLETE: Launched {len(clip_model_ids)} CLIP models ===")
 
-        # Wait for CLIP models before loading FLUX
+        # Wait for CLIP models before loading Species/FLUX
         logger.info("=== Waiting for CLIP models to be RUNNING ===")
-        await wait_for_models(clip_model_ids, "load FLUX")
+        await wait_for_models(clip_model_ids, "load Species/FLUX")
+
+        # Phase 2.5: Load Species detection models
+        logger.info("=== PHASE 2.5: Loading Species detection models ===")
+        species_model_ids = []
+        for model_config in species_models:
+            try:
+                existing = await registry.get_by_alias(model_config.alias or model_config.name)
+                if existing:
+                    if existing.status in [ModelStatus.RUNNING, ModelStatus.STARTING]:
+                        logger.info(f"Model {model_config.alias or model_config.name} already running, skipping")
+                        continue
+                    else:
+                        await registry.delete(existing.id)
+
+                model_id = registry.generate_id(model_config.name)
+                memory_estimate = model_config.memory_gb if model_config.memory_gb is not None else 5.0
+
+                port = resource_manager.allocate_model(model_id, memory_estimate)
+
+                from supervisor.models import ModelConfig, Backend, ModelType
+                config = ModelConfig(
+                    model_name=model_config.name,
+                    backend=Backend(model_config.backend),
+                    model_type=ModelType(model_config.model_type),
+                    model_alias=model_config.alias,
+                    num_gpus=1,
+                    quantization=model_config.quantization,
+                    idle_timeout_minutes=model_config.idle_timeout_minutes,
+                    auto_suspend_enabled=model_config.auto_suspend_enabled,
+                    extra_args=model_config.extra_args,
+                    docker_image=model_config.docker_image,
+                    env_vars=model_config.env_vars,
+                    volumes=model_config.volumes,
+                )
+
+                launcher = launcher_factory.get_launcher(config.backend)
+                instance = await launcher.launch(config, model_id, port, memory_gb=memory_estimate)
+                instance.memory_gb = memory_estimate
+                instance.saved_config = {
+                    "model_name": config.model_name,
+                    "backend": config.backend.value,
+                    "model_type": config.model_type.value,
+                    "model_alias": config.model_alias,
+                    "gpu_ids": instance.gpu_ids,
+                    "port": port,
+                    "quantization": config.quantization,
+                    "auto_suspend_enabled": config.auto_suspend_enabled,
+                    "idle_timeout_minutes": config.idle_timeout_minutes,
+                    "extra_args": config.extra_args,
+                    "docker_image": config.docker_image,
+                    "env_vars": config.env_vars,
+                    "volumes": config.volumes,
+                }
+
+                await registry.create(instance)
+                species_model_ids.append(model_id)
+                logger.info(f"Auto-loaded Species model: {model_config.alias or model_config.name}")
+
+            except Exception as e:
+                logger.error(f"Failed to auto-load Species model {model_config.name}: {e}")
+
+        logger.info(f"=== PHASE 2.5 COMPLETE: Launched {len(species_model_ids)} Species models ===")
 
         # Phase 3: Load FLUX models (last due to large memory footprint)
         logger.info("=== PHASE 3: Loading FLUX models ===")
