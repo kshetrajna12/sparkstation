@@ -2,25 +2,27 @@
 # Ensemble: MegaDetector v5a + SpeciesNet + iNat21 ViT-L/14
 FROM nvcr.io/nvidia/pytorch:25.11-py3
 
-# Fix cmake (broken shim in this base image) and install build deps for onnx
-RUN pip install --no-cache-dir cmake
+# Install setuptools <70 (needed for pkg_resources used by yolov5)
+# Pin onnx to version already in base image to prevent source rebuild
+RUN pip install --no-cache-dir "setuptools<70" && \
+    pip install --no-cache-dir "onnx==1.18.0"
 
-# Install setuptools first (needed for pkg_resources used by yolov5)
-RUN pip install --no-cache-dir "setuptools<70"
-
-# Install onnx first (avoids build issues when pulled as transitive dep)
-RUN pip install --no-cache-dir onnx
-
-# Install main dependencies
+# Install megadetector and speciesnet without upgrading onnx
 RUN pip install --no-cache-dir \
-    --upgrade \
+    --no-deps \
+    megadetector speciesnet
+
+# Install their actual runtime deps (minus onnx which we already have)
+RUN pip install --no-cache-dir \
     fastapi>=0.115.0 \
     uvicorn[standard]>=0.31.0 \
     pillow>=10.4.0 \
     timm>=1.0.0 \
     httpx \
-    megadetector \
-    speciesnet
+    yolov5 \
+    sahi \
+    supervision \
+    kagglehub
 
 # Copy server code
 WORKDIR /app
