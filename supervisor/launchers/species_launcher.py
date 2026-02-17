@@ -46,6 +46,23 @@ class SpeciesLauncher(ModelLauncher):
                         "  docker build --platform linux/arm64 -t species-server:latest ."
                     )
 
+                # Find MegaDetector weights - check common locations
+                md_search_paths = [
+                    config.extra_args.get("megadetector_path", ""),
+                    str(Path.home() / "src/github.com/image_metadata_indexing/models/md_v5a.0.0.pt"),
+                    str(Path.home() / "models/md_v5a.0.0.pt"),
+                ]
+                md_host_path = None
+                for p in md_search_paths:
+                    if p and Path(p).exists():
+                        md_host_path = p
+                        break
+
+                if md_host_path:
+                    logger.info(f"Found MegaDetector weights at: {md_host_path}")
+                else:
+                    logger.warning("MegaDetector weights not found locally. SpeciesNet will download its own copy.")
+
                 # Build docker run command
                 docker_cmd = [
                     "docker",
@@ -66,11 +83,10 @@ class SpeciesLauncher(ModelLauncher):
                     "species-server:latest",
                 ]
 
-                # Add MegaDetector path if configured
-                md_path = config.extra_args.get("megadetector_path")
-                if md_path:
+                # Mount MegaDetector weights if found
+                if md_host_path:
                     docker_cmd.insert(-1, "-v")
-                    docker_cmd.insert(-1, f"{md_path}:/app/models/md_v5a.0.0.pt:ro")
+                    docker_cmd.insert(-1, f"{md_host_path}:/app/models/md_v5a.0.0.pt:ro")
                     docker_cmd.insert(-1, "-e")
                     docker_cmd.insert(-1, "MEGADETECTOR_PATH=/app/models/md_v5a.0.0.pt")
 

@@ -2,6 +2,11 @@
 # Ensemble: MegaDetector v5a + SpeciesNet + iNat21 ViT-L/14
 FROM nvcr.io/nvidia/pytorch:25.11-py3
 
+# Install system deps (libGL for OpenCV used by megadetector)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install setuptools <70 (needed for pkg_resources used by yolov5)
 # Pin onnx to version already in base image to prevent source rebuild
 RUN pip install --no-cache-dir "setuptools<70" && \
@@ -22,7 +27,8 @@ RUN pip install --no-cache-dir \
     yolov5 \
     sahi \
     supervision \
-    kagglehub
+    kagglehub \
+    humanfriendly
 
 # Copy server code
 WORKDIR /app
