@@ -4,7 +4,7 @@ FROM nvcr.io/nvidia/pytorch:25.11-py3
 
 # Install system deps (libGL for OpenCV used by megadetector)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1-mesa-glx libglib2.0-0 \
+    libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install setuptools <70 (needed for pkg_resources used by yolov5)
