@@ -15,11 +15,11 @@ RUN pip install --no-cache-dir uv
 
 # Install all deps directly into system python, but exclude torch/onnx
 # (already in base image as CUDA-enabled builds — must not be overwritten)
+ENV UV_BREAK_SYSTEM_PACKAGES=1
 RUN uv pip install --system \
     --no-deps megadetector speciesnet
 
 RUN uv pip install --system \
-    --exclude-newer 2026-02-18 \
     fastapi \
     "uvicorn[standard]" \
     pillow \

@@ -271,11 +271,28 @@ def ensemble_classify(
     snet_top = snet_results[0] if snet_results else None
     inat_top = inat_results[0] if inat_results else None
 
+    # Filter out non-species predictions from SpeciesNet
+    NON_SPECIES = {"blank", "animal", "human", "vehicle"}
+    snet_is_blank = snet_top and snet_top.species.lower() in NON_SPECIES
+    if snet_is_blank:
+        # Find the first real species prediction from SpeciesNet
+        for cls in snet_results:
+            if cls.species.lower() not in NON_SPECIES:
+                snet_top = cls
+                snet_is_blank = False
+                break
+
     if snet_top and inat_top:
-        snet_is_species = snet_top.taxonomy and snet_top.taxonomy.get("species_epithet")
+        snet_is_species = (not snet_is_blank and snet_top.taxonomy
+                           and snet_top.taxonomy.get("species_epithet"))
         inat_is_bird = inat_top.taxonomy and inat_top.taxonomy.get("class") in ("Bird", "Reptile", "Amphibian")
 
-        if inat_is_bird and inat_top.confidence > 0.3:
+        if snet_is_blank:
+            # SpeciesNet has no real species — use iNat21
+            best_species = inat_top.species
+            best_confidence = inat_top.confidence
+            best_source = "inat21"
+        elif inat_is_bird and inat_top.confidence > 0.3:
             # iNat21 is much better for birds/reptiles
             best_species = inat_top.species
             best_confidence = inat_top.confidence
