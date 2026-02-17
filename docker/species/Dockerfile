@@ -7,28 +7,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install setuptools <70 (needed for pkg_resources used by yolov5)
-# Pin onnx to version already in base image to prevent source rebuild
-RUN pip install --no-cache-dir "setuptools<70" && \
-    pip install --no-cache-dir "onnx==1.18.0"
+# Install uv for reliable dependency resolution
+RUN pip install --no-cache-dir uv
 
-# Install megadetector and speciesnet without upgrading onnx
-RUN pip install --no-cache-dir \
-    --no-deps \
-    megadetector speciesnet
+# Create a venv that inherits base image packages (torch, onnx, numpy, etc.)
+RUN uv venv /opt/species --python $(which python3) --seed
+ENV VIRTUAL_ENV=/opt/species
+ENV PATH="/opt/species/bin:$PATH"
 
-# Install their actual runtime deps (minus onnx which we already have)
-RUN pip install --no-cache-dir \
-    fastapi>=0.115.0 \
-    uvicorn[standard]>=0.31.0 \
-    pillow>=10.4.0 \
-    timm>=1.0.0 \
-    httpx \
-    yolov5 \
-    sahi \
-    supervision \
-    kagglehub \
-    humanfriendly
+# Install setuptools <70 into venv (needed for pkg_resources used by yolov5)
+RUN uv pip install "setuptools<70"
+
+# Install all deps into the venv — uv resolves cleanly and uses
+# existing system packages where compatible
+RUN uv pip install \
+    megadetector \
+    speciesnet \
+    fastapi \
+    "uvicorn[standard]" \
+    pillow \
+    timm \
+    httpx
 
 # Copy server code
 WORKDIR /app
