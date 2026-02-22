@@ -159,7 +159,7 @@ profiles:
       backend: "vllm"
       model_type: "chat"
       quantization: "none"
-      memory_gb: 35
+      memory_gb: 45
       idle_timeout_minutes: 60
       auto_suspend_enabled: false
       extra_args:
