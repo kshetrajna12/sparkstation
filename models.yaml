@@ -159,11 +159,11 @@ profiles:
       backend: "vllm"
       model_type: "chat"
       quantization: "none"
-      memory_gb: 45
+      memory_gb: 55
       idle_timeout_minutes: 60
       auto_suspend_enabled: false
       extra_args:
-        max_model_len: 4096
+        max_model_len: 65536
         max_concurrent_requests: 4
         tool_call_parser: "hermes"
         # EAGLE3 spec decoding - blocked by vLLM bug (image_token_index vs image_token_id)
