@@ -79,6 +79,8 @@ profiles:
       alias: "qwen3-vl-4b"
       backend: "vllm"
       quantization: "none"
+      default: true
+      auto_suspend_enabled: false
 
   # Production profile - full model set
   prod:
@@ -86,6 +88,7 @@ profiles:
       alias: "qwen3-vl-4b"
       backend: "vllm"
       quantization: "none"
+      auto_suspend_enabled: false
       extra_args:
         max_model_len: 4096
 
@@ -93,6 +96,8 @@ profiles:
       alias: "gpt-oss-20b"
       backend: "vllm"
       quantization: "none"
+      default: true
+      auto_suspend_enabled: false
       extra_args:
         max_model_len: 16384
         tool_call_parser: "openai"
@@ -104,6 +109,7 @@ profiles:
       alias: "qwen3-vl-4b"
       backend: "vllm"
       quantization: "none"
+      default: true
       auto_suspend_enabled: false
       extra_args:
         max_model_len: 4096
@@ -115,6 +121,7 @@ profiles:
       backend: "vllm"
       model_type: "chat"
       quantization: "none"
+      default: true
       memory_gb: 36
       idle_timeout_minutes: 60
       auto_suspend_enabled: false
@@ -138,6 +145,7 @@ profiles:
       model_type: "embedding"
       quantization: "none"
       memory_gb: 2.5
+      auto_suspend_enabled: false
       docker_image: "nvcr.io/nvidia/vllm:26.01-py3"
 
     - name: "Qwen/Qwen3-VL-4B-Instruct-FP8"
@@ -146,6 +154,7 @@ profiles:
       model_type: "chat"
       quantization: "none"
       memory_gb: 14
+      auto_suspend_enabled: false
       docker_image: "nvcr.io/nvidia/vllm:26.01-py3"
       extra_args:
         max_model_len: 4096
@@ -159,6 +168,7 @@ profiles:
       backend: "vllm"
       model_type: "chat"
       quantization: "none"
+      default: true
       memory_gb: 55
       idle_timeout_minutes: 60
       auto_suspend_enabled: false
@@ -176,6 +186,7 @@ profiles:
       model_type: "embedding"
       quantization: "none"
       memory_gb: 2.5
+      auto_suspend_enabled: false
 
     - name: "openai/clip-vit-large-patch14"
       alias: "clip-vit"
@@ -183,6 +194,7 @@ profiles:
       model_type: "embedding"
       quantization: "none"
       memory_gb: 5
+      auto_suspend_enabled: false
 
     - name: "species-ensemble"
       alias: "species-detect"

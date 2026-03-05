@@ -20,10 +20,11 @@ class ModelConfigYAML(BaseModel):
     quantization: Optional[str] = "fp8"
     memory_gb: Optional[float] = None  # Explicit memory allocation (overrides estimation)
     idle_timeout_minutes: int = 30
-    auto_suspend_enabled: bool = True
+    auto_suspend_enabled: bool = False
     speculative_model: Optional[str] = None
     num_speculative_tokens: int = 5
     speculative_method: Optional[str] = None
+    default: bool = False  # Mark as default model for the profile (one per profile)
     extra_args: Dict[str, Any] = Field(default_factory=dict)
     docker_image: Optional[str] = None  # Per-model Docker image override
     env_vars: Dict[str, str] = Field(default_factory=dict)  # Extra container env vars
@@ -100,6 +101,23 @@ def get_profile_models(profile_name: str) -> List[ModelConfigYAML]:
         return []
 
     return config.profiles[profile_name]
+
+
+def get_default_model_alias(profile_name: Optional[str] = None) -> Optional[str]:
+    """Get the alias of the default model for a profile (or autoload).
+
+    Returns the alias of the model marked with `default: true`, or None if
+    no model is marked as default.
+    """
+    if profile_name:
+        models = get_profile_models(profile_name)
+    else:
+        models = get_autoload_models()
+
+    for model in models:
+        if model.default:
+            return model.alias or model.name
+    return None
 
 
 def list_profiles() -> List[str]:

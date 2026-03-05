@@ -37,6 +37,9 @@ def start(ctx, detach, profile):
     else:
         click.echo("Starting Sparkstation...")
 
+    # Project root is the directory containing this CLI script
+    project_root = Path(__file__).resolve().parent
+
     if detach:
         # Start supervisor in background
         click.echo("  → Starting supervisor...")
@@ -57,6 +60,7 @@ def start(ctx, detach, profile):
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 env=supervisor_env,
+                cwd=project_root,
             )
 
         click.echo(f"     Logs: {supervisor_log}")
@@ -129,6 +133,7 @@ def start(ctx, detach, profile):
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 env=gateway_env,
+                cwd=project_root,
             )
 
         click.echo(f"     Logs: {gateway_log}")
@@ -176,6 +181,7 @@ def start(ctx, detach, profile):
         subprocess.run(
             ["uv", "run", "uvicorn", "supervisor.main:app", "--host", "127.0.0.1", "--port", "9001"],
             env=foreground_env,
+            cwd=project_root,
         )
 
 

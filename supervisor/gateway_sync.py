@@ -27,11 +27,13 @@ class GatewaySync:
         registry: ModelRegistry,
         litellm_admin_url: Optional[str] = None,
         master_key: Optional[str] = None,
+        default_model_alias: Optional[str] = None,
     ):
         self.registry = registry
         self.admin_url = litellm_admin_url or settings.litellm_admin_url
         self.master_key = master_key or settings.litellm_master_key
         self.sync_interval = settings.gateway_sync_interval_seconds
+        self.default_model_alias = default_model_alias
         self.client = httpx.AsyncClient(timeout=30.0)
         self._task: Optional[asyncio.Task] = None
 
@@ -99,6 +101,24 @@ class GatewaySync:
                     },
                 }
             )
+
+        # Add "default" alias pointing to the default model
+        if self.default_model_alias:
+            for model in all_models:
+                display_name = model.model_alias or model.model_name.split("/")[-1]
+                if display_name == self.default_model_alias:
+                    model_list.append(
+                        {
+                            "model_name": "default",
+                            "litellm_params": {
+                                "model": f"openai/{model.model_name}",
+                                "api_base": f"{model.base_url}/v1",
+                                "api_key": "EMPTY",
+                                "drop_params": True,
+                            },
+                        }
+                    )
+                    break
 
         logger.debug(f"Syncing {len(model_list)} running models to LiteLLM gateway")
 
@@ -190,5 +210,16 @@ class GatewaySync:
                     "api_key": "EMPTY",
                 }
             )
+
+            # Add "default" alias for the default model
+            if self.default_model_alias and display_name == self.default_model_alias:
+                models.append(
+                    {
+                        "model_name": "default",
+                        "litellm_provider": "openai",
+                        "api_base": f"{model.base_url}/v1",
+                        "api_key": "EMPTY",
+                    }
+                )
 
         return models

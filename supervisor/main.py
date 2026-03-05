@@ -80,12 +80,13 @@ restart_manager: Optional[RestartManager] = None
 
 # Startup state tracking
 startup_complete: bool = False
+default_model_alias: Optional[str] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize and cleanup resources."""
-    global registry, resource_manager, launcher_factory, auto_suspend_manager, gateway_sync, health_check_manager, restart_manager
+    global registry, resource_manager, launcher_factory, auto_suspend_manager, gateway_sync, health_check_manager, restart_manager, default_model_alias
 
     logger.info("Initializing Sparkstation Supervisor...")
 
@@ -98,18 +99,30 @@ async def lifespan(app: FastAPI):
     if reconcile_summary["fixed_stopped"] or reconcile_summary["fixed_running"] or reconcile_summary["removed_orphaned"]:
         logger.warning(f"Database reconciliation found inconsistencies: {reconcile_summary}")
 
-    # Purge stale DB entries (stopped/failed/starting with no container)
-    # This prevents confusion when switching between profiles
+    # Purge stale DB entries (stopped/failed/starting, or "running" with no live container)
+    # This prevents confusion when switching between profiles or after unclean shutdown
+    import subprocess as _sp
     all_models = await registry.list_all()
     for model in all_models:
         if model.status not in [ModelStatus.RUNNING]:
             logger.info(f"Purging stale DB entry: {model.model_alias or model.model_name} (status: {model.status})")
             await registry.delete(model.id)
+        elif model.container_id:
+            # Verify the container is actually running
+            result = _sp.run(
+                ["docker", "inspect", "-f", "{{.State.Running}}", model.container_id],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0 or result.stdout.strip() != "true":
+                logger.info(f"Purging stale DB entry: {model.model_alias or model.model_name} (container {model.container_id} not running)")
+                await registry.delete(model.id)
 
     resource_manager = ResourceManager()
     launcher_factory = LauncherFactory()
     auto_suspend_manager = AutoSuspendManager(registry, launcher_factory, resource_manager)
-    gateway_sync = GatewaySync(registry)
+    from supervisor.models_config import get_default_model_alias
+    default_model_alias = get_default_model_alias(settings.startup_profile)
+    gateway_sync = GatewaySync(registry, default_model_alias=default_model_alias)
     restart_manager = RestartManager(registry, launcher_factory, resource_manager)
     health_check_manager = HealthCheckManager(registry, restart_manager)
 
@@ -608,6 +621,7 @@ async def list_models_detailed():
                 "health_status": model.health_status,
                 "port": model.port,
                 "memory_gb": model.memory_gb,
+                "is_default": (model.model_alias or model.model_name) == default_model_alias,
                 "last_request_time": model.last_request_time.isoformat()
                 if model.last_request_time
                 else None,

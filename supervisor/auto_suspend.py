@@ -173,7 +173,7 @@ class AutoSuspendManager:
         # Save config for resume
         model.saved_config = {
             "model_name": model.model_name,
-            "backend": model.backend.value,
+            "backend": model.backend.value if hasattr(model.backend, 'value') else model.backend,
             "model_alias": model.model_alias,
             "gpu_ids": model.gpu_ids,
             "port": model.port,

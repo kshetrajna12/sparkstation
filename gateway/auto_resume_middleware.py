@@ -3,6 +3,14 @@ Auto-Resume Middleware for LiteLLM.
 
 CRITICAL FIX: LiteLLM doesn't know about suspended models.
 This middleware intercepts requests, checks model status, and auto-resumes if suspended.
+
+TODO: This middleware is NOT currently wired into the gateway. LiteLLM is started as a
+standalone process (`uv run litellm --config gateway/litellm.yaml`) with no hook to add
+custom ASGI middleware. Need to either:
+  1. Wrap LiteLLM's app in a custom FastAPI/Starlette app that adds this middleware, or
+  2. Use LiteLLM's custom callback/hook mechanism to achieve the same effect, or
+  3. Run a reverse proxy in front of LiteLLM that handles auto-resume.
+Until this is fixed, auto-suspend should be disabled for all models.
 """
 import asyncio
 import json
@@ -113,8 +121,10 @@ class AutoResumeMiddleware(BaseHTTPMiddleware):
             models = data.get("models", [])
 
             for model in models:
-                # Match by alias or model name
+                # Match by alias, model name, or "default" keyword
                 if model.get("alias") == model_name or model.get("model_name") == model_name:
+                    return model.get("status", "unknown")
+                if model_name == "default" and model.get("is_default"):
                     return model.get("status", "unknown")
 
             logger.warning(f"Model {model_name} not found in supervisor")
@@ -143,6 +153,9 @@ class AutoResumeMiddleware(BaseHTTPMiddleware):
             model_id = None
             for model in models:
                 if model.get("alias") == model_name or model.get("model_name") == model_name:
+                    model_id = model.get("id")
+                    break
+                if model_name == "default" and model.get("is_default"):
                     model_id = model.get("id")
                     break
 
