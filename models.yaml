@@ -178,13 +178,14 @@ profiles:
       memory_gb: 55
       idle_timeout_minutes: 60
       auto_suspend_enabled: false
+      docker_image: "nvcr.io/nvidia/vllm:26.01-py3"
+      volumes:
+        - "patches/moe_config_gb10.json:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/configs/E=128,N=768,device_name=NVIDIA_GB10,dtype=fp8_w8a8,block_shape=[128,128].json"
       extra_args:
         max_model_len: 65536
         max_concurrent_requests: 4
         tool_call_parser: "hermes"
-        # EAGLE3 spec decoding - blocked by vLLM bug (image_token_index vs image_token_id)
-        # speculative_model: "modal-labs/qwen3-vl-30b-a3b-eagle3-v0"
-        # num_speculative_tokens: 5
+        kv_cache_dtype: "fp8"
 
     - name: "BAAI/bge-m3"
       alias: "bge-m3"
@@ -193,6 +194,7 @@ profiles:
       quantization: "none"
       memory_gb: 2.5
       auto_suspend_enabled: false
+      docker_image: "nvcr.io/nvidia/vllm:26.01-py3"
 
     - name: "openai/clip-vit-large-patch14"
       alias: "clip-vit"
