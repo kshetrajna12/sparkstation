@@ -122,34 +122,18 @@ class GatewaySync:
 
         logger.debug(f"Syncing {len(model_list)} running models to LiteLLM gateway")
 
-        # Try pushing to LiteLLM admin API
-        try:
-            if self.master_key:
-                response = await self.client.post(
-                    f"{self.admin_url}/model/new",
-                    headers={"Authorization": f"Bearer {self.master_key}"},
-                    json={"models": model_list},
-                )
-
-                if response.status_code == 200:
-                    logger.info(f"Synced {len(model_list)} models to LiteLLM gateway")
-                    return
-                else:
-                    logger.warning(
-                        f"Failed to sync models via admin API: {response.status_code} {response.text}"
-                    )
-            else:
-                logger.debug("No master_key configured, skipping admin API push")
-
-        except Exception as e:
-            logger.error(f"Gateway sync error: {e}")
-
-        # Fallback: rewrite litellm.yaml and trigger reload
+        # Write model list to litellm.yaml (gateway reads this at startup).
+        # NOTE: LiteLLM admin API (/model/new) requires a database which we don't use.
+        # The YAML-based approach is simpler and more reliable.
         await self._fallback_yaml_reload(model_list)
 
     async def _fallback_yaml_reload(self, model_list: List[dict]):
         """
-        Fallback: rewrite litellm.yaml and trigger reload.
+        Fallback: rewrite litellm.yaml so the gateway picks up changes on next restart.
+
+        NOTE: LiteLLM 1.79+ removed /config/reload and /model/new requires a DB.
+        The YAML rewrite is sufficient — the gateway reads it at startup, and the
+        deploy script restarts the gateway after model changes.
 
         Args:
             model_list: List of model configurations
@@ -171,24 +155,10 @@ class GatewaySync:
             with open(config_path, "w") as f:
                 yaml.dump(config, f, default_flow_style=False)
 
-            logger.info(f"Fallback: rewrote litellm.yaml with {len(model_list)} models")
-
-            # Trigger reload via admin API
-            if self.master_key:
-                try:
-                    reload_response = await self.client.post(
-                        f"{self.admin_url}/config/reload",
-                        headers={"Authorization": f"Bearer {self.master_key}"},
-                    )
-                    if reload_response.status_code == 200:
-                        logger.info("Triggered LiteLLM config reload")
-                    else:
-                        logger.warning(f"Config reload failed: {reload_response.status_code}")
-                except Exception as e:
-                    logger.error(f"Failed to trigger config reload: {e}")
+            logger.info(f"Wrote litellm.yaml with {len(model_list)} models (applied on gateway restart)")
 
         except Exception as e:
-            logger.error(f"Fallback YAML reload failed: {e}", exc_info=True)
+            logger.error(f"YAML rewrite failed: {e}", exc_info=True)
 
     async def get_models_for_litellm(self) -> List[dict]:
         """

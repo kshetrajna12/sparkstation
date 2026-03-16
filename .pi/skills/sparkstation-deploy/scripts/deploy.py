@@ -61,7 +61,8 @@ def is_supervisor_running():
 
 
 def is_gateway_running():
-    _, status = http_get(f"{GATEWAY_URL}/health", headers={"Authorization": f"Bearer {API_KEY}"})
+    # Use /v1/models which is lighter than /health (which does full backend health checks)
+    _, status = http_get(f"{GATEWAY_URL}/v1/models", headers={"Authorization": f"Bearer {API_KEY}"})
     return status == 200
 
 
@@ -142,26 +143,18 @@ def run_cmd(cmd, check=True, timeout=None, env=None):
 
 
 def stop_all():
-    """Stop everything: models, supervisor, gateway."""
+    """Stop everything: models, supervisor, gateway.
+
+    Strategy: Stop processes first (graceful SIGTERM, then SIGKILL), then
+    stop Docker containers in parallel for speed.
+    """
     log("Stopping Sparkstation...", "info")
 
     if DRY_RUN:
         log("Would stop supervisor, gateway, and all containers", "step")
         return True
 
-    # Use sparkstation CLI to stop
-    result = subprocess.run(
-        ["uv", "run", "sparkstation", "stop"],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        cwd=PROJECT_ROOT,
-    )
-
-    if result.returncode != 0:
-        log(f"sparkstation stop returned {result.returncode}", "warn")
-
-    # Kill ALL supervisor and litellm processes (including detached ones)
+    # 1) Gracefully stop supervisor and gateway processes (SIGTERM first)
     for pattern in ["supervisor.main:app", "litellm"]:
         try:
             pids = subprocess.run(
@@ -169,22 +162,71 @@ def stop_all():
             )
             if pids.stdout.strip():
                 for pid in pids.stdout.strip().split("\n"):
-                    subprocess.run(["kill", "-9", pid.strip()], capture_output=True)
+                    pid = pid.strip()
+                    if pid:
+                        subprocess.run(["kill", pid], capture_output=True)
+                        log(f"Sent SIGTERM to {pattern} (pid {pid})", "step")
         except Exception:
             pass
-    time.sleep(2)
 
-    # Stop sparkstation containers
+    # Give processes 3s to shut down gracefully
+    time.sleep(3)
+
+    # 2) Force-kill any remaining supervisor/gateway processes
+    for pattern in ["supervisor.main:app", "litellm"]:
+        try:
+            pids = subprocess.run(
+                ["pgrep", "-f", pattern], capture_output=True, text=True
+            )
+            if pids.stdout.strip():
+                for pid in pids.stdout.strip().split("\n"):
+                    pid = pid.strip()
+                    if pid:
+                        subprocess.run(["kill", "-9", pid], capture_output=True)
+                        log(f"Force-killed {pattern} (pid {pid})", "step")
+        except Exception:
+            pass
+
+    # 3) Stop all sparkstation Docker containers in PARALLEL
     containers = subprocess.run(
         ["docker", "ps", "-q", "--filter", "name=sparkstation-"],
         capture_output=True, text=True, timeout=10,
     )
     if containers.stdout.strip():
-        log("Stopping remaining Docker containers...", "info")
-        for cid in containers.stdout.strip().split("\n"):
-            subprocess.run(["docker", "stop", cid.strip()], capture_output=True, timeout=30)
+        cids = [c.strip() for c in containers.stdout.strip().split("\n") if c.strip()]
+        log(f"Stopping {len(cids)} Docker containers in parallel...", "info")
 
-    # Clean stale DB to prevent ghost model IDs on next startup
+        # docker stop accepts multiple container IDs — stops them in parallel
+        subprocess.run(
+            ["docker", "stop", "-t", "5"] + cids,  # 5s grace period (default is 10)
+            capture_output=True, timeout=30,
+        )
+
+        # Force-remove any that didn't stop
+        remaining = subprocess.run(
+            ["docker", "ps", "-q", "--filter", "name=sparkstation-"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if remaining.stdout.strip():
+            leftover = [c.strip() for c in remaining.stdout.strip().split("\n") if c.strip()]
+            log(f"Force-killing {len(leftover)} remaining containers", "warn")
+            subprocess.run(["docker", "kill"] + leftover, capture_output=True, timeout=10)
+
+    # 4) Remove stopped sparkstation containers to avoid name conflicts on restart
+    subprocess.run(
+        ["docker", "container", "prune", "-f", "--filter", "label=sparkstation"],
+        capture_output=True, timeout=10,
+    )
+    # Also remove by name pattern (containers may not have the label)
+    stopped = subprocess.run(
+        ["docker", "ps", "-aq", "--filter", "name=sparkstation-"],
+        capture_output=True, text=True, timeout=5,
+    )
+    if stopped.stdout.strip():
+        rm_ids = [c.strip() for c in stopped.stdout.strip().split("\n") if c.strip()]
+        subprocess.run(["docker", "rm", "-f"] + rm_ids, capture_output=True, timeout=10)
+
+    # 5) Clean stale DB to prevent ghost model IDs on next startup
     db_path = PROJECT_ROOT / "data" / "sparkstation.db"
     if db_path.exists():
         db_path.unlink()
@@ -265,14 +307,17 @@ def start_with_profile(profile=None):
         )
     log(f"Gateway log: {gateway_log}", "step")
 
-    # Wait for gateway (up to 30s)
-    for i in range(30):
+    # Wait for gateway (up to 60s — litellm startup can be slow)
+    for i in range(60):
         if is_gateway_running():
-            log("Gateway is up", "ok")
+            log(f"Gateway is up (took {i}s)", "ok")
             break
+        if i > 0 and i % 15 == 0:
+            log(f"Still waiting for gateway... ({i}s)", "step")
         _time.sleep(1)
     else:
-        log("Gateway may not have started (continuing anyway)", "warn")
+        log("Gateway did not start within 60s", "error")
+        return False
 
     log("Services started", "ok")
     return True
@@ -327,6 +372,120 @@ def wait_for_healthy(timeout_sec=600):
         time.sleep(10)
 
     log(f"Timed out after {timeout_sec}s", "error")
+    return False
+
+
+def restart_gateway():
+    """Restart the gateway to pick up updated litellm.yaml.
+
+    After all models are healthy, we write the final litellm.yaml ourselves
+    from the supervisor's model list, then restart the gateway. This avoids
+    depending on the async gateway sync (which runs every 60s).
+    """
+    log("Restarting gateway to pick up final model list...", "info")
+
+    # Write litellm.yaml from the supervisor's /models/detailed endpoint.
+    # This gives us the full model names, aliases, and ports needed for the gateway.
+    try:
+        detailed, status = http_get(f"{SUPERVISOR_URL}/models/detailed")
+        if status == 200 and detailed and "models" in detailed:
+            import yaml as _yaml
+            config_path = PROJECT_ROOT / "gateway" / "litellm.yaml"
+
+            # Read existing config to preserve general/router settings
+            if config_path.exists():
+                with open(config_path, "r") as f:
+                    gw_config = _yaml.safe_load(f) or {}
+            else:
+                gw_config = {}
+
+            # Build model_list from running models
+            model_list = []
+            default_alias = None
+            for m in detailed["models"]:
+                if m["status"] != "running":
+                    continue
+                alias = m.get("alias") or m["model_name"].split("/")[-1]
+                if m.get("is_default"):
+                    default_alias = alias
+                model_list.append({
+                    "model_name": alias,
+                    "litellm_params": {
+                        "model": f"openai/{m['model_name']}",
+                        "api_base": f"http://127.0.0.1:{m['port']}/v1",
+                        "api_key": "EMPTY",
+                        "drop_params": True,
+                    },
+                })
+
+            # Add "default" alias for the default model
+            if default_alias:
+                for entry in model_list:
+                    if entry["model_name"] == default_alias:
+                        model_list.append({
+                            "model_name": "default",
+                            "litellm_params": dict(entry["litellm_params"]),
+                        })
+                        break
+
+            gw_config["model_list"] = model_list
+            with open(config_path, "w") as f:
+                _yaml.dump(gw_config, f, default_flow_style=False)
+
+            names = [m["model_name"] for m in model_list]
+            log(f"Wrote litellm.yaml with {len(model_list)} models: {names}", "step")
+    except Exception as e:
+        log(f"Failed to write litellm.yaml: {e}", "warn")
+
+    # Kill existing gateway
+    for pattern in ["litellm"]:
+        try:
+            pids = subprocess.run(
+                ["pgrep", "-f", pattern], capture_output=True, text=True
+            )
+            if pids.stdout.strip():
+                for pid in pids.stdout.strip().split("\n"):
+                    pid = pid.strip()
+                    if pid:
+                        subprocess.run(["kill", pid], capture_output=True)
+        except Exception:
+            pass
+
+    time.sleep(2)
+
+    # Force-kill any remaining
+    try:
+        subprocess.run(["pkill", "-9", "-f", "litellm"], capture_output=True)
+    except Exception:
+        pass
+    time.sleep(1)
+
+    # Start fresh gateway
+    log_dir = Path.home() / ".sparkstation" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    gateway_env = os.environ.copy()
+    gateway_env.pop("SUPERVISOR_DATABASE_URL", None)
+
+    gateway_log = log_dir / "gateway.log"
+    with open(gateway_log, "w") as lf:
+        subprocess.Popen(
+            ["uv", "run", "litellm", "--config", "gateway/litellm.yaml",
+             "--host", "127.0.0.1", "--port", "8000"],
+            stdout=lf,
+            stderr=subprocess.STDOUT,
+            env=gateway_env,
+            cwd=PROJECT_ROOT,
+            start_new_session=True,
+        )
+
+    import time as _time
+    for i in range(30):
+        if is_gateway_running():
+            log(f"Gateway restarted (took {i}s)", "ok")
+            return True
+        _time.sleep(1)
+
+    log("Gateway restart may have failed", "warn")
     return False
 
 
@@ -473,6 +632,8 @@ def cmd_restart(args):
     if ok and not DRY_RUN:
         ok = wait_for_healthy()
         if ok:
+            # Restart gateway to pick up final model list (litellm.yaml rewritten by sync)
+            restart_gateway()
             verify_deployment()
     print()
     return ok
@@ -506,6 +667,7 @@ def cmd_switch_profile(args):
     if ok and not DRY_RUN:
         ok = wait_for_healthy()
         if ok:
+            restart_gateway()
             verify_deployment()
 
     if ok:
@@ -569,6 +731,7 @@ def cmd_full(args):
     if ok and not DRY_RUN:
         ok = wait_for_healthy()
         if ok:
+            restart_gateway()
             ok = verify_deployment()
 
     if ok:

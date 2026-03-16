@@ -194,6 +194,28 @@ class VLLMLauncher(ModelLauncher):
                         ])
                         logger.info(f"Using KV cache dtype: {kv_cache_dtype}")
 
+                # Pass through additional vLLM CLI flags from extra_args.
+                # These map directly to vLLM serve CLI options.
+                PASSTHROUGH_ARGS = {
+                    "enable_chunked_prefill": "--enable-chunked-prefill",
+                    "enable_prefix_caching": "--enable-prefix-caching",
+                    "enforce_eager": "--enforce-eager",
+                    "max_num_batched_tokens": "--max-num-batched-tokens",
+                    "scheduling_policy": "--scheduling-policy",
+                    "guided_decoding_backend": "--guided-decoding-backend",
+                    "disable_log_requests": "--disable-log-requests",
+                }
+                for arg_key, cli_flag in PASSTHROUGH_ARGS.items():
+                    val = config.extra_args.get(arg_key)
+                    if val is not None:
+                        if isinstance(val, bool):
+                            if val:
+                                docker_cmd.append(cli_flag)
+                                logger.info(f"Enabled {cli_flag}")
+                        else:
+                            docker_cmd.extend([cli_flag, str(val)])
+                            logger.info(f"Set {cli_flag}={val}")
+
                 # Only add quantization flag if specified and not auto-detected
                 # AWQ is auto-detected from model config, None means skip quantization
                 if vllm_quant and vllm_quant.lower() != "awq":
