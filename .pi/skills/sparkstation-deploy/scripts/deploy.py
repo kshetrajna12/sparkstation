@@ -596,9 +596,14 @@ def rebuild_backend(backend):
 
 def cmd_stop(args):
     print(f"\n{BOLD}═══ SPARKSTATION STOP ═══{RESET}\n")
-    ok = stop_all()
-    print()
-    return ok
+    if DRY_RUN:
+        log("Would run: sparkstation stop", "step")
+        return True
+    result = subprocess.run(
+        ["uv", "run", "sparkstation", "stop"],
+        cwd=PROJECT_ROOT, timeout=120,
+    )
+    return result.returncode == 0
 
 
 def cmd_start(args):
@@ -608,11 +613,16 @@ def cmd_start(args):
         if not validate_profile(args.profile):
             return False
 
-    ok = start_with_profile(args.profile)
-    if ok and not DRY_RUN:
-        ok = wait_for_healthy()
-    print()
-    return ok
+    if DRY_RUN:
+        profile_str = f" --profile {args.profile}" if args.profile else ""
+        log(f"Would run: sparkstation start -d{profile_str}", "step")
+        return True
+
+    cmd = ["uv", "run", "sparkstation", "start", "-d"]
+    if args.profile:
+        cmd.extend(["--profile", args.profile])
+    result = subprocess.run(cmd, cwd=PROJECT_ROOT, timeout=900)
+    return result.returncode == 0
 
 
 def cmd_restart(args):
@@ -622,19 +632,20 @@ def cmd_restart(args):
         if not validate_profile(args.profile):
             return False
 
-    ok = stop_all()
-    if not ok and not DRY_RUN:
-        log("Stop had issues, continuing with start...", "warn")
+    if DRY_RUN:
+        profile_str = f" --profile {args.profile}" if args.profile else ""
+        log(f"Would run: sparkstation restart{profile_str}", "step")
+        return True
 
-    time.sleep(3) if not DRY_RUN else None
+    cmd = ["uv", "run", "sparkstation", "restart"]
+    if args.profile:
+        cmd.extend(["--profile", args.profile])
+    result = subprocess.run(cmd, cwd=PROJECT_ROOT, timeout=900)
+    ok = result.returncode == 0
 
-    ok = start_with_profile(args.profile)
-    if ok and not DRY_RUN:
-        ok = wait_for_healthy()
-        if ok:
-            # Restart gateway to pick up final model list (litellm.yaml rewritten by sync)
-            restart_gateway()
-            verify_deployment()
+    if ok:
+        verify_deployment()
+
     print()
     return ok
 
