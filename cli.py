@@ -2,7 +2,9 @@
 """
 Sparkstation CLI - Unified interface for managing Sparkstation and models.
 """
+import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -13,8 +15,163 @@ import click
 import httpx
 
 
-DEFAULT_SUPERVISOR_URL = "http://localhost:9001"
-DEFAULT_GATEWAY_URL = "http://localhost:8000"
+DEFAULT_SUPERVISOR_URL = "http://127.0.0.1:9001"
+DEFAULT_GATEWAY_URL = "http://127.0.0.1:8000"
+PROJECT_ROOT = Path(__file__).resolve().parent
+RUN_DIR = Path.home() / ".sparkstation"
+LOG_DIR = RUN_DIR / "logs"
+PID_DIR = RUN_DIR / "pids"
+
+
+# ─── Helpers ────────────────────────────────────────────────────────────────
+
+
+def _ensure_dirs():
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    PID_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _write_pid(name: str, pid: int):
+    (PID_DIR / f"{name}.pid").write_text(str(pid))
+
+
+def _read_pid(name: str) -> Optional[int]:
+    pidfile = PID_DIR / f"{name}.pid"
+    if pidfile.exists():
+        try:
+            pid = int(pidfile.read_text().strip())
+            # Check if process is alive
+            os.kill(pid, 0)
+            return pid
+        except (ValueError, ProcessLookupError, PermissionError):
+            pidfile.unlink(missing_ok=True)
+    return None
+
+
+def _kill_pid(name: str, sig=signal.SIGTERM) -> bool:
+    """Kill a process by PID file. Returns True if process was found."""
+    pid = _read_pid(name)
+    if pid:
+        try:
+            os.kill(pid, sig)
+            return True
+        except ProcessLookupError:
+            pass
+    (PID_DIR / f"{name}.pid").unlink(missing_ok=True)
+    return False
+
+
+def _kill_and_wait(name: str, timeout: int = 10):
+    """Send SIGTERM, wait, then SIGKILL if needed."""
+    if not _kill_pid(name, signal.SIGTERM):
+        return
+    for _ in range(timeout):
+        if _read_pid(name) is None:
+            return
+        time.sleep(1)
+    _kill_pid(name, signal.SIGKILL)
+    time.sleep(1)
+    (PID_DIR / f"{name}.pid").unlink(missing_ok=True)
+
+
+def _is_port_open(host: str, port: int) -> bool:
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            return True
+    except (ConnectionRefusedError, TimeoutError, OSError):
+        return False
+
+
+def _supervisor_healthy() -> bool:
+    try:
+        r = httpx.get(f"{DEFAULT_SUPERVISOR_URL}/health", timeout=3)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _gateway_healthy() -> bool:
+    try:
+        r = httpx.get(f"{DEFAULT_GATEWAY_URL}/v1/models",
+                       headers={"Authorization": "Bearer dummy-key"}, timeout=3)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _docker_containers(only_running: bool = True) -> list[str]:
+    flag = "" if only_running else "-a"
+    cmd = f"docker ps {flag} --filter name=sparkstation- --format {{{{.Names}}}}"
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    return [n.strip() for n in r.stdout.strip().split("\n") if n.strip()]
+
+
+def _docker_stop_all():
+    """Stop and remove all sparkstation containers."""
+    # Kill running
+    names = _docker_containers(only_running=True)
+    if names:
+        subprocess.run(["docker", "kill"] + names, capture_output=True)
+        time.sleep(2)
+
+    # Remove all (running + stopped)
+    names = _docker_containers(only_running=False)
+    if names:
+        subprocess.run(["docker", "rm", "-f"] + names, capture_output=True)
+
+    return len(names)
+
+
+def _write_gateway_yaml():
+    """Fetch running models from supervisor and write gateway/litellm.yaml."""
+    import yaml
+    try:
+        r = httpx.get(f"{DEFAULT_SUPERVISOR_URL}/models/detailed", timeout=10)
+        r.raise_for_status()
+        data = r.json()
+    except Exception as e:
+        click.secho(f"     Warning: could not fetch models from supervisor: {e}", fg="yellow")
+        return False
+
+    config_path = PROJECT_ROOT / "gateway" / "litellm.yaml"
+    if config_path.exists():
+        with open(config_path) as f:
+            gw = yaml.safe_load(f) or {}
+    else:
+        gw = {}
+
+    model_list = []
+    for m in data.get("models", []):
+        if m["status"] != "running":
+            continue
+        alias = m.get("alias") or m["model_name"].split("/")[-1]
+        entry = {
+            "model_name": alias,
+            "litellm_params": {
+                "model": f"openai/{m['model_name']}",
+                "api_base": f"http://127.0.0.1:{m['port']}/v1",
+                "api_key": "EMPTY",
+                "drop_params": True,
+            },
+        }
+        model_list.append(entry)
+        if m.get("is_default"):
+            model_list.append({
+                "model_name": "default",
+                "litellm_params": dict(entry["litellm_params"]),
+            })
+
+    gw["model_list"] = model_list
+    with open(config_path, "w") as f:
+        yaml.dump(gw, f, default_flow_style=False)
+
+    names = [e["model_name"] for e in model_list]
+    click.echo(f"     Wrote {len(model_list)} models: {names}")
+    return True
+
+
+# ─── CLI ────────────────────────────────────────────────────────────────────
 
 
 @click.group()
@@ -28,235 +185,194 @@ def cli(ctx, supervisor_url):
 
 @cli.command()
 @click.option("--detach", "-d", is_flag=True, help="Run in background")
-@click.option("--profile", "-p", help="Load models from named profile (e.g. openclaw)")
+@click.option("--profile", "-p", help="Load models from named profile")
 @click.pass_context
 def start(ctx, detach, profile):
     """Start Sparkstation (supervisor + gateway) and wait for models to be ready."""
+    _ensure_dirs()
+
+    # Check if already running
+    if _read_pid("supervisor") and _supervisor_healthy():
+        click.secho("Sparkstation supervisor is already running.", fg="yellow")
+        click.echo("Run 'sparkstation stop' first, or 'sparkstation restart'.")
+        return
+
     if profile:
         click.echo(f"Starting Sparkstation with profile: {profile}")
     else:
         click.echo("Starting Sparkstation...")
 
-    # Project root is the directory containing this CLI script
-    project_root = Path(__file__).resolve().parent
-
-    if detach:
-        # Start supervisor in background
-        click.echo("  → Starting supervisor...")
-
-        # Create logs directory
-        log_dir = Path.home() / ".sparkstation" / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        supervisor_log = log_dir / "supervisor.log"
-
-        # Build env for supervisor (pass profile if set)
-        supervisor_env = os.environ.copy()
+    if not detach:
+        # Foreground mode — supervisor only
+        click.echo("Starting supervisor in foreground (Ctrl+C to stop)...")
+        env = os.environ.copy()
         if profile:
-            supervisor_env["STARTUP_PROFILE"] = profile
+            env["STARTUP_PROFILE"] = profile
+        subprocess.run(
+            ["uv", "run", "uvicorn", "supervisor.main:app",
+             "--host", "127.0.0.1", "--port", "9001"],
+            env=env, cwd=PROJECT_ROOT,
+        )
+        return
 
-        with open(supervisor_log, "w") as log_file:
-            subprocess.Popen(
-                ["uv", "run", "uvicorn", "supervisor.main:app", "--host", "127.0.0.1", "--port", "9001"],
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                env=supervisor_env,
-                cwd=project_root,
-            )
+    # ── Detached mode ──
 
-        click.echo(f"     Logs: {supervisor_log}")
+    # Clean stale state
+    db_path = PROJECT_ROOT / "data" / "sparkstation.db"
+    if db_path.exists():
+        db_path.unlink()
 
-        # Wait for supervisor to be ready (with models loaded)
-        supervisor_url = ctx.obj['supervisor_url']
-        for i in range(600):  # Try for 600 seconds (10 minutes max for model loading)
-            try:
-                response = httpx.get(f"{supervisor_url}/health", timeout=2)
-                if response.status_code == 200:
-                    click.echo("     Supervisor is running")
-                    break
-                elif response.status_code == 503:
-                    # Supervisor is starting, continue waiting
-                    pass
-            except:
-                pass
-            time.sleep(1)
-        else:
-            click.secho("✗ Supervisor failed to start", fg="red")
+    # 1) Start supervisor
+    click.echo("  → Starting supervisor...")
+    env = os.environ.copy()
+    if profile:
+        env["STARTUP_PROFILE"] = profile
+
+    sup_log = LOG_DIR / "supervisor.log"
+    with open(sup_log, "w") as lf:
+        proc = subprocess.Popen(
+            ["uv", "run", "uvicorn", "supervisor.main:app",
+             "--host", "127.0.0.1", "--port", "9001"],
+            stdout=lf, stderr=subprocess.STDOUT,
+            env=env, cwd=PROJECT_ROOT,
+            start_new_session=True,
+        )
+    _write_pid("supervisor", proc.pid)
+    click.echo(f"     PID {proc.pid} — log: {sup_log}")
+
+    # 2) Wait for supervisor health (port bind + models loaded).
+    #    The supervisor loads ALL models in its lifespan before binding the
+    #    HTTP port, so "connection refused" is expected for several minutes.
+    click.echo("  → Waiting for supervisor (models loading)...")
+    max_wait = 900  # 15 minutes — large models can take a while
+    for elapsed in range(max_wait):
+        # Check the process is still alive
+        if proc.poll() is not None:
+            click.secho(f"     Supervisor process exited (code {proc.returncode})", fg="red")
+            click.secho(f"     Check log: {sup_log}", fg="red")
             return
 
-        # Wait for all models to be ready (RUNNING or FAILED)
-        click.echo("  → Waiting for models to load...")
-        max_wait = 180  # 3 minutes max
-        start_time = time.time()
+        if _supervisor_healthy():
+            click.secho(f"     Supervisor ready ({elapsed}s)", fg="green")
+            break
 
-        while time.time() - start_time < max_wait:
-            try:
-                response = httpx.get(f"{supervisor_url}/models/detailed", timeout=5)
-                if response.status_code == 200:
-                    models = response.json()["models"]
-
-                    if not models:
-                        # No models to wait for
-                        break
-
-                    # Check if all models are done loading (RUNNING or FAILED)
-                    starting_models = [m for m in models if m["status"] == "starting"]
-
-                    if not starting_models:
-                        # All models are done
-                        running = [m for m in models if m["status"] == "running"]
-                        failed = [m for m in models if m["status"] == "failed"]
-
-                        click.echo(f"     {len(running)} model(s) running, {len(failed)} failed")
-                        break
-                    else:
-                        # Still loading
-                        click.echo(f"     {len(starting_models)} model(s) still loading...", nl=False)
-                        click.echo("\r", nl=False)
-
-            except Exception as e:
-                pass
-
-            time.sleep(5)
-
-        # Start gateway in background
-        click.echo("  → Starting gateway...")
-        # Remove SUPERVISOR_DATABASE_URL from environment - gateway runs as simple router without DB features
-        # TODO: Add gateway database support for usage tracking, API key management, rate limiting
-        gateway_env = os.environ.copy()
-        gateway_env.pop("SUPERVISOR_DATABASE_URL", None)
-
-        gateway_log = log_dir / "gateway.log"
-        with open(gateway_log, "w") as log_file:
-            subprocess.Popen(
-                ["uv", "run", "litellm", "--config", "gateway/litellm.yaml",
-                 "--host", "127.0.0.1", "--port", "8000"],
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                env=gateway_env,
-                cwd=project_root,
-            )
-
-        click.echo(f"     Logs: {gateway_log}")
-
-        # Wait for gateway to be ready
-        gateway_url = "http://localhost:8000"
-        for i in range(15):  # Try for 15 seconds
-            try:
-                response = httpx.get(f"{gateway_url}/health", timeout=2)
-                if response.status_code == 200:
-                    click.echo("     Gateway is running")
-                    break
-            except:
-                pass
-            time.sleep(1)
-        else:
-            click.secho("     Warning: Gateway may not have started", fg="yellow")
-
-        # Final status
-        click.echo("\n")
-        try:
-            response = httpx.get(f"{supervisor_url}/models/detailed", timeout=5)
-            if response.status_code == 200:
-                models = response.json()["models"]
-                for model in models:
-                    status_icon = {"running": "●", "starting": "◐", "stopped": "○", "failed": "✗"}.get(model["status"], "?")
-                    status_color = {"running": "green", "starting": "yellow", "stopped": "white", "failed": "red"}.get(model["status"], "white")
-
-                    click.echo(f"  {status_icon} ", nl=False)
-                    click.secho(f"{model['alias'] or model['model_name']}: {model['status']}", fg=status_color)
-
-                click.echo("")
-                click.secho("✓ Sparkstation is running!", fg="green")
-                click.echo(f"Gateway: http://localhost:8000 (OpenAI-compatible API)")
-                click.echo(f"Supervisor: {supervisor_url} (Model management)")
-        except:
-            click.secho("✓ Supervisor started (could not verify models)", fg="yellow")
+        if elapsed > 0 and elapsed % 30 == 0:
+            click.echo(f"     still loading... ({elapsed}s)")
+        time.sleep(1)
     else:
-        # Start in foreground (supervisor only)
-        click.echo("Starting supervisor in foreground...")
-        click.echo("Note: Run with -d to also start gateway")
-        foreground_env = os.environ.copy()
-        if profile:
-            foreground_env["STARTUP_PROFILE"] = profile
-        subprocess.run(
-            ["uv", "run", "uvicorn", "supervisor.main:app", "--host", "127.0.0.1", "--port", "9001"],
-            env=foreground_env,
-            cwd=project_root,
+        click.secho(f"     Supervisor did not start within {max_wait}s", fg="red")
+        click.secho(f"     Check log: {sup_log}", fg="red")
+        return
+
+    # 3) Wait for all models to finish starting
+    click.echo("  → Waiting for models...")
+    for _ in range(300):
+        try:
+            r = httpx.get(f"{DEFAULT_SUPERVISOR_URL}/models/detailed", timeout=5)
+            models = r.json().get("models", [])
+            starting = [m for m in models if m["status"] == "starting"]
+            if not starting:
+                running = [m for m in models if m["status"] == "running"]
+                failed = [m for m in models if m["status"] == "failed"]
+                click.echo(f"     {len(running)} running, {len(failed)} failed")
+                break
+        except Exception:
+            pass
+        time.sleep(2)
+
+    # 4) Write gateway config from supervisor state
+    click.echo("  → Writing gateway config...")
+    _write_gateway_yaml()
+
+    # 5) Start gateway
+    click.echo("  → Starting gateway...")
+    gw_log = LOG_DIR / "gateway.log"
+    gw_env = os.environ.copy()
+    gw_env.pop("SUPERVISOR_DATABASE_URL", None)
+
+    with open(gw_log, "w") as lf:
+        gw_proc = subprocess.Popen(
+            [sys.executable, "-m", "litellm.proxy.proxy_cli",
+             "--config", "gateway/litellm.yaml",
+             "--host", "127.0.0.1", "--port", "8000"],
+            stdout=lf, stderr=subprocess.STDOUT,
+            env=gw_env, cwd=PROJECT_ROOT,
+            start_new_session=True,
         )
+    _write_pid("gateway", gw_proc.pid)
+    click.echo(f"     PID {gw_proc.pid} — log: {gw_log}")
+
+    # 6) Wait for gateway
+    for i in range(30):
+        if gw_proc.poll() is not None:
+            click.secho(f"     Gateway process exited (code {gw_proc.returncode})", fg="red")
+            click.secho(f"     Check log: {gw_log}", fg="red")
+            break
+        if _gateway_healthy():
+            click.secho(f"     Gateway ready ({i}s)", fg="green")
+            break
+        time.sleep(1)
+    else:
+        click.secho("     Warning: gateway may not have started", fg="yellow")
+
+    # 7) Final status
+    click.echo()
+    try:
+        r = httpx.get(f"{DEFAULT_SUPERVISOR_URL}/models/detailed", timeout=5)
+        for m in r.json().get("models", []):
+            icon = {"running": "●", "starting": "◐", "stopped": "○", "failed": "✗"}.get(m["status"], "?")
+            color = {"running": "green", "starting": "yellow", "failed": "red"}.get(m["status"], "white")
+            click.secho(f"  {icon} {m['alias'] or m['model_name']}: {m['status']}", fg=color)
+    except Exception:
+        pass
+
+    click.echo()
+    click.secho("✓ Sparkstation is running!", fg="green")
+    click.echo(f"  Gateway:    {DEFAULT_GATEWAY_URL} (OpenAI-compatible API)")
+    click.echo(f"  Supervisor: {DEFAULT_SUPERVISOR_URL} (model management)")
 
 
 @cli.command()
 def stop():
-    """Stop Sparkstation (gateway + supervisor) and all model containers."""
+    """Stop Sparkstation (gateway + supervisor + containers)."""
+    _ensure_dirs()
     click.echo("Stopping Sparkstation...")
 
-    # Stop gateway
+    # 1) Gateway
     click.echo("  → Stopping gateway...")
-    result = subprocess.run(
-        ["pkill", "-f", "litellm.*gateway/litellm.yaml"],
-        capture_output=True,
-    )
+    _kill_and_wait("gateway", timeout=5)
+    # Also kill by pattern in case PID file was lost
+    subprocess.run(["pkill", "-9", "-f", "litellm.proxy.proxy_cli"], capture_output=True)
+    click.echo("     done")
 
-    if result.returncode == 0:
-        click.echo("     Gateway stopped")
-    else:
-        click.echo("     No gateway process found")
-
-    # Stop supervisor
+    # 2) Supervisor
     click.echo("  → Stopping supervisor...")
-    result = subprocess.run(
-        ["pkill", "-f", "uvicorn supervisor.main:app"],
-        capture_output=True,
-    )
+    _kill_and_wait("supervisor", timeout=10)
+    subprocess.run(["pkill", "-9", "-f", "uvicorn supervisor.main:app"], capture_output=True)
+    time.sleep(2)
+    click.echo("     done")
 
-    if result.returncode == 0:
-        click.echo("     Supervisor stopped")
-    else:
-        click.echo("     No supervisor process found")
+    # 3) Docker containers
+    click.echo("  → Stopping containers...")
+    n = _docker_stop_all()
+    click.echo(f"     removed {n} container(s)")
 
-    # Stop all model containers
-    click.echo("  → Stopping model containers...")
-    result = subprocess.run(
-        ["docker", "ps", "--filter", "name=sparkstation-", "--format", "{{.Names}}"],
-        capture_output=True,
-        text=True
-    )
+    # 4) Clean DB
+    db_path = PROJECT_ROOT / "data" / "sparkstation.db"
+    for p in [db_path, db_path.with_suffix(".db-shm"), db_path.with_suffix(".db-wal")]:
+        p.unlink(missing_ok=True)
 
-    if result.stdout.strip():
-        container_names = result.stdout.strip().split("\n")
-        for container_name in container_names:
-            if container_name:
-                subprocess.run(["docker", "stop", container_name], capture_output=True)
-                click.echo(f"     Stopping: {container_name}")
-
-        # Wait for containers to actually stop
-        click.echo("  → Waiting for containers to stop...")
-        for i in range(30):  # Wait up to 30 seconds
-            result = subprocess.run(
-                ["docker", "ps", "--filter", "name=sparkstation-", "--format", "{{.Names}}"],
-                capture_output=True,
-                text=True
-            )
-            if not result.stdout.strip():
-                click.echo("     All containers stopped")
-                break
-            time.sleep(1)
-        else:
-            click.secho("     Warning: Some containers may still be stopping", fg="yellow")
-
-        click.secho("\n✓ Sparkstation stopped", fg="green")
-    else:
-        click.echo("     No model containers running")
-        click.secho("\n✓ Sparkstation stopped", fg="green")
+    click.secho("\n✓ Sparkstation stopped", fg="green")
 
 
 @cli.command()
+@click.option("--profile", "-p", help="Load models from named profile")
 @click.pass_context
-def restart(ctx, detach=True):
-    """Restart Sparkstation supervisor."""
+def restart(ctx, profile):
+    """Restart Sparkstation (stop → start)."""
     ctx.invoke(stop)
     time.sleep(2)
-    ctx.invoke(start, detach=detach)
+    ctx.invoke(start, detach=True, profile=profile)
 
 
 @cli.command()
@@ -264,61 +380,46 @@ def restart(ctx, detach=True):
 def status(ctx):
     """Show Sparkstation status."""
     supervisor_url = ctx.obj["supervisor_url"]
+    click.echo("Sparkstation status\n")
 
-    # Check supervisor
-    click.echo("Checking Sparkstation status...\n")
-
-    try:
-        response = httpx.get(f"{supervisor_url}/health", timeout=5)
-        if response.status_code == 200:
-            click.secho("✓ Supervisor: RUNNING", fg="green")
-        else:
-            click.secho("✗ Supervisor: UNHEALTHY", fg="red")
-            return
-    except Exception as e:
-        click.secho(f"✗ Supervisor: NOT RUNNING ({e})", fg="red")
-        click.echo("\nRun 'sparkstation start' to start the supervisor")
+    # Supervisor
+    sup_pid = _read_pid("supervisor")
+    if sup_pid and _supervisor_healthy():
+        click.secho(f"  ● Supervisor: running (PID {sup_pid})", fg="green")
+    elif sup_pid:
+        click.secho(f"  ◐ Supervisor: process alive (PID {sup_pid}) but not healthy", fg="yellow")
+    else:
+        click.secho("  ○ Supervisor: not running", fg="red")
         return
 
-    # Get models
+    # Gateway
+    gw_pid = _read_pid("gateway")
+    if gw_pid and _gateway_healthy():
+        click.secho(f"  ● Gateway:    running (PID {gw_pid})", fg="green")
+    elif gw_pid:
+        click.secho(f"  ◐ Gateway:    process alive (PID {gw_pid}) but not healthy", fg="yellow")
+    else:
+        click.secho("  ○ Gateway:    not running", fg="red")
+
+    # Models
     try:
-        response = httpx.get(f"{supervisor_url}/models/detailed", timeout=10)
-        if response.status_code == 200:
-            models = response.json()["models"]
+        r = httpx.get(f"{supervisor_url}/models/detailed", timeout=5)
+        models = r.json().get("models", [])
+        click.echo(f"\n  {len(models)} model(s):\n")
+        for m in models:
+            icon = {"running": "●", "starting": "◐", "stopped": "○", "failed": "✗"}.get(m["status"], "?")
+            color = {"running": "green", "starting": "yellow", "failed": "red"}.get(m["status"], "white")
+            mem = f" ({m['memory_gb']}GB)" if m.get("memory_gb") else ""
+            click.secho(f"    {icon} {m['alias'] or m['model_name']}: {m['status']}{mem}", fg=color)
+    except Exception:
+        click.echo("\n  (could not fetch model details)")
 
-            if not models:
-                click.echo("\nNo models loaded")
-                return
+    # Containers
+    containers = _docker_containers(only_running=True)
+    click.echo(f"\n  {len(containers)} Docker container(s)")
 
-            click.echo(f"\n{len(models)} model(s) loaded:\n")
 
-            for model in models:
-                status_icon = {
-                    "running": "●",
-                    "starting": "◐",
-                    "stopped": "○",
-                    "failed": "✗",
-                }.get(model["status"], "?")
-
-                status_color = {
-                    "running": "green",
-                    "starting": "yellow",
-                    "stopped": "white",
-                    "failed": "red",
-                }.get(model["status"], "white")
-
-                click.echo(f"  {status_icon} ", nl=False)
-                click.secho(f"{model['alias'] or model['model_name']}", fg=status_color, bold=True)
-                click.echo(f"     Model: {model['model_name']}")
-                click.echo(f"     Status: {model['status']} | Port: {model['port']} | Backend: {model['backend']}")
-
-                if model.get("memory_gb"):
-                    click.echo(f"     Memory: {model['memory_gb']}GB")
-
-                click.echo()
-
-    except Exception as e:
-        click.secho(f"Failed to get model status: {e}", fg="red")
+# ─── Model subcommands ──────────────────────────────────────────────────────
 
 
 @cli.group()
@@ -333,157 +434,44 @@ def models():
 def models_list(ctx, output_json):
     """List all models."""
     supervisor_url = ctx.obj["supervisor_url"]
-
     try:
-        response = httpx.get(f"{supervisor_url}/models/detailed", timeout=10)
-        response.raise_for_status()
-
+        r = httpx.get(f"{supervisor_url}/models/detailed", timeout=10)
+        r.raise_for_status()
         if output_json:
-            click.echo(response.text)
+            click.echo(r.text)
             return
-
-        models = response.json()["models"]
-
-        if not models:
-            click.echo("No models loaded")
-            return
-
-        click.echo(f"Found {len(models)} model(s):\n")
-
-        for model in models:
-            click.echo(f"ID: {model['id']}")
-            click.echo(f"  Name: {model['model_name']}")
-            click.echo(f"  Alias: {model['alias']}")
-            click.echo(f"  Status: {model['status']}")
-            click.echo(f"  Backend: {model['backend']}")
-            click.echo(f"  Port: {model['port']}")
-            click.echo()
-
+        for m in r.json().get("models", []):
+            click.echo(f"  {m['alias'] or m['model_name']}  status={m['status']}  port={m['port']}")
     except Exception as e:
-        click.secho(f"Failed to list models: {e}", fg="red")
-        sys.exit(1)
-
-
-@models.command("start")
-@click.argument("model_name", required=False)
-@click.option("--profile", help="Load models from named profile")
-@click.option("--alias", help="Model alias")
-@click.option("--backend", default="vllm", help="Backend to use (default: vllm)")
-@click.option("--quantization", default="fp8", help="Quantization type (default: fp8)")
-@click.pass_context
-def models_start(ctx, model_name, profile, alias, backend, quantization):
-    """Start a model (from config, profile, or by name)."""
-    supervisor_url = ctx.obj["supervisor_url"]
-
-    if profile:
-        # Load models from profile
-        import yaml
-        try:
-            with open("models.yaml") as f:
-                config = yaml.safe_load(f)
-                profile_models = config.get("profiles", {}).get(profile, [])
-
-            if not profile_models:
-                click.secho(f"✗ Profile not found: {profile}", fg="red")
-                sys.exit(1)
-
-            click.echo(f"Loading {len(profile_models)} model(s) from profile '{profile}'...")
-            for model_config in profile_models:
-                _start_model(supervisor_url, model_config)
-
-        except Exception as e:
-            click.secho(f"✗ Failed to load profile: {e}", fg="red")
-            sys.exit(1)
-
-    elif model_name:
-        # Start specific model
-        model_config = {
-            "model_name": model_name,
-            "backend": backend,
-            "model_alias": alias,
-            "quantization": quantization,
-        }
-        _start_model(supervisor_url, model_config)
-
-    else:
-        click.secho("✗ Specify either a model name or --profile", fg="red")
-        sys.exit(1)
-
-
-def _start_model(supervisor_url: str, model_config: dict):
-    """Helper to start a single model."""
-    try:
-        response = httpx.post(
-            f"{supervisor_url}/models/start",
-            json=model_config,
-            timeout=60,
-        )
-        response.raise_for_status()
-
-        result = response.json()
-        model_name = model_config.get("model_alias") or model_config["model_name"]
-        click.secho(f"✓ Started model: {model_name}", fg="green")
-
-    except httpx.HTTPStatusError as e:
-        model_name = model_config.get("model_alias") or model_config["model_name"]
-        click.secho(f"✗ Failed to start {model_name}: {e.response.text}", fg="red")
-    except Exception as e:
-        click.secho(f"✗ Error: {e}", fg="red")
-
-
-@models.command("stop")
-@click.argument("model_id")
-@click.pass_context
-def models_stop(ctx, model_id):
-    """Stop a running model."""
-    supervisor_url = ctx.obj["supervisor_url"]
-
-    try:
-        response = httpx.post(f"{supervisor_url}/models/{model_id}/stop", timeout=30)
-        response.raise_for_status()
-
-        result = response.json()
-        click.secho(f"✓ Stopped model: {result['model_id']}", fg="green")
-
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            click.secho(f"✗ Model not found: {model_id}", fg="red")
-        else:
-            click.secho(f"✗ Failed to stop model: {e.response.text}", fg="red")
-        sys.exit(1)
-    except Exception as e:
-        click.secho(f"✗ Error: {e}", fg="red")
+        click.secho(f"Error: {e}", fg="red")
         sys.exit(1)
 
 
 @models.command("logs")
 @click.argument("model_id")
-@click.option("--follow", "-f", is_flag=True, help="Follow log output")
-@click.option("--tail", default=50, help="Number of lines to show")
+@click.option("--follow", "-f", is_flag=True)
+@click.option("--tail", default=50)
 def models_logs(model_id, follow, tail):
     """Show model container logs."""
-    # Find container name from model_id
-    result = subprocess.run(
+    r = subprocess.run(
         ["docker", "ps", "-a", "--filter", f"name=sparkstation-{model_id}", "--format", "{{.Names}}"],
-        capture_output=True,
-        text=True,
+        capture_output=True, text=True,
     )
-
-    if not result.stdout.strip():
-        click.secho(f"✗ No container found for model: {model_id}", fg="red")
+    if not r.stdout.strip():
+        click.secho(f"No container found for: {model_id}", fg="red")
         sys.exit(1)
-
-    container_name = result.stdout.strip().split("\n")[0]
-
-    cmd = ["docker", "logs"]
+    container = r.stdout.strip().split("\n")[0]
+    cmd = ["docker", "logs", "--tail", str(tail)]
     if follow:
         cmd.append("-f")
-    cmd.extend(["--tail", str(tail), container_name])
-
+    cmd.append(container)
     try:
         subprocess.run(cmd)
     except KeyboardInterrupt:
         pass
+
+
+# ─── Init command (generates CLAUDE.md) ────────────────────────────────────
 
 
 SPARKSTATION_START_MARKER = "<!-- SPARKSTATION-START -->"
@@ -491,515 +479,24 @@ SPARKSTATION_END_MARKER = "<!-- SPARKSTATION-END -->"
 
 
 @cli.command()
-@click.option("--profile", "-p", help="Generate docs for a specific profile (default: autoload models)")
+@click.option("--profile", "-p", help="Generate docs for a specific profile")
 def init(profile):
-    """Add Sparkstation instructions to CLAUDE.md (creates, appends, or updates)."""
-    claude_md_path = Path("CLAUDE.md")
-
-    # Get available models from models.yaml
-    models_info = []
-    profiles_info = {}
-
-    try:
-        import yaml
-        with open("models.yaml") as f:
-            config = yaml.safe_load(f)
-
-        # Build profile info for all profiles
-        for profile_name, profile_models in config.get("profiles", {}).items():
-            profiles_info[profile_name] = []
-            for model in profile_models:
-                profiles_info[profile_name].append({
-                    "name": model.get("alias") or model.get("name", "unknown").split("/")[-1],
-                    "full_name": model.get("name", "unknown"),
-                    "model_type": model.get("model_type", "chat"),
-                })
-
-        if profile:
-            # Use specific profile's models
-            if profile in profiles_info:
-                for m in profiles_info[profile]:
-                    models_info.append({"name": m["name"], "full_name": m["full_name"]})
-            else:
-                click.secho(f"Profile '{profile}' not found. Available: {', '.join(profiles_info.keys())}", fg="red")
-                sys.exit(1)
-        else:
-            # Use autoload models (default)
-            autoload_models = config.get("autoload", {}).get("models", [])
-            for model in autoload_models:
-                models_info.append({
-                    "name": model.get("alias") or model.get("name", "unknown").split("/")[-1],
-                    "full_name": model.get("name", "unknown"),
-                })
-    except Exception:
-        # Fallback if models.yaml doesn't exist or can't be parsed
-        models_info = [
-            {"name": "gpt-oss-20b", "full_name": "openai/gpt-oss-20b"},
-            {"name": "bge-large", "full_name": "BAAI/bge-large-en-v1.5"},
-            {"name": "clip-vit", "full_name": "openai/clip-vit-large-patch14"},
-            {"name": "qwen3-vl-4b", "full_name": "Qwen/Qwen3-VL-4B-Instruct-FP8"},
-            {"name": "flux-dev", "full_name": "black-forest-labs/FLUX.1-dev"},
-        ]
-
-    # Generate model list for documentation
-    model_list_str = "\n".join([f"- `{m['name']}` - {m['full_name']}" for m in models_info])
-
-    # Generate profiles section
-    profiles_section = ""
-    if profiles_info:
-        profile_lines = []
-        for pname, pmodels in profiles_info.items():
-            model_names = ", ".join([m["name"] for m in pmodels])
-            profile_lines.append(f"- **{pname}**: {model_names}")
-        profiles_section = f"""
-## Available Profiles
-
-Switch profiles with `sparkstation start -d --profile <name>`:
-
-{chr(10).join(profile_lines)}
-"""
-
-    active_profile_note = f"\n**Active profile**: `{profile}`\n" if profile else ""
-
-    # Determine which models are available for conditional sections
-    model_aliases = {m["name"] for m in models_info}
-    has_clip = "clip-vit" in model_aliases
-    has_flux = "flux-dev" in model_aliases
-    has_gpt_oss = "gpt-oss-20b" in model_aliases
-    has_nemotron = "nemotron3-nano" in model_aliases
-
-    # Pick the primary chat model for examples
-    chat_model = "qwen3-vl-4b"
-    for name in ["qwen3-vl-30b", "qwen3-vl-4b", "nemotron3-nano", "gpt-oss-20b"]:
-        if name in model_aliases:
-            chat_model = name
-            break
-
-    # Detect vision-capable model (any qwen3-vl variant)
-    vision_model = None
-    for name in model_aliases:
-        if name.startswith("qwen3-vl"):
-            vision_model = name
-            break
-
-    # Pick the reasoning model for examples
-    reasoning_model = None
-    if has_nemotron:
-        reasoning_model = "nemotron3-nano"
-    elif has_gpt_oss:
-        reasoning_model = "gpt-oss-20b"
-
-    # Build reasoning section
-    reasoning_section = ""
-    if reasoning_model:
-        reasoning_section = f"""
-## Reasoning Models
-
-The `{reasoning_model}` model is a reasoning model that shows its thinking process. Access both the reasoning and final response:
-
-```python
-response = client.chat.completions.create(
-    model="{reasoning_model}",
-    messages=[{{"role": "user", "content": "What is 2+2?"}}]
-)
-
-# Final answer
-print(response.choices[0].message.content)
-
-# Reasoning process (if available)
-if hasattr(response.choices[0].message, 'reasoning_content'):
-    print(response.choices[0].message.reasoning_content)
-```
-"""
-
-    # Build CLIP section
-    clip_section = ""
-    if has_clip:
-        clip_section = """
-### Image Embeddings (CLIP)
-
-The `clip-vit` model generates embeddings for images using OpenAI's CLIP.
-
-**Important**: CLIP embeddings use a structured array format (different from standard OpenAI embeddings API).
-
-#### With Image URL
-```python
-response = client.embeddings.create(
-    model="clip-vit",
-    input=[{"image": "https://example.com/image.jpg"}]
-)
-
-embedding = response.data[0].embedding  # 768 dimensions
-```
-
-#### With Base64 Encoded Image
-```python
-import base64
-
-with open("image.jpg", "rb") as f:
-    image_data = base64.b64encode(f.read()).decode('utf-8')
-
-response = client.embeddings.create(
-    model="clip-vit",
-    input=[{"image": image_data}]
-)
-
-embedding = response.data[0].embedding  # 768 dimensions
-```
-
-**Note**: The input must be an array of objects with `"image"` keys, not flat strings.
-
-### Cross-Modal Search with CLIP
-
-CLIP embeddings enable searching images with text or finding similar images:
-
-```python
-# Embed text query
-text_response = client.embeddings.create(
-    model="clip-vit",
-    input="a red car"
-)
-text_embedding = text_response.data[0].embedding
-
-# Embed image
-image_response = client.embeddings.create(
-    model="clip-vit",
-    input=[{"image": "https://example.com/car.jpg"}]
-)
-image_embedding = image_response.data[0].embedding
-
-# Compare via cosine similarity (both in same 768-dim embedding space)
-from numpy import dot
-from numpy.linalg import norm
-
-similarity = dot(text_embedding, image_embedding) / (norm(text_embedding) * norm(image_embedding))
-print(f"Similarity: {similarity}")
-```
-"""
-
-    # Build FLUX section
-    flux_section = ""
-    if has_flux:
-        flux_section = """
-## Image Generation
-
-Sparkstation provides FLUX.1-dev for high-quality image generation via the OpenAI-compatible `/v1/images/generations` endpoint.
-
-### Basic Image Generation
-
-```python
-import base64
-
-response = client.images.generate(
-    model="flux-dev",
-    prompt="A photorealistic image of a red robot in a garden",
-    n=1,
-    size="512x512",
-    response_format="b64_json"
-)
-
-image_data = base64.b64decode(response.data[0].b64_json)
-with open("generated_image.png", "wb") as f:
-    f.write(image_data)
-```
-
-### With curl
-
-```bash
-curl http://localhost:8000/v1/images/generations \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer dummy-key" \\
-  -d '{
-    "model": "flux-dev",
-    "prompt": "A cyberpunk city at night with neon lights",
-    "n": 1,
-    "size": "512x512"
-  }'
-```
-
-**Notes**:
-- Image generation takes 20-60 seconds depending on size
-- FLUX.1-dev produces high-quality photorealistic images
-- First request may be slower (model warmup)
-"""
-
-    # Build model-specific details
-    model_details_lines = []
-    if vision_model:
-        model_details_lines.append(f"""- **Vision Chat** (`{vision_model}`):
-  - Supports image analysis via URL or base64
-  - Uses standard OpenAI vision format: `{{"type": "image_url", "image_url": {{"url": "..."}}}}`""")
-    if has_nemotron:
-        model_details_lines.append("""- **Reasoning + Tool Calling** (`nemotron3-nano`):
-  - NVIDIA Nemotron 3 Nano 30B with NVFP4 quantization
-  - 65k context window, includes reasoning traces in `reasoning_content` field
-  - Supports tool calling via qwen3_coder parser""")
-    if has_gpt_oss:
-        model_details_lines.append("""- **Reasoning** (`gpt-oss-20b`):
-  - Includes reasoning traces in `reasoning_content` field""")
-    if "bge-large" in model_aliases:
-        model_details_lines.append("""- **Text Embeddings** (`bge-large`):
-  - Generates 1024-dim embeddings for text semantic tasks
-  - Standard format: `input="text"` or `input=["text1", "text2"]`""")
-    if has_clip:
-        model_details_lines.append("""- **Image Embeddings** (`clip-vit`):
-  - Generates 768-dim embeddings for images and cross-modal search
-  - **Special format required**: Images must use `input=[{"image": "..."}]` (not flat strings)
-  - Text queries use simple format: `input="text query"`""")
-    if has_flux:
-        model_details_lines.append("""- **Image Generation** (`flux-dev`):
-  - Generates high-quality images from text prompts using FLUX.1-dev
-  - Supports sizes: 512x512, 1024x1024
-  - Takes 20-60 seconds per image""")
-
-    model_details_str = "\n\n".join(model_details_lines)
-
-    # Build API capabilities list
-    api_lines = []
-    chat_models = [m["name"] for m in models_info if m["name"] not in ("bge-large", "clip-vit", "flux-dev")]
-    if chat_models:
-        api_lines.append(f"  - Chat: `/v1/chat/completions` ({', '.join(chat_models)})")
-    embed_models = [m["name"] for m in models_info if m["name"] in ("bge-large", "clip-vit")]
-    if embed_models:
-        api_lines.append(f"  - Embeddings: `/v1/embeddings` ({', '.join(embed_models)})")
-    if has_flux:
-        api_lines.append("  - Image Generation: `/v1/images/generations` (flux-dev)")
-    api_capabilities_str = "\n".join(api_lines)
-
-    sparkstation_section = f"""{SPARKSTATION_START_MARKER}
-# Sparkstation Local LLM Gateway
-
-This project has access to local LLM models through Sparkstation gateway.
-{active_profile_note}
-## Available Models
-
-{model_list_str}
-{profiles_section}
-## API Endpoint
-
-- **Base URL**: `http://localhost:8000/v1`
-- **Protocol**: OpenAI-compatible API
-- **Authentication**: Use any string as API key (e.g., `"dummy-key"`)
-
-## Usage with OpenAI Python SDK
-
-```python
-from openai import OpenAI
-
-# Initialize client pointing to local Sparkstation gateway
-client = OpenAI(
-    api_key="dummy-key",  # Any value works
-    base_url="http://localhost:8000/v1"
-)
-
-# Make a request
-response = client.chat.completions.create(
-    model="{chat_model}",
-    messages=[
-        {{"role": "user", "content": "Hello!"}}
-    ]
-)
-
-print(response.choices[0].message.content)
-```
-
-## Usage with curl
-
-```bash
-curl http://localhost:8000/v1/chat/completions \\
-  -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer dummy-key" \\
-  -d '{{
-    "model": "{chat_model}",
-    "messages": [{{"role": "user", "content": "Hello!"}}]
-  }}'
-```
-
-## Streaming
-
-```python
-stream = client.chat.completions.create(
-    model="{chat_model}",
-    messages=[{{"role": "user", "content": "Tell me a story"}}],
-    stream=True
-)
-
-for chunk in stream:
-    if chunk.choices[0].delta.content:
-        print(chunk.choices[0].delta.content, end="", flush=True)
-```
-
-## Vision (Image Analysis)
-
-The `{vision_model}` model supports vision capabilities. You can pass images via URL or base64:
-
-### With Image URL
-
-```python
-response = client.chat.completions.create(
-    model="{vision_model}",
-    messages=[
-        {{
-            "role": "user",
-            "content": [
-                {{"type": "text", "text": "What's in this image?"}},
-                {{"type": "image_url", "image_url": {{"url": "https://example.com/image.jpg"}}}}
-            ]
-        }}
-    ]
-)
-```
-
-### With Base64 Encoded Image
-
-```python
-import base64
-
-with open("image.jpg", "rb") as f:
-    image_data = base64.b64encode(f.read()).decode('utf-8')
-
-response = client.chat.completions.create(
-    model="{vision_model}",
-    messages=[
-        {{
-            "role": "user",
-            "content": [
-                {{"type": "text", "text": "Describe this image"}},
-                {{"type": "image_url", "image_url": {{"url": f"data:image/jpeg;base64,{{image_data}}"}}}}
-            ]
-        }}
-    ]
-)
-```
-
-**Note**: Vision requests use more tokens (~5000+ tokens for image processing).
-{reasoning_section}
-## Embeddings
-
-Sparkstation provides text embedding models for semantic search, RAG, and similarity tasks.
-
-### Text Embeddings (bge-large)
-
-Generate embeddings for text using the `bge-large` model:
-
-```python
-# Generate text embeddings
-response = client.embeddings.create(
-    model="bge-large",
-    input="Hello world"
-)
-
-# Get embedding vector (1024 dimensions)
-embedding = response.data[0].embedding
-print(f"Embedding dimensions: {{len(embedding)}}")
-```
-
-### Batch Embeddings
-
-Generate embeddings for multiple inputs at once:
-
-```python
-response = client.embeddings.create(
-    model="bge-large",
-    input=["First document", "Second document", "Third document"]
-)
-
-for i, data in enumerate(response.data):
-    print(f"Document {{i}}: {{len(data.embedding)}} dimensions")
-```
-{clip_section}
-### Use Cases
-
-- **Semantic Search**: Embed documents and queries, find similar content via cosine similarity
-- **RAG (Retrieval Augmented Generation)**: Embed knowledge base for context retrieval
-- **Classification**: Use embeddings as features for downstream ML tasks
-{flux_section}
-## Important Notes
-
-- **Do not start/stop Sparkstation services** - they are managed by the system
-- Models are already running and ready to use
-- Use the gateway endpoint (`http://localhost:8000/v1`) for all requests
-- All models support standard OpenAI APIs:
-{api_capabilities_str}
-
-### Model-Specific Details
-
-{model_details_str}
-{SPARKSTATION_END_MARKER}"""
-
-    # Handle the three cases: create, append, or update
-    if claude_md_path.exists():
-        existing_content = claude_md_path.read_text()
-
-        if SPARKSTATION_START_MARKER in existing_content and SPARKSTATION_END_MARKER in existing_content:
-            # Case 3: Update existing Sparkstation section
-            import re
-            pattern = re.escape(SPARKSTATION_START_MARKER) + r".*?" + re.escape(SPARKSTATION_END_MARKER)
-            new_content = re.sub(pattern, sparkstation_section, existing_content, flags=re.DOTALL)
-            claude_md_path.write_text(new_content)
-            click.secho(f"✓ Updated Sparkstation section in {claude_md_path}", fg="green")
-        else:
-            # Case 2: Append to existing file
-            with open(claude_md_path, "a") as f:
-                f.write("\n\n" + sparkstation_section)
-            click.secho(f"✓ Added Sparkstation section to {claude_md_path}", fg="green")
-    else:
-        # Case 1: Create new file
-        claude_md_path.write_text(sparkstation_section)
-        click.secho(f"✓ Created {claude_md_path}", fg="green")
-
-    click.echo("\nThis section provides instructions for AI assistants on how to use")
-    click.echo("the Sparkstation gateway.")
+    """Add Sparkstation instructions to CLAUDE.md."""
+    # Delegate to the existing init logic — it's large but stable,
+    # so we import it from the original module to avoid duplication.
+    from cli_init import run_init
+    run_init(profile)
 
 
 @cli.command()
-@click.option("--force", is_flag=True, help="Force cleanup without confirmation")
+@click.option("--force", is_flag=True, help="Skip confirmation")
 @click.pass_context
 def cleanup(ctx, force):
-    """Clean up database and orphaned containers."""
+    """Full cleanup: stop everything, remove containers, reset database."""
     if not force:
-        click.confirm("This will stop all models, clean up containers, and reset the database. Continue?", abort=True)
-
-    click.echo("Cleaning up...")
-
-    # Stop gateway
-    click.echo("  → Stopping gateway...")
-    subprocess.run(["pkill", "-9", "-f", "litellm.*gateway/litellm.yaml"], capture_output=True)
-
-    # Stop supervisor
-    click.echo("  → Stopping supervisor...")
-    subprocess.run(["pkill", "-9", "-f", "uvicorn supervisor.main:app"], capture_output=True)
-
-    # Stop and remove ALL Sparkstation containers (running and stopped)
-    click.echo("  → Stopping and removing Sparkstation containers...")
-    result = subprocess.run(
-        ["docker", "ps", "-a", "--filter", "name=sparkstation-", "--format", "{{.Names}}"],
-        capture_output=True,
-        text=True
-    )
-    if result.stdout.strip():
-        container_names = result.stdout.strip().split("\n")
-        for container_name in container_names:
-            if container_name:  # Skip empty lines
-                subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
-                click.echo(f"     Removed: {container_name}")
-    else:
-        click.echo("     No Sparkstation containers found")
-
-    # Clean database
-    click.echo("  → Cleaning database...")
-    db_path = Path("data/sparkstation.db")
-    if db_path.exists():
-        db_path.unlink()
-        click.echo("     Database removed")
-
-    for ext in ["-shm", "-wal"]:
-        db_file = Path(f"data/sparkstation.db{ext}")
-        if db_file.exists():
-            db_file.unlink()
-
-    click.secho("\n✓ Cleanup complete!", fg="green")
-    click.echo("\nRun 'sparkstation start' to restart with a clean state")
+        click.confirm("Stop all services, remove containers, and reset DB?", abort=True)
+    ctx.invoke(stop)
+    click.secho("✓ Cleanup complete", fg="green")
 
 
 if __name__ == "__main__":

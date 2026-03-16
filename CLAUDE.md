@@ -8,8 +8,9 @@ This project has access to local LLM models through Sparkstation gateway.
 ## Available Models
 
 - `qwen3-vl-30b` - Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
-- `bge-large` - BAAI/bge-large-en-v1.5
+- `bge-m3` - BAAI/bge-m3
 - `clip-vit` - openai/clip-vit-large-patch14
+- `species-detect` - species-ensemble
 
 ## Available Profiles
 
@@ -18,8 +19,8 @@ Switch profiles with `sparkstation start -d --profile <name>`:
 - **dev**: qwen3-vl-4b
 - **prod**: qwen3-vl-4b, gpt-oss-20b
 - **inference**: qwen3-vl-4b
-- **openclaw**: nemotron3-nano, bge-large, qwen3-vl-4b
-- **image-indexing**: qwen3-vl-30b, bge-large, clip-vit
+- **openclaw**: nemotron3-nano, bge-m3, qwen3-vl-4b
+- **image-indexing**: qwen3-vl-30b, bge-m3, clip-vit, species-detect
 
 ## API Endpoint
 
@@ -226,18 +227,14 @@ print(f"Similarity: {similarity}")
 - Models are already running and ready to use
 - Use the gateway endpoint (`http://localhost:8000/v1`) for all requests
 - All models support standard OpenAI APIs:
-  - Chat: `/v1/chat/completions` (qwen3-vl-30b)
-  - Embeddings: `/v1/embeddings` (bge-large, clip-vit)
+  - Chat: `/v1/chat/completions` (qwen3-vl-30b, bge-m3, species-detect)
+  - Embeddings: `/v1/embeddings` (clip-vit)
 
 ### Model-Specific Details
 
 - **Vision Chat** (`qwen3-vl-30b`):
   - Supports image analysis via URL or base64
   - Uses standard OpenAI vision format: `{"type": "image_url", "image_url": {"url": "..."}}`
-
-- **Text Embeddings** (`bge-large`):
-  - Generates 1024-dim embeddings for text semantic tasks
-  - Standard format: `input="text"` or `input=["text1", "text2"]`
 
 - **Image Embeddings** (`clip-vit`):
   - Generates 768-dim embeddings for images and cross-modal search
