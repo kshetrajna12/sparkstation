@@ -23,6 +23,8 @@ class VLLMLauncher(ModelLauncher):
     # Backend-specific quantization flag mapping
     QUANTIZATION_MAP = {
         "fp8": "fp8",  # vLLM native fp8
+        "nvfp4": "nvfp4",  # NVIDIA FP4 runtime quantization (BF16 → FP4 on-the-fly)
+        "mxfp4": "mxfp4",  # MXFP4 quantization (with namake-taro patches for SM121)
         "int4": "awq",  # vLLM uses AWQ for int4
         "awq": "awq",  # Direct AWQ
         "gptq": "gptq",  # GPTQ quantization
