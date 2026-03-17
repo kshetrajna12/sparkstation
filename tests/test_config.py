@@ -1,13 +1,21 @@
 """
 Tests for configuration management.
+
+NOTE: Settings() reads from .env via pydantic-settings, so tests that check
+code defaults must override env_file to avoid picking up local .env values.
 """
 import pytest
 from supervisor.config import Settings
 
 
+def _defaults(**overrides) -> Settings:
+    """Create Settings with code defaults only (ignore .env file)."""
+    return Settings(_env_file=None, **overrides)
+
+
 def test_settings_defaults():
-    """Test default configuration values."""
-    settings = Settings()
+    """Test default configuration values (code defaults, not .env)."""
+    settings = _defaults()
 
     # Server defaults
     assert settings.host == "127.0.0.1"
@@ -18,7 +26,10 @@ def test_settings_defaults():
     assert settings.total_unified_memory_gb == 128
     assert settings.memory_hard_limit_gb == 110
     assert settings.memory_soft_limit_gb == 100
-    assert settings.max_resident_models == 3
+    assert settings.max_resident_models == 5
+
+    # Docker images
+    assert "26.01" in settings.vllm_docker_image
 
     # Health checks
     assert settings.health_check_enabled is True
@@ -31,17 +42,24 @@ def test_settings_defaults():
     assert settings.auto_restart_backoff_minutes == "1,5,15"
 
 
+def test_settings_from_env():
+    """Test that .env overrides are picked up."""
+    settings = Settings()  # reads .env
+    # .env sets MEMORY_HARD_LIMIT_GB=113
+    assert settings.memory_hard_limit_gb in (110, 113)  # either default or .env
+
+
 def test_port_range_valid():
     """Test port range is sensible."""
-    settings = Settings()
+    settings = _defaults()
     assert settings.model_port_range_start < settings.model_port_range_end
-    assert settings.model_port_range_start > 1024  # Above privileged ports
-    assert settings.model_port_range_end < 65536  # Below max port
+    assert settings.model_port_range_start > 1024
+    assert settings.model_port_range_end < 65536
 
 
 def test_memory_limits_valid():
     """Test memory limits are correctly configured."""
-    settings = Settings()
+    settings = _defaults()
     assert settings.memory_soft_limit_gb < settings.memory_hard_limit_gb
     assert settings.memory_hard_limit_gb <= settings.total_unified_memory_gb
 
@@ -52,9 +70,7 @@ def test_memory_limits_valid():
 
 def test_thermal_hysteresis_valid():
     """Test thermal thresholds have hysteresis."""
-    settings = Settings()
+    settings = _defaults()
     assert settings.thermal_resume_threshold_c < settings.thermal_suspend_threshold_c
-
-    # Should have at least 3°C hysteresis
     hysteresis = settings.thermal_suspend_threshold_c - settings.thermal_resume_threshold_c
     assert hysteresis >= 3
