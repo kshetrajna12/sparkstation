@@ -1,24 +1,33 @@
 # Sparkstation Models Configuration
 # Define models to auto-load on startup
+#
+# Unified on Qwen3.5-35B-A3B with MXFP4 quantization (namake-taro patches)
+# - Replaces: qwen3-vl-30b, gpt-oss-20b, qwen3-vl-4b, nemotron3-nano
+# - Natively multimodal (vision + text), tool calling, reasoning
+# - 54.7 tok/s on GB10 with MXFP4, TTFT p50=81ms
+# - Docker image: vllm-qwen35-mxfp4:cu130
 
 # Auto-load these models when supervisor starts
 autoload:
   enabled: true
   models:
-    # Reasoning model with built-in MXFP4 quantization
-    - name: "openai/gpt-oss-20b"
-      alias: "gpt-oss-20b"
+    - name: "Qwen/Qwen3.5-35B-A3B"
+      alias: "qwen3.5-35b"
       backend: "vllm"
       model_type: "chat"
-      quantization: "none"  # Uses built-in MXFP4
-      memory_gb: 35  # 20B with built-in quantization (needs headroom for KV cache)
+      quantization: "mxfp4"
+      memory_gb: 40
       idle_timeout_minutes: 60
       auto_suspend_enabled: false
+      docker_image: "vllm-qwen35-mxfp4:cu130"
       extra_args:
-        max_model_len: 16384
-        max_concurrent_requests: 32
-        tool_call_parser: "openai"
-        reasoning_parser: "openai_gptoss"  # Required for Harmony format multi-turn tool calling
+        max_model_len: 65536
+        max_num_batched_tokens: 2096
+        max_concurrent_requests: 4
+        tool_call_parser: "qwen3_coder"
+        reasoning_parser: "qwen3"
+        kv_cache_dtype: "fp8"
+        enable_prefix_caching: true
 
     # Text embedding model for semantic search and RAG
     - name: "BAAI/bge-large-en-v1.5"
@@ -26,45 +35,27 @@ autoload:
       backend: "vllm"
       model_type: "embedding"
       quantization: "none"
-      memory_gb: 2.5  # 1.34GB model + vLLM overhead
+      memory_gb: 2.5
       idle_timeout_minutes: 30
       auto_suspend_enabled: false
 
     # Image embedding model for vision tasks (CLIP)
-    # Uses custom transformers-based server for proper image+text embeddings
     - name: "openai/clip-vit-large-patch14"
       alias: "clip-vit"
       backend: "clip"
       model_type: "embedding"
       quantization: "none"
-      memory_gb: 5  # 1.71GB model + overhead
+      memory_gb: 5
       idle_timeout_minutes: 30
       auto_suspend_enabled: false
-
-    # Vision model for image analysis (Qwen3-VL with FP8 quantization)
-    # NOTE: Loaded LAST among vLLM models - vision encoder profiling is slow,
-    # other models must finish loading first to avoid memory race condition
-    - name: "Qwen/Qwen3-VL-4B-Instruct-FP8"
-      alias: "qwen3-vl-4b"
-      backend: "vllm"
-      model_type: "chat"
-      quantization: "none"  # FP8 is built into model weights
-      memory_gb: 23  # FP8 5B vision model (actual ~20GB)
-      idle_timeout_minutes: 30
-      auto_suspend_enabled: false
-      extra_args:
-        max_model_len: 4096  # Reduced from 8192 due to KV cache memory constraints
-        max_concurrent_requests: 32
-        tool_call_parser: "hermes"  # Qwen uses hermes-style tool calling
 
     # Image generation model using FLUX.1-dev
-    # NOTE: Loaded AFTER other models to avoid memory race condition
     - name: "black-forest-labs/FLUX.1-dev"
       alias: "flux-dev"
       backend: "flux"
       model_type: "image"
       quantization: "none"
-      memory_gb: 35  # Measured: 33.5GB actual usage
+      memory_gb: 35
       idle_timeout_minutes: 60
       auto_suspend_enabled: false
       extra_args:
@@ -73,77 +64,87 @@ autoload:
 
 # Named profiles for different use cases
 profiles:
-  # Development profile - lightweight models
+  # Development profile — single unified model
   dev:
-    - name: "Qwen/Qwen3-VL-4B-Instruct-FP8"
-      alias: "qwen3-vl-4b"
+    - name: "Qwen/Qwen3.5-35B-A3B"
+      alias: "qwen3.5-35b"
       backend: "vllm"
       model_type: "chat"
-      quantization: "none"
-      memory_gb: 14
+      quantization: "mxfp4"
+      memory_gb: 40
       default: true
       auto_suspend_enabled: false
-      extra_args:
-        max_model_len: 4096
-        max_concurrent_requests: 32
-        tool_call_parser: "hermes"
-
-  # Production profile - full model set
-  prod:
-    - name: "Qwen/Qwen3-VL-4B-Instruct-FP8"
-      alias: "qwen3-vl-4b"
-      backend: "vllm"
-      quantization: "none"
-      auto_suspend_enabled: false
-      extra_args:
-        max_model_len: 4096
-
-    - name: "openai/gpt-oss-20b"
-      alias: "gpt-oss-20b"
-      backend: "vllm"
-      quantization: "none"
-      default: true
-      auto_suspend_enabled: false
-      extra_args:
-        max_model_len: 16384
-        tool_call_parser: "openai"
-        reasoning_parser: "openai_gptoss"
-
-  # Inference only - no auto-suspend
-  inference:
-    - name: "Qwen/Qwen3-VL-4B-Instruct-FP8"
-      alias: "qwen3-vl-4b"
-      backend: "vllm"
-      quantization: "none"
-      default: true
-      auto_suspend_enabled: false
-      extra_args:
-        max_model_len: 4096
-
-  # OpenClaw mode - Nemotron 3 Nano 30B + embeddings + vision (~53 GiB total)
-  openclaw:
-    - name: "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4"
-      alias: "nemotron3-nano"
-      backend: "vllm"
-      model_type: "chat"
-      quantization: "none"
-      default: true
-      memory_gb: 36
-      idle_timeout_minutes: 60
-      auto_suspend_enabled: false
-      docker_image: "nvcr.io/nvidia/vllm:26.01-py3"
-      env_vars:
-        VLLM_USE_FLASHINFER_MOE_FP4: "1"
-      volumes:
-        - "nano_v3_reasoning_parser.py:/workspace/nano_v3_reasoning_parser.py"
+      docker_image: "vllm-qwen35-mxfp4:cu130"
       extra_args:
         max_model_len: 65536
+        max_num_batched_tokens: 2096
+        max_concurrent_requests: 4
+        tool_call_parser: "qwen3_coder"
+        reasoning_parser: "qwen3"
+        kv_cache_dtype: "fp8"
+        enable_prefix_caching: true
+
+  # Production profile — single unified model (replaces gpt-oss-20b + qwen3-vl-4b)
+  prod:
+    - name: "Qwen/Qwen3.5-35B-A3B"
+      alias: "qwen3.5-35b"
+      backend: "vllm"
+      model_type: "chat"
+      quantization: "mxfp4"
+      memory_gb: 40
+      default: true
+      auto_suspend_enabled: false
+      docker_image: "vllm-qwen35-mxfp4:cu130"
+      extra_args:
+        max_model_len: 65536
+        max_num_batched_tokens: 2096
+        max_concurrent_requests: 4
+        tool_call_parser: "qwen3_coder"
+        reasoning_parser: "qwen3"
+        kv_cache_dtype: "fp8"
+        enable_prefix_caching: true
+
+  # Inference only
+  inference:
+    - name: "Qwen/Qwen3.5-35B-A3B"
+      alias: "qwen3.5-35b"
+      backend: "vllm"
+      model_type: "chat"
+      quantization: "mxfp4"
+      memory_gb: 40
+      default: true
+      auto_suspend_enabled: false
+      docker_image: "vllm-qwen35-mxfp4:cu130"
+      extra_args:
+        max_model_len: 65536
+        max_num_batched_tokens: 2096
+        max_concurrent_requests: 4
+        tool_call_parser: "qwen3_coder"
+        reasoning_parser: "qwen3"
+        kv_cache_dtype: "fp8"
+        enable_prefix_caching: true
+
+  # OpenClaw mode — unified model + embeddings (~57.5 GiB total)
+  # Replaces nemotron3-nano + qwen3-vl-4b with single qwen3.5-35b
+  openclaw:
+    - name: "Qwen/Qwen3.5-35B-A3B"
+      alias: "qwen3.5-35b"
+      backend: "vllm"
+      model_type: "chat"
+      quantization: "mxfp4"
+      default: true
+      memory_gb: 40
+      idle_timeout_minutes: 60
+      auto_suspend_enabled: false
+      docker_image: "vllm-qwen35-mxfp4:cu130"
+      extra_args:
+        max_model_len: 65536
+        max_num_batched_tokens: 2096
         max_concurrent_requests: 8
         tool_call_parser: "qwen3_coder"
-        reasoning_parser: "nano_v3"
-        reasoning_parser_plugin: "/workspace/nano_v3_reasoning_parser.py"
+        reasoning_parser: "qwen3"
         kv_cache_dtype: "fp8"
-        shm_size: "64g"
+        enable_prefix_caching: true
 
     - name: "BAAI/bge-m3"
       alias: "bge-m3"
@@ -154,38 +155,26 @@ profiles:
       auto_suspend_enabled: false
       docker_image: "nvcr.io/nvidia/vllm:26.01-py3"
 
-    - name: "Qwen/Qwen3-VL-4B-Instruct-FP8"
-      alias: "qwen3-vl-4b"
-      backend: "vllm"
-      model_type: "chat"
-      quantization: "none"
-      memory_gb: 14
-      auto_suspend_enabled: false
-      docker_image: "nvcr.io/nvidia/vllm:26.01-py3"
-      extra_args:
-        max_model_len: 4096
-        max_concurrent_requests: 4
-        tool_call_parser: "hermes"
-
-  # Image indexing mode - VL-30B + text embeddings + CLIP + species detection (~47.5 GiB total)
+  # Image indexing mode — unified model + embeddings + CLIP + species (~52.5 GiB total)
   image-indexing:
-    - name: "Qwen/Qwen3-VL-30B-A3B-Instruct-FP8"
-      alias: "qwen3-vl-30b"
+    - name: "Qwen/Qwen3.5-35B-A3B"
+      alias: "qwen3.5-35b"
       backend: "vllm"
       model_type: "chat"
-      quantization: "none"
+      quantization: "mxfp4"
       default: true
-      memory_gb: 55
+      memory_gb: 40  # MXFP4 ~18GB weights + ~22GB KV cache
       idle_timeout_minutes: 60
       auto_suspend_enabled: false
-      docker_image: "nvcr.io/nvidia/vllm:26.01-py3"
-      volumes:
-        - "patches/moe_config_gb10.json:/usr/local/lib/python3.12/dist-packages/vllm/model_executor/layers/fused_moe/configs/E=128,N=768,device_name=NVIDIA_GB10,dtype=fp8_w8a8,block_shape=[128,128].json"
+      docker_image: "vllm-qwen35-mxfp4:cu130"
       extra_args:
         max_model_len: 65536
+        max_num_batched_tokens: 2096
         max_concurrent_requests: 4
-        tool_call_parser: "hermes"
+        tool_call_parser: "qwen3_coder"
+        reasoning_parser: "qwen3"
         kv_cache_dtype: "fp8"
+        enable_prefix_caching: true
 
     - name: "BAAI/bge-m3"
       alias: "bge-m3"
@@ -209,6 +198,6 @@ profiles:
       backend: "species"
       model_type: "detection"
       quantization: "none"
-      memory_gb: 5  # MegaDetector (~0.3GB) + SpeciesNet classifier (~0.2GB) + iNat21 ViT-L (~1.2GB) + overhead
+      memory_gb: 5
       idle_timeout_minutes: 60
       auto_suspend_enabled: false

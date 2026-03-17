@@ -7,7 +7,7 @@ This project has access to local LLM models through Sparkstation gateway.
 
 ## Available Models
 
-- `qwen3-vl-30b` - Qwen/Qwen3-VL-30B-A3B-Instruct-FP8
+- `qwen3.5-35b` - Qwen/Qwen3.5-35B-A3B (MXFP4)
 - `bge-m3` - BAAI/bge-m3
 - `clip-vit` - openai/clip-vit-large-patch14
 - `species-detect` - species-ensemble
@@ -16,11 +16,11 @@ This project has access to local LLM models through Sparkstation gateway.
 
 Switch profiles with `sparkstation start -d --profile <name>`:
 
-- **dev**: qwen3-vl-4b
-- **prod**: qwen3-vl-4b, gpt-oss-20b
-- **inference**: qwen3-vl-4b
-- **openclaw**: nemotron3-nano, bge-m3, qwen3-vl-4b
-- **image-indexing**: qwen3-vl-30b, bge-m3, clip-vit, species-detect
+- **dev**: qwen3.5-35b
+- **prod**: qwen3.5-35b
+- **inference**: qwen3.5-35b
+- **openclaw**: qwen3.5-35b, bge-m3
+- **image-indexing**: qwen3.5-35b, bge-m3, clip-vit, species-detect
 
 ## API Endpoint
 
@@ -41,7 +41,7 @@ client = OpenAI(
 
 # Make a request
 response = client.chat.completions.create(
-    model="qwen3-vl-30b",
+    model="qwen3.5-35b",
     messages=[
         {"role": "user", "content": "Hello!"}
     ]
@@ -57,7 +57,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer dummy-key" \
   -d '{
-    "model": "qwen3-vl-30b",
+    "model": "qwen3.5-35b",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -66,7 +66,7 @@ curl http://localhost:8000/v1/chat/completions \
 
 ```python
 stream = client.chat.completions.create(
-    model="qwen3-vl-30b",
+    model="qwen3.5-35b",
     messages=[{"role": "user", "content": "Tell me a story"}],
     stream=True
 )
@@ -78,13 +78,13 @@ for chunk in stream:
 
 ## Vision (Image Analysis)
 
-The `qwen3-vl-30b` model supports vision capabilities. You can pass images via URL or base64:
+The `qwen3.5-35b` model supports vision capabilities. You can pass images via URL or base64:
 
 ### With Image URL
 
 ```python
 response = client.chat.completions.create(
-    model="qwen3-vl-30b",
+    model="qwen3.5-35b",
     messages=[
         {
             "role": "user",
@@ -106,7 +106,7 @@ with open("image.jpg", "rb") as f:
     image_data = base64.b64encode(f.read()).decode('utf-8')
 
 response = client.chat.completions.create(
-    model="qwen3-vl-30b",
+    model="qwen3.5-35b",
     messages=[
         {
             "role": "user",
