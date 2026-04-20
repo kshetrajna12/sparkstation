@@ -201,3 +201,12 @@ profiles:
       memory_gb: 5
       idle_timeout_minutes: 60
       auto_suspend_enabled: false
+
+    - name: "face-recognition"
+      alias: "face-detect"
+      backend: "face"
+      model_type: "detection"
+      quantization: "none"
+      memory_gb: 1
+      idle_timeout_minutes: 60
+      auto_suspend_enabled: false
