@@ -37,6 +37,7 @@ class Backend(str, Enum):
     FLUX = "flux"
     CLIP = "clip"
     SPECIES = "species"
+    FACE = "face"
     TRT_LLM = "trt-llm"  # Future support
 
 
