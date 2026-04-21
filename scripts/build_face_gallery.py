@@ -7,10 +7,10 @@ Usage:
 
 Directory structure expected:
     /path/to/photos/
-        Abhi/
+        alice/
             photo1.jpg
             photo2.jpg
-        K/
+        bob/
             photo1.jpg
             photo2.png
         ...
