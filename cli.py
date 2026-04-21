@@ -197,6 +197,23 @@ def start(ctx, detach, profile):
         click.echo("Run 'sparkstation stop' first, or 'sparkstation restart'.")
         return
 
+    # Reap any stray supervisor/gateway processes from a prior session that
+    # outlived their pidfile. Without this, a prior start whose pidfile was
+    # overwritten still has its supervisor running — and its reconciliation
+    # loop will SIGKILL containers launched by the NEW supervisor, treating
+    # them as orphans. We've seen containers with exitCode=137 within 60s of
+    # a fresh start for exactly this reason. `stop()` already does this same
+    # pkill; mirror it here so `start` is idempotent even after bad prior states.
+    strays = subprocess.run(
+        ["pgrep", "-f", "uvicorn supervisor.main:app"],
+        capture_output=True, text=True,
+    )
+    if strays.stdout.strip():
+        click.echo(f"  → Reaping {len(strays.stdout.strip().splitlines())} stray supervisor process(es) before start")
+        subprocess.run(["pkill", "-9", "-f", "uvicorn supervisor.main:app"], capture_output=True)
+    subprocess.run(["pkill", "-9", "-f", "litellm.proxy.proxy_cli"], capture_output=True)
+    time.sleep(1)  # let the kernel finish reaping before we spawn the replacement
+
     if profile:
         click.echo(f"Starting Sparkstation with profile: {profile}")
     else:
