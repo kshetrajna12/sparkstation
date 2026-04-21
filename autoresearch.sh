@@ -4,7 +4,12 @@ set -euo pipefail
 # Autoresearch benchmark for Qwen3.6 evaluation
 # Usage: BENCH_MODEL=qwen3.5-35b ./autoresearch.sh
 
-MODEL="${BENCH_MODEL:-${1:-qwen3.5-35b}}"
+# Active model read from autoresearch.model file (or default to current deployment)
+if [ -f autoresearch.model ]; then
+    MODEL="$(cat autoresearch.model | tr -d '[:space:]')"
+else
+    MODEL="qwen3.5-35b"
+fi
 MODE="${BENCH_MODE:-${2:-chat}}"
 REQUESTS="${BENCH_REQUESTS:-10}"
 WARMUP="${BENCH_WARMUP:-3}"
@@ -43,7 +48,7 @@ async def bench_one(client, prompt, max_tokens):
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "stream": True,
-        "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
+        "chat_template_kwargs": {"enable_thinking": False},
     }, headers={"Authorization": "Bearer dummy-key"}, timeout=120.0) as resp:
         async for line in resp.aiter_lines():
             if line.startswith("data: ") and line != "data: [DONE]":

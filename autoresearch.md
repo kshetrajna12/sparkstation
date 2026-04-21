@@ -7,6 +7,13 @@ deployed Qwen3.5-35B-A3B MXFP4 across all Sparkstation profiles.
 **Candidates:**
 - `Qwen/Qwen3.6-35B-A3B` (BF16 + runtime MXFP4 quantization — matches Qwen3.5 setup)
 - `Qwen/Qwen3.6-35B-A3B-FP8` (pre-quantized FP8)
+- `mmangkad/Qwen3.6-35B-A3B-NVFP4` (pre-quantized NVFP4 — Blackwell-native 4-bit, per-block FP8 scales)
+
+**Rationale for NVFP4 on GB10:** Blackwell's 5th-gen Tensor Cores natively execute NVFP4
+(NVIDIA's per-block FP8-scaled FP4). In principle this should outperform both FP8 (larger
+weights, more memory bandwidth) and MXFP4 (coarser E8M0 scales). No pre-quantized MXFP4
+weights exist for vLLM on HuggingFace — all MXFP4 distributions are GGUF/MLX — so runtime
+MXFP4 via the existing docker image is the only MXFP4 path.
 
 **Key architectural note:** Qwen3.6 uses the SAME `Qwen3_5MoeForConditionalGeneration`
 architecture as Qwen3.5 (`model_type: qwen3_5_moe`). Our existing `vllm-qwen35-mxfp4:cu130`
@@ -44,9 +51,19 @@ Model alias selected via `BENCH_MODEL` env var.
 1. **Baseline re-bench**: Confirm current Qwen3.5-35B MXFP4 throughput (noise floor check)
 2. **Qwen3.6 BF16 + MXFP4 runtime**: Test with existing Docker image, mxfp4 quantization
 3. **Qwen3.6-FP8**: Test pre-quantized FP8 variant (smaller weights, may be faster)
-4. **Compare** tok/s, TTFT, latency
-5. **Sanity quality check**: Send a few reasoning/tool-calling prompts, verify outputs parse
-6. **Decide**: If >= baseline AND no regressions, deploy unified on 3.6
+4. **Qwen3.6-NVFP4**: Test Blackwell-native 4-bit variant (expected best on GB10 Tensor Cores)
+5. **Compare** tok/s, TTFT, latency
+6. **Sanity quality check**: Send a few reasoning/tool-calling prompts, verify outputs parse
+7. **Decide**: If best Qwen3.6 variant >= baseline AND no regressions, deploy unified on 3.6
 
 ## What's Been Tried
-(Updated as experiments run)
+
+### Iteration 0 — Baseline (2026-04-20) — KEPT
+Qwen/Qwen3.5-35B-A3B via `vllm-qwen35-mxfp4:cu130` runtime MXFP4, thinking=false.
+- **tok_per_sec: 56.3** ← primary metric
+- ttft_p50: 77.9 ms, ttft_p95: 81.6 ms
+- latency_p50: 4453.8 ms (= 256 tok / 56 tok/s, expected)
+- Fixed instrumentation bug in `autoresearch.sh`: `chat_template_kwargs` was nested inside
+  `extra_body` (SDK-only field, stripped by gateway) so thinking was silently ON for the
+  first run. Moved to top-level of the JSON body. Verified thinking is now disabled
+  (completion_tokens = actual output length, no `<think>...` block).
