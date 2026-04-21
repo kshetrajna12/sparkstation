@@ -165,6 +165,11 @@ class ModelStartRequest(BaseModel):
     num_speculative_tokens: int = 5
     speculative_method: Optional[str] = None
     extra_args: Dict[str, Any] = Field(default_factory=dict)
+    # Explicit memory reservation in GB. When set, bypasses the built-in
+    # estimate_model_memory() heuristic (which substring-matches model names
+    # and mis-estimates MoE models like "Qwen3.6-35B-A3B" because "3b" in "a3b"
+    # triggers the 3B branch).
+    memory_gb: Optional[float] = None
 
 
 class ModelStartResponse(BaseModel):
