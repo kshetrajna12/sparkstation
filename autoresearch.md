@@ -102,8 +102,47 @@ Did not attempt. Pre-bench research showed NVFP4 is infeasible on GB10 today:
    merged yet
 Revisit when vLLM ships native GB10 NVFP4 kernels.
 
+### Iteration 4 — upgrade vLLM for instanttensor + larger batch budget (2026-04-20) — FAILED
+Attempted to upgrade from our current `vllm-qwen35-mxfp4:cu130` (vLLM 0.17.0,
+namake-taro patches) to upstream vLLM nightly to gain `--load-format instanttensor`
+(cold start ~5 min → <1 min) and bump `max_num_batched_tokens` 2096 → 8192.
+
+Two attempts, both crashed during weight load:
+
+1. `vllm/vllm-openai:nightly` (vLLM 0.19.2rc1.dev21):
+   - Container ENTRYPOINT = `["vllm serve"]`; supervisor launcher prepends the same,
+     producing a doubled `vllm serve vllm serve ...`. Worked around with a wrapper
+     image (`ENTRYPOINT []`).
+   - MXFP4 MoE backend auto-picked = `MARLIN`. Weight load failed:
+     `RuntimeError: The size of tensor a (1024) must match the size of tensor b (2048)
+     at non-singleton dimension 1`.
+
+2. `vllm-qwen35:cu130` (vLLM 0.17.1rc1.dev177):
+   - Empty entrypoint, no wrapper needed.
+   - Also auto-picked MARLIN. Different but related failure:
+     `IndexError: tuple index out of range` on `loaded_weight.shape[2]` in
+     `fused_moe/layer.py:1076`.
+
+**Root cause:** upstream vLLM's MARLIN MXFP4 MoE kernel on GB10 (sm_121) has
+a shared-memory race and lacks specialized GatedDeltaNet kernels for Qwen3.x MoE
+models. Known issues: vllm-project/vllm#30135, #35924, #37030. On sm_121 the
+priority backends (FLASHINFER_TRTLLM, TRITON, FLASHINFER_CUTLASS) all fail
+`is_supported_config`, so vLLM falls through to MARLIN which then breaks.
+
+**The namake-taro patches** (https://github.com/namake-taro/vllm-custom) in our
+current image fix this by: (a) BF16 → MXFP4 online quantization path, (b) SM121
+device-support fixes for CUTLASS, (c) Marlin MoE 256-thread kernel shared-memory
+race fix, (d) Triton allocator + FlashInfer header fixes. **They are the only
+working path right now** — any stock vLLM image fails.
+
+Forum post reports 70 tok/s Qwen3.5-35B on namake-taro patches. Our baseline at
+56.3 may have additional tuning headroom (unexplored args, different bench
+protocol), but that's a separate investigation.
+
+Reverted models.yaml to iter-1 state.
+
 ## Decision
-**Winner: Iteration 1 — Qwen/Qwen3.6-35B-A3B with runtime MXFP4.**
+**Winner: Iteration 1 — Qwen/Qwen3.6-35B-A3B with runtime MXFP4 via `vllm-qwen35-mxfp4:cu130` (namake-taro patches on vLLM 0.17.0).**
 
 Same docker image, same alias (`qwen3.5-35b`), same `extra_args` as the previous
 Qwen3.5 entry — only the HF name changes. Zero client-side migration. Performance
@@ -112,3 +151,7 @@ newer base model with the same vision + tool-calling + reasoning capabilities.
 
 `models.yaml` already reflects this decision (autoload + image-indexing profile both
 point at `Qwen/Qwen3.6-35B-A3B`). A sparkstation restart applies the change.
+
+**Upgrade is blocked** until either:
+1. namake-taro publishes patches for a newer vLLM base, OR
+2. Upstream vLLM merges the sm_121 MARLIN MoE fixes (tracking #30135, #35924, #37030).
