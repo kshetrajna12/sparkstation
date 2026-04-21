@@ -68,7 +68,7 @@ Qwen/Qwen3.5-35B-A3B via `vllm-qwen35-mxfp4:cu130` runtime MXFP4, thinking=false
   first run. Moved to top-level of the JSON body. Verified thinking is now disabled
   (completion_tokens = actual output length, no `<think>...` block).
 
-### Iteration 1 — Qwen3.6 BF16 + runtime MXFP4 (2026-04-20) — KEPT (TIE)
+### Iteration 1 — Qwen3.6 BF16 + runtime MXFP4 (2026-04-20) — KEPT (WINNER)
 Qwen/Qwen3.6-35B-A3B via same `vllm-qwen35-mxfp4:cu130` image. Architecture unchanged
 (`qwen3_5_moe`), drop-in swap. Confirmed CUTLASS_FP4 (Blackwell SM120 native) kernels
 lit up via vLLM's mxfp4 auto-select.
@@ -80,5 +80,35 @@ lit up via vLLM's mxfp4 auto-select.
      in commit 2530ffe: added `memory_gb: Optional[float]` to `ModelStartRequest`.
   2. `autoresearch.sh` had the `chat_template_kwargs` misnested (pre-existing, fixed
      in iter 0). Went route-via-models.yaml instead of supervisor API.
-- Decision: tie, not worth reverting. Continue to FP8 and NVFP4 variants before
-  picking the winner.
+
+### Iteration 2 — Qwen3.6-35B-A3B-FP8 (2026-04-20) — REVERTED
+Pre-quantized FP8 variant, same docker image.
+- tok_per_sec: 48.2 (-14.4% vs baseline — hard regression)
+- vLLM auto-selected **TRITON FP8 MoE backend** on Blackwell. Available-but-unused
+  faster backends: DEEPGEMM, FLASHINFER_TRTLLM, FLASHINFER_CUTLASS. Forcing one
+  would need either a different image (`vllm-deepgemm:26.02` exists locally) or
+  `VLLM_FP8_MOE_BACKEND` env. Out of scope for this round.
+- Also fixed mid-run: a zombie supervisor process bug (misleading "readonly database"
+  errors). See memory/project_supervisor_zombie_modelinstance_bug.md.
+
+### Iteration 3 — Qwen3.6-35B-A3B-NVFP4 (2026-04-20) — SKIPPED
+Did not attempt. Pre-bench research showed NVFP4 is infeasible on GB10 today:
+1. mmangkad/Qwen3.6-35B-A3B-NVFP4 model card targets **SGLang**, not vLLM
+2. GB10 is sm_121 — lacks the `cvt.rn.satfinite.e2m1x2.f32` PTX instruction NVFP4
+   needs; FlashInfer falls back to CUTLASS which also fails on sm_121
+3. Community workaround (avarok/dgx-vllm-nvfp4-kernel) uses software E2M1 emulation
+   and reports ~35 tok/s — already worse than iter-1's 55.7 tok/s
+4. Open vLLM issue #31085 tracks native sm_120/121 NVFP4 MoE kernel support — not
+   merged yet
+Revisit when vLLM ships native GB10 NVFP4 kernels.
+
+## Decision
+**Winner: Iteration 1 — Qwen/Qwen3.6-35B-A3B with runtime MXFP4.**
+
+Same docker image, same alias (`qwen3.5-35b`), same `extra_args` as the previous
+Qwen3.5 entry — only the HF name changes. Zero client-side migration. Performance
+is a tie with 3.5 (-1.1% tok/s, within 10-req noise floor). Qwen3.6 is a strictly
+newer base model with the same vision + tool-calling + reasoning capabilities.
+
+`models.yaml` already reflects this decision (autoload + image-indexing profile both
+point at `Qwen/Qwen3.6-35B-A3B`). A sparkstation restart applies the change.
