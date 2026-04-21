@@ -161,14 +161,14 @@ profiles:
 
   # Image indexing mode — unified model + embeddings + CLIP + species (~52.5 GiB total)
   image-indexing:
-    # autoresearch iteration #1: Qwen3.6-35B-A3B runtime MXFP4
-    - name: "Qwen/Qwen3.6-35B-A3B"
+    # autoresearch iteration #2: Qwen3.6-35B-A3B-FP8 (pre-quantized FP8)
+    - name: "Qwen/Qwen3.6-35B-A3B-FP8"
       alias: "qwen3.5-35b"
       backend: "vllm"
       model_type: "chat"
-      quantization: "mxfp4"
+      quantization: "fp8"
       default: true
-      memory_gb: 40  # MXFP4 ~18GB weights + ~22GB KV cache
+      memory_gb: 40  # FP8 ~35GB weights + KV cache
       idle_timeout_minutes: 60
       auto_suspend_enabled: false
       docker_image: "vllm-qwen35-mxfp4:cu130"
