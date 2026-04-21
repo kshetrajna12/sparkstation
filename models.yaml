@@ -176,7 +176,7 @@ profiles:
       memory_gb: 40  # MXFP4 ~18GB weights + ~22GB KV cache
       idle_timeout_minutes: 60
       auto_suspend_enabled: false
-      docker_image: "vllm-nightly-noentry:local"  # wrapper of vllm/vllm-openai:nightly with ENTRYPOINT cleared (supervisor launcher prepends `vllm serve` itself, so the upstream image's `ENTRYPOINT=["vllm serve"]` causes a doubled command)
+      docker_image: "vllm/vllm-openai:nightly"
       extra_args:
         max_model_len: 65536
         max_num_batched_tokens: 8192
