@@ -716,10 +716,14 @@ async def start_model(request: ModelStartRequest):
         # Generate model ID
         model_id = ModelRegistry.generate_id(request.model_name)
 
-        # Estimate memory
-        memory_estimate = resource_manager.estimate_model_memory(
-            request.model_name, request.quantization
-        )
+        # Estimate memory — honor explicit request value if provided,
+        # otherwise fall back to the heuristic.
+        if request.memory_gb is not None:
+            memory_estimate = request.memory_gb
+        else:
+            memory_estimate = resource_manager.estimate_model_memory(
+                request.model_name, request.quantization
+            )
 
         # Allocate resources
         try:
