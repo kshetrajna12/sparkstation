@@ -176,7 +176,7 @@ profiles:
       memory_gb: 40  # MXFP4 ~18GB weights + ~22GB KV cache
       idle_timeout_minutes: 60
       auto_suspend_enabled: false
-      docker_image: "vllm-nightly-noentry:local"  # wrapper of vllm/vllm-openai:nightly with ENTRYPOINT cleared (supervisor launcher prepends `vllm serve` itself, so the upstream image's `ENTRYPOINT=["vllm serve"]` causes a doubled command)
+      docker_image: "vllm-qwen35:cu130"  # vLLM 0.17.1rc1 — has instanttensor, empty entrypoint, no 0.19 MARLIN-MXFP4 regression. Tried vllm/vllm-openai:nightly (0.19.2rc1) first but its MARLIN MXFP4 MoE backend crashes with "tensor size mismatch 1024 vs 2048" on Qwen3.6 weights. GB10 sm_121 FLASHINFER/TRITON fallbacks also fail priority check, so MARLIN is what vLLM picks — and it's broken. Revisit when vLLM ships native sm_121 MXFP4 kernels.
       extra_args:
         max_model_len: 65536
         max_num_batched_tokens: 8192
