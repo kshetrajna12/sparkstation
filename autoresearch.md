@@ -67,3 +67,18 @@ Qwen/Qwen3.5-35B-A3B via `vllm-qwen35-mxfp4:cu130` runtime MXFP4, thinking=false
   `extra_body` (SDK-only field, stripped by gateway) so thinking was silently ON for the
   first run. Moved to top-level of the JSON body. Verified thinking is now disabled
   (completion_tokens = actual output length, no `<think>...` block).
+
+### Iteration 1 — Qwen3.6 BF16 + runtime MXFP4 (2026-04-20) — KEPT (TIE)
+Qwen/Qwen3.6-35B-A3B via same `vllm-qwen35-mxfp4:cu130` image. Architecture unchanged
+(`qwen3_5_moe`), drop-in swap. Confirmed CUTLASS_FP4 (Blackwell SM120 native) kernels
+lit up via vLLM's mxfp4 auto-select.
+- tok_per_sec: 55.7 (-1.1% vs 56.3 baseline — within 10-req noise)
+- ttft_p50: 84.9 ms (+9%), ttft_p95: 129.0 ms (+58%)
+- Encountered two infrastructure bugs along the way:
+  1. Supervisor's `/models/start` endpoint silently discarded `memory_gb` and used a
+     buggy substring-match heuristic (`"3b" in "a3b"` → 7 GB for a 35B model). Fixed
+     in commit 2530ffe: added `memory_gb: Optional[float]` to `ModelStartRequest`.
+  2. `autoresearch.sh` had the `chat_template_kwargs` misnested (pre-existing, fixed
+     in iter 0). Went route-via-models.yaml instead of supervisor API.
+- Decision: tie, not worth reverting. Continue to FP8 and NVFP4 variants before
+  picking the winner.
