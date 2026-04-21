@@ -1,11 +1,16 @@
 # Sparkstation Models Configuration
 # Define models to auto-load on startup
 #
-# Unified on Qwen3.5-35B-A3B with MXFP4 quantization (namake-taro patches)
-# - Replaces: qwen3-vl-30b, gpt-oss-20b, qwen3-vl-4b, nemotron3-nano
+# Unified on Qwen3.6-35B-A3B with MXFP4 quantization (namake-taro patches)
+# - Evaluated 2026-04-20 against 3.5 baseline: tied within noise (55.7 vs 56.3 tok/s)
+# - Replaces: qwen3-vl-30b, gpt-oss-20b, qwen3-vl-4b, nemotron3-nano, Qwen3.5-35B-A3B
 # - Natively multimodal (vision + text), tool calling, reasoning
-# - 54.7 tok/s on GB10 with MXFP4, TTFT p50=81ms
-# - Docker image: vllm-qwen35-mxfp4:cu130
+# - 55.7 tok/s on GB10 with MXFP4, TTFT p50=85ms (single-client, 10 requests)
+# - Docker image: vllm-qwen35-mxfp4:cu130 (vLLM 0.17.0 + namake-taro patches)
+# - Alias "qwen3.5-35b" intentionally preserved for client backward compatibility;
+#   do NOT rename — downstream clients pin that string. Upstream vLLM >= 0.17.1
+#   breaks MXFP4 MoE on GB10 sm_121 (MARLIN shared-mem race), so this image stays
+#   until namake-taro ships newer patches or vllm-project/vllm#30135 lands.
 
 # Auto-load these models when supervisor starts
 autoload:
@@ -70,7 +75,7 @@ autoload:
 profiles:
   # Development profile — single unified model
   dev:
-    - name: "Qwen/Qwen3.5-35B-A3B"
+    - name: "Qwen/Qwen3.6-35B-A3B"
       alias: "qwen3.5-35b"
       backend: "vllm"
       model_type: "chat"
@@ -90,7 +95,7 @@ profiles:
 
   # Production profile — single unified model (replaces gpt-oss-20b + qwen3-vl-4b)
   prod:
-    - name: "Qwen/Qwen3.5-35B-A3B"
+    - name: "Qwen/Qwen3.6-35B-A3B"
       alias: "qwen3.5-35b"
       backend: "vllm"
       model_type: "chat"
@@ -110,7 +115,7 @@ profiles:
 
   # Inference only
   inference:
-    - name: "Qwen/Qwen3.5-35B-A3B"
+    - name: "Qwen/Qwen3.6-35B-A3B"
       alias: "qwen3.5-35b"
       backend: "vllm"
       model_type: "chat"
@@ -129,9 +134,9 @@ profiles:
         enable_prefix_caching: true
 
   # OpenClaw mode — unified model + embeddings (~57.5 GiB total)
-  # Replaces nemotron3-nano + qwen3-vl-4b with single qwen3.5-35b
+  # Replaces nemotron3-nano + qwen3-vl-4b with single qwen3.6-35b
   openclaw:
-    - name: "Qwen/Qwen3.5-35B-A3B"
+    - name: "Qwen/Qwen3.6-35B-A3B"
       alias: "qwen3.5-35b"
       backend: "vllm"
       model_type: "chat"
