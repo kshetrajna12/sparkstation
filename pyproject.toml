@@ -63,6 +63,14 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["supervisor", "gateway"]
 
+# The CLI entry point (project.scripts: sparkstation = "cli:cli") resolves to
+# cli.py at the project root, which lives outside the packaged supervisor/ and
+# gateway/ directories. Without including it as a standalone module here, the
+# installed entry-point script fails with ModuleNotFoundError. Same for cli_init.py.
+[tool.hatch.build.targets.wheel.force-include]
+"cli.py" = "cli.py"
+"cli_init.py" = "cli_init.py"
+
 [dependency-groups]
 dev = [
     "pytest>=8.1.0",

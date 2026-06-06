@@ -17,7 +17,28 @@ import httpx
 
 DEFAULT_SUPERVISOR_URL = "http://127.0.0.1:9001"
 DEFAULT_GATEWAY_URL = "http://127.0.0.1:8000"
-PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def _find_project_root() -> Path:
+    """Find the sparkstation project root by walking up from cwd looking for models.yaml.
+
+    Why this exists: cli.py used to compute PROJECT_ROOT as Path(__file__).resolve().parent,
+    which works in development (cli.py in repo root) but BREAKS for the installed CLI
+    (`uv tool install`) — there __file__ resolves to site-packages, and
+    site-packages/models.yaml does not exist. Every helper that touched models.yaml or
+    gateway/litellm.yaml fell over. The systemd unit got away with it because it sets
+    WorkingDirectory to the repo and `cd=PROJECT_ROOT` for spawned subprocesses, but
+    that means anything outside that unit was broken. Walking up from cwd is the
+    standard "find your project root" pattern (git, npm, etc.).
+    """
+    cwd = Path.cwd()
+    for candidate in [cwd, *cwd.parents]:
+        if (candidate / "models.yaml").exists():
+            return candidate
+    return cwd
+
+
+PROJECT_ROOT = _find_project_root()
 RUN_DIR = Path.home() / ".sparkstation"
 LOG_DIR = RUN_DIR / "logs"
 PID_DIR = RUN_DIR / "pids"
@@ -234,10 +255,15 @@ def start(ctx, detach, profile):
 
     # ── Detached mode ──
 
-    # Clean stale state
-    db_path = PROJECT_ROOT / "data" / "sparkstation.db"
-    if db_path.exists():
-        db_path.unlink()
+    # NOTE: previously this deleted data/sparkstation.db unconditionally as
+    # part of "clean stale state". With registry.reconcile_state() now using
+    # full container IDs (fixed orphan-detection — old short-ID match was
+    # broken and wiped every legitimate container on every start), reconcile
+    # correctly adopts surviving model_instances rows for containers that are
+    # still running. Wiping the DB here means the next supervisor has no
+    # record of those containers, treats them as orphans, removes them, and
+    # reloads every model from cold. Letting reconcile run on the existing
+    # DB makes restarts near-instant when no model config has changed.
 
     # 1) Start supervisor
     click.echo("  → Starting supervisor...")
@@ -439,6 +465,140 @@ def status(ctx):
 # ─── Model subcommands ──────────────────────────────────────────────────────
 
 
+# ─── Per-model lifecycle helpers (used by stop/start/swap) ──────────────────
+
+
+def _models_yaml_lookup(alias: str, profile: Optional[str] = None) -> Optional[dict]:
+    """Find the models.yaml entry for an alias.
+
+    Resolution order:
+      1. Named profile (CLI --profile flag), if given — fail if alias not present.
+      2. STARTUP_PROFILE env var, if set.
+      3. autoload section.
+      4. All profiles, first match wins.
+
+    Returns the raw dict so docker_image / extra_args / speculative-* flow through
+    to /models/start unchanged.
+
+    The CLI process inherits its env from the caller's shell, not the supervisor's
+    process — so STARTUP_PROFILE is usually unset for CLI invocations. Falling
+    through to "any profile" matches user expectation that `sparkstation models
+    start bge-m3` works as long as `bge-m3` is configured somewhere.
+    """
+    import yaml
+    with open(PROJECT_ROOT / "models.yaml") as f:
+        config = yaml.safe_load(f) or {}
+
+    def _match(entries: list) -> Optional[dict]:
+        for m in entries or []:
+            if m.get("alias") == alias or m.get("name") == alias:
+                return m
+        return None
+
+    # Explicit --profile: only that profile, no fallback (so the user gets a
+    # clear error instead of silently picking up a different config).
+    if profile:
+        return _match(config.get("profiles", {}).get(profile, []))
+
+    # STARTUP_PROFILE env, if set, takes precedence over autoload.
+    env_profile = os.environ.get("STARTUP_PROFILE")
+    if env_profile:
+        hit = _match(config.get("profiles", {}).get(env_profile, []))
+        if hit:
+            return hit
+
+    # Then autoload, then any profile.
+    hit = _match(config.get("autoload", {}).get("models", []))
+    if hit:
+        return hit
+    for _profile_name, profile_models in config.get("profiles", {}).items():
+        hit = _match(profile_models)
+        if hit:
+            return hit
+    return None
+
+
+def _start_model_via_api(model_cfg: dict, supervisor_url: str) -> str:
+    """POST /models/start with the given models.yaml dict. Returns the new model_id."""
+    body = {
+        "model_name": model_cfg["name"],
+        "backend": model_cfg["backend"],
+        "model_type": model_cfg.get("model_type", "chat"),
+        "model_alias": model_cfg.get("alias"),
+        "quantization": model_cfg.get("quantization") or "none",
+        "memory_gb": model_cfg.get("memory_gb"),
+        "idle_timeout_minutes": model_cfg.get("idle_timeout_minutes", 30),
+        "auto_suspend_enabled": model_cfg.get("auto_suspend_enabled", False),
+        "extra_args": model_cfg.get("extra_args", {}),
+        "docker_image": model_cfg.get("docker_image"),
+        "env_vars": model_cfg.get("env_vars", {}),
+        "volumes": model_cfg.get("volumes", []),
+    }
+    if model_cfg.get("speculative_model"):
+        body["speculative_model"] = model_cfg["speculative_model"]
+    if model_cfg.get("speculative_method"):
+        body["speculative_method"] = model_cfg["speculative_method"]
+    # num_speculative_tokens is meaningful whenever speculative-config is
+    # enabled (model OR method), so set it whenever it's specified.
+    if model_cfg.get("num_speculative_tokens") is not None:
+        body["num_speculative_tokens"] = model_cfg["num_speculative_tokens"]
+    if model_cfg.get("speculative_extra"):
+        body["speculative_extra"] = model_cfg["speculative_extra"]
+    r = httpx.post(f"{supervisor_url}/models/start", json=body, timeout=60)
+    r.raise_for_status()
+    return r.json()["model_id"]
+
+
+def _wait_for_model_ready(model_id: str, supervisor_url: str, timeout_seconds: int = 600) -> bool:
+    """Poll /models/{id}/status until status=running AND health_status=healthy."""
+    start = time.time()
+    while time.time() - start < timeout_seconds:
+        try:
+            r = httpx.get(f"{supervisor_url}/models/{model_id}/status", timeout=5)
+            if r.status_code == 200:
+                s = r.json()
+                if s.get("status") == "running" and s.get("health_status") == "healthy":
+                    return True
+        except Exception:
+            pass
+        time.sleep(3)
+    return False
+
+
+def _restart_gateway() -> bool:
+    """Stop the gateway, refresh yaml from supervisor, start a fresh gateway.
+
+    Until LiteLLM grows a hot-reload path, the gateway has no way to pick up
+    model_list changes at runtime. We rewrite litellm.yaml and bounce the
+    process — ~3-5s gateway downtime across ALL aliases. Per-model 503 with
+    Retry-After requires a custom middleware in front of LiteLLM and is
+    deferred to Phase 1.5-4.
+    """
+    _ensure_dirs()
+    _write_gateway_yaml()
+    _kill_and_wait("gateway", timeout=5)
+    subprocess.run(["pkill", "-9", "-f", "litellm.proxy.proxy_cli"], capture_output=True)
+    time.sleep(1)
+    gw_log = LOG_DIR / "gateway.log"
+    gw_env = os.environ.copy()
+    gw_env.pop("SUPERVISOR_DATABASE_URL", None)
+    with open(gw_log, "w") as lf:
+        gw_proc = subprocess.Popen(
+            [sys.executable, "-m", "litellm.proxy.proxy_cli",
+             "--config", "gateway/litellm.yaml",
+             "--host", "127.0.0.1", "--port", "8000"],
+            stdout=lf, stderr=subprocess.STDOUT,
+            env=gw_env, cwd=PROJECT_ROOT,
+            start_new_session=True,
+        )
+    _write_pid("gateway", gw_proc.pid)
+    for _ in range(30):
+        time.sleep(1)
+        if _gateway_healthy():
+            return True
+    return False
+
+
 @cli.group()
 def models():
     """Manage models."""
@@ -462,6 +622,80 @@ def models_list(ctx, output_json):
     except Exception as e:
         click.secho(f"Error: {e}", fg="red")
         sys.exit(1)
+
+
+@models.command("stop")
+@click.argument("alias")
+@click.option("--no-gateway-refresh", is_flag=True,
+              help="Skip restarting the gateway after stop (faster if you're about to start something)")
+@click.pass_context
+def models_stop(ctx, alias, no_gateway_refresh):
+    """Stop a running model by alias. Other models keep running."""
+    supervisor_url = ctx.obj["supervisor_url"]
+    try:
+        r = httpx.get(f"{supervisor_url}/models/detailed", timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        click.secho(f"Supervisor unreachable: {e}", fg="red")
+        sys.exit(1)
+    matching = [m for m in r.json()["models"] if m.get("alias") == alias and m.get("status") in ("running", "starting", "suspended")]
+    if not matching:
+        click.secho(f"No live model with alias '{alias}'", fg="red")
+        sys.exit(1)
+    model_id = matching[0]["id"]
+    click.echo(f"  → Stopping {alias} ({model_id})...")
+    sr = httpx.post(f"{supervisor_url}/models/{model_id}/stop", timeout=30)
+    if sr.status_code != 200:
+        click.secho(f"  Stop failed: HTTP {sr.status_code}: {sr.text}", fg="red")
+        sys.exit(1)
+    if not no_gateway_refresh:
+        click.echo("  → Refreshing gateway routes...")
+        _restart_gateway()
+    click.secho(f"✓ Stopped {alias}", fg="green")
+
+
+@models.command("start")
+@click.argument("alias")
+@click.option("--profile", "-p", default=None,
+              help="Profile to read config from (default: STARTUP_PROFILE env or autoload section)")
+@click.pass_context
+def models_start(ctx, alias, profile):
+    """Start a model by alias, reading its config from models.yaml."""
+    model_cfg = _models_yaml_lookup(alias, profile=profile)
+    if not model_cfg:
+        where = f"profile '{profile}'" if profile else "active profile / autoload"
+        click.secho(f"No model with alias '{alias}' in models.yaml ({where})", fg="red")
+        sys.exit(1)
+    supervisor_url = ctx.obj["supervisor_url"]
+    click.echo(f"  → Starting {alias} ({model_cfg['name']})...")
+    try:
+        model_id = _start_model_via_api(model_cfg, supervisor_url)
+    except httpx.HTTPStatusError as e:
+        click.secho(f"  Start failed: HTTP {e.response.status_code}: {e.response.text}", fg="red")
+        sys.exit(1)
+    click.echo(f"     id: {model_id}, waiting for ready (up to 10 min)...")
+    if not _wait_for_model_ready(model_id, supervisor_url, timeout_seconds=600):
+        click.secho("  Did not reach RUNNING+HEALTHY in 10 min — check supervisor log", fg="yellow")
+        sys.exit(1)
+    click.echo("  → Refreshing gateway routes...")
+    _restart_gateway()
+    click.secho(f"✓ Started {alias}", fg="green")
+
+
+@models.command("swap")
+@click.argument("alias")
+@click.option("--profile", "-p", default=None,
+              help="Profile to read new config from (default: STARTUP_PROFILE env or autoload section)")
+@click.pass_context
+def models_swap(ctx, alias, profile):
+    """Stop a model and start it back from current models.yaml. Other models keep running.
+
+    Use this after editing models.yaml's entry for ALIAS — picks up new docker_image,
+    extra_args, speculative-config, etc. without touching other models.
+    """
+    # Skip gateway refresh on the intermediate stop — we'll do it once at the end.
+    ctx.invoke(models_stop, alias=alias, no_gateway_refresh=True)
+    ctx.invoke(models_start, alias=alias, profile=profile)
 
 
 @models.command("logs")
