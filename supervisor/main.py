@@ -99,25 +99,47 @@ async def lifespan(app: FastAPI):
     if reconcile_summary["fixed_stopped"] or reconcile_summary["fixed_running"] or reconcile_summary["removed_orphaned"]:
         logger.warning(f"Database reconciliation found inconsistencies: {reconcile_summary}")
 
-    # Purge stale DB entries (stopped/failed/starting, or "running" with no live container)
-    # This prevents confusion when switching between profiles or after unclean shutdown
+    # Purge stale DB entries. Rule: keep iff (status is RUNNING or STARTING) AND
+    # the container is actually alive. Everything else is stale (SUSPENDED, STOPPED,
+    # FAILED, or status-says-up-but-container-dead) and is removed so the autoload
+    # / API paths can recreate cleanly.
+    #
+    # Previously this purged ALL non-RUNNING entries, including STARTING — which
+    # killed any model still mid-cold-load on a supervisor restart, even though
+    # its container was healthily booting. The follow-up autoload then collided
+    # on the orphaned container's port. Keep STARTING + live container; the
+    # health-check loop transitions it to RUNNING within ~10s.
     import subprocess as _sp
     all_models = await registry.list_all()
     for model in all_models:
-        if model.status not in [ModelStatus.RUNNING]:
-            logger.info(f"Purging stale DB entry: {model.model_alias or model.model_name} (status: {model.status})")
-            await registry.delete(model.id)
-        elif model.container_id:
-            # Verify the container is actually running
+        container_alive = False
+        if model.container_id:
             result = _sp.run(
                 ["docker", "inspect", "-f", "{{.State.Running}}", model.container_id],
-                capture_output=True, text=True
+                capture_output=True, text=True,
             )
-            if result.returncode != 0 or result.stdout.strip() != "true":
-                logger.info(f"Purging stale DB entry: {model.model_alias or model.model_name} (container {model.container_id} not running)")
-                await registry.delete(model.id)
+            container_alive = result.returncode == 0 and result.stdout.strip() == "true"
+        if model.status in [ModelStatus.RUNNING, ModelStatus.STARTING] and container_alive:
+            continue
+        logger.info(
+            f"Purging stale DB entry: {model.model_alias or model.model_name} "
+            f"(status: {model.status}, container_alive: {container_alive})"
+        )
+        await registry.delete(model.id)
 
     resource_manager = ResourceManager()
+    # Re-register any RUNNING or STARTING models surviving from the previous
+    # supervisor process so resource_manager knows which ports/memory are
+    # already in use. STARTING is included because mid-cold-load models still
+    # hold a port and memory reservation — without this, /models/start (and
+    # autoload of new aliases) can allocate a port that an existing container
+    # is already bound to, causing the next launch to collide on Docker bind.
+    for _surviving in await registry.list_all():
+        if _surviving.status in [ModelStatus.RUNNING, ModelStatus.STARTING]:
+            if _surviving.port:
+                resource_manager.allocated_ports[_surviving.id] = _surviving.port
+            if _surviving.memory_gb:
+                resource_manager.model_memory_usage[_surviving.id] = _surviving.memory_gb
     launcher_factory = LauncherFactory()
     auto_suspend_manager = AutoSuspendManager(registry, launcher_factory, resource_manager)
     from supervisor.models_config import get_default_model_alias
@@ -234,6 +256,7 @@ async def lifespan(app: FastAPI):
                     speculative_model=model_config.speculative_model,
                     num_speculative_tokens=model_config.num_speculative_tokens,
                     speculative_method=model_config.speculative_method,
+                    speculative_extra=model_config.speculative_extra,
                     extra_args=model_config.extra_args,
                     docker_image=model_config.docker_image,
                     env_vars=model_config.env_vars,
@@ -259,6 +282,7 @@ async def lifespan(app: FastAPI):
                     "speculative_model": config.speculative_model,
                     "num_speculative_tokens": config.num_speculative_tokens,
                     "speculative_method": config.speculative_method,
+                    "speculative_extra": config.speculative_extra,
                     "extra_args": config.extra_args,
                     "docker_image": config.docker_image,
                     "env_vars": config.env_vars,
@@ -707,11 +731,25 @@ async def start_model(request: ModelStartRequest):
 
     model_id = None
     try:
-        # Check if alias already exists
+        # Check if alias already exists. If the existing entry is in a non-live
+        # state (stopped / suspended / failed), recycle it — that's exactly the
+        # "alias is free, the registry just hasn't been cleaned" case the swap
+        # flow runs into. Only RUNNING/STARTING entries should block a new start.
         if request.model_alias:
             existing = await registry.get_by_alias(request.model_alias)
             if existing:
-                raise ModelAlreadyExistsError(request.model_alias)
+                if existing.status in [ModelStatus.RUNNING, ModelStatus.STARTING]:
+                    raise ModelAlreadyExistsError(request.model_alias)
+                logger.info(
+                    f"Recycling stale registry entry for alias '{request.model_alias}' "
+                    f"(id={existing.id}, status={existing.status})"
+                )
+                # Release any leftover resource reservation, then drop the row
+                try:
+                    resource_manager.release_model(existing.id, full_release=True)
+                except Exception as e:
+                    logger.debug(f"Resource release for {existing.id} during recycle: {e}")
+                await registry.delete(existing.id)
 
         # Generate model ID
         model_id = ModelRegistry.generate_id(request.model_name)
@@ -745,7 +783,11 @@ async def start_model(request: ModelStartRequest):
             speculative_model=request.speculative_model,
             num_speculative_tokens=request.num_speculative_tokens,
             speculative_method=request.speculative_method,
+            speculative_extra=request.speculative_extra,
             extra_args=request.extra_args,
+            docker_image=request.docker_image,
+            env_vars=request.env_vars,
+            volumes=request.volumes,
         )
 
         # Launch model
@@ -769,7 +811,11 @@ async def start_model(request: ModelStartRequest):
                 "speculative_model": config.speculative_model,
                 "num_speculative_tokens": config.num_speculative_tokens,
                 "speculative_method": config.speculative_method,
+                "speculative_extra": config.speculative_extra,
                 "extra_args": config.extra_args,
+                "docker_image": config.docker_image,
+                "env_vars": config.env_vars,
+                "volumes": config.volumes,
             }
         except Exception as e:
             raise ModelLaunchError(request.backend.value, str(e))
@@ -878,14 +924,16 @@ async def suspend_model(model_id: str):
             raise ModelNotFoundError(model_id)
 
         if model.status != ModelStatus.RUNNING:
-            raise ModelNotRunningError(model_id, model.status.value)
+            # model.status is a string due to ModelInstance ConfigDict(use_enum_values=True);
+            # str-enum comparison above works, but .value would crash here. Use directly.
+            raise ModelNotRunningError(model_id, model.status)
 
         await auto_suspend_manager.suspend_model(model_id)
 
         model = await registry.get(model_id)  # Refresh
         return {
             "model_id": model_id,
-            "status": model.status.value,
+            "status": model.status,
             "suspended_at": model.stopped_at.isoformat() if model.stopped_at else None,
             "port_reserved": model.port,
         }
@@ -909,7 +957,8 @@ async def resume_model(model_id: str):
             raise ModelNotFoundError(model_id)
 
         if model.status != ModelStatus.SUSPENDED:
-            raise ModelNotSuspendedError(model_id, model.status.value)
+            # See suspend handler note on use_enum_values=True.
+            raise ModelNotSuspendedError(model_id, model.status)
 
         resumed = await auto_suspend_manager.resume_model(model_id)
 
@@ -928,7 +977,7 @@ async def resume_model(model_id: str):
 
         return {
             "model_id": model_id,
-            "status": model.status.value,
+            "status": model.status,
             "resumed_at": model.started_at.isoformat() if model.started_at else None,
             "startup_time_seconds": startup_time,
             "base_url": model.base_url,
@@ -968,8 +1017,12 @@ async def get_model_status(model_id: str):
     return ModelStatusResponse(
         model_id=model.id,
         model_name=model.model_name,
-        status=model.status.value,
-        health_status=model.health_status.value,
+        # model_type is required by ModelStatusResponse — was missing here, which
+        # made this endpoint always 500 with a Pydantic ValidationError. Anyone
+        # polling /models/{id}/status (e.g. our new swap CLI) never made progress.
+        model_type=model.model_type,
+        status=model.status,
+        health_status=model.health_status,
         uptime_seconds=uptime_seconds,
         last_health_check=model.last_health_check,
         last_request_time=model.last_request_time,

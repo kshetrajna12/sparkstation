@@ -24,6 +24,9 @@ class ModelConfigYAML(BaseModel):
     speculative_model: Optional[str] = None
     num_speculative_tokens: int = 5
     speculative_method: Optional[str] = None
+    # Extra keys merged into the --speculative-config JSON verbatim (e.g.
+    # {"moe_backend": "triton"} for the Qwen3.6 NVFP4 MTP recipe).
+    speculative_extra: Dict[str, Any] = Field(default_factory=dict)
     default: bool = False  # Mark as default model for the profile (one per profile)
     extra_args: Dict[str, Any] = Field(default_factory=dict)
     docker_image: Optional[str] = None  # Per-model Docker image override

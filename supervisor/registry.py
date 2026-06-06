@@ -295,10 +295,16 @@ class ModelRegistry:
                 await self.update(model)
                 summary["fixed_stopped"].append(model.id)
 
-        # Check for orphaned containers (containers running but not in DB)
+        # Check for orphaned containers (containers running but not in DB).
+        # CRITICAL: `docker ps --format "{{.ID}}"` returns the SHORT (12-char) id by
+        # default, but `model.container_id` in the DB is the FULL (64-char) id (from
+        # `docker run -d`'s stdout). Without --no-trunc, the comparison below
+        # ALWAYS misses, and every supervisor restart wipes every live container
+        # as a false "orphan" — then has to reload them all from cold. This was
+        # the root cause of the long-running "restart flaky" memo.
         try:
             result = subprocess.run(
-                ["docker", "ps", "-a", "--filter", "name=sparkstation-", "--format", "{{.ID}}:{{.Names}}"],
+                ["docker", "ps", "-a", "--filter", "name=sparkstation-", "--no-trunc", "--format", "{{.ID}}:{{.Names}}"],
                 capture_output=True,
                 text=True,
                 timeout=10,

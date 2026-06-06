@@ -106,6 +106,10 @@ class ModelConfig(BaseModel):
     speculative_model: Optional[str] = Field(None, description="Draft model for speculative decoding")
     num_speculative_tokens: int = Field(5, description="Number of speculative tokens to generate")
     speculative_method: Optional[str] = Field(None, description="Speculative decoding method (auto-detected if None)")
+    speculative_extra: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Extra keys merged into --speculative-config JSON (e.g. {moe_backend: triton})",
+    )
     extra_args: Dict[str, Any] = Field(
         default_factory=dict, description="Additional backend-specific args"
     )
@@ -164,12 +168,20 @@ class ModelStartRequest(BaseModel):
     speculative_model: Optional[str] = None
     num_speculative_tokens: int = 5
     speculative_method: Optional[str] = None
+    speculative_extra: Dict[str, Any] = Field(default_factory=dict)
     extra_args: Dict[str, Any] = Field(default_factory=dict)
     # Explicit memory reservation in GB. When set, bypasses the built-in
     # estimate_model_memory() heuristic (which substring-matches model names
     # and mis-estimates MoE models like "Qwen3.6-35B-A3B" because "3b" in "a3b"
     # triggers the 3B branch).
     memory_gb: Optional[float] = None
+    # Per-model image / env / volume overrides. Without these on the request
+    # body, /models/start cannot reconstruct a config that uses a non-default
+    # docker_image (e.g. vllm-qwen35-mxfp4:cu130 or vllm/vllm-openai:cu130-nightly)
+    # and the autoload path's per-model image override is unreachable from the API.
+    docker_image: Optional[str] = None
+    env_vars: Dict[str, str] = Field(default_factory=dict)
+    volumes: List[str] = Field(default_factory=list)
 
 
 class ModelStartResponse(BaseModel):

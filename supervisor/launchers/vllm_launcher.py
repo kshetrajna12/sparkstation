@@ -25,6 +25,8 @@ class VLLMLauncher(ModelLauncher):
         "fp8": "fp8",  # vLLM native fp8
         "nvfp4": "nvfp4",  # NVIDIA FP4 runtime quantization (BF16 → FP4 on-the-fly)
         "mxfp4": "mxfp4",  # MXFP4 quantization (with namake-taro patches for SM121)
+        "compressed-tensors": "compressed-tensors",  # llm-compressor format (RedHat checkpoints)
+        "modelopt": "modelopt",  # NVIDIA Model Optimizer format (nvidia/*-NVFP4 checkpoints)
         "int4": "awq",  # vLLM uses AWQ for int4
         "awq": "awq",  # Direct AWQ
         "gptq": "gptq",  # GPTQ quantization
@@ -129,10 +131,20 @@ class VLLMLauncher(ModelLauncher):
                 # Use per-model docker image if specified, otherwise fall back to settings
                 docker_image = config.docker_image or settings.vllm_docker_image
 
+                # Override entrypoint to `vllm`. Why: vllm/vllm-openai:* images ship
+                # with ENTRYPOINT ["vllm", "serve"]. Our launcher then appends
+                # "vllm", "serve", <model>, ..., which vLLM receives as
+                # `vllm serve vllm serve <model>` and rejects with
+                # `unrecognized arguments: serve <model>`. The vllm-qwen35-mxfp4:cu130
+                # wrapper image masked this with `ENTRYPOINT []`, but using the
+                # upstream image directly required the workaround. Forcing
+                # `--entrypoint vllm` + passing `serve <model>` as args works for both
+                # the wrapper image and any vanilla vllm/vllm-openai variant.
                 docker_cmd.extend([
+                    "--entrypoint", "vllm",
                     "--name", f"sparkstation-{model_id}",  # Container name
                     docker_image,
-                    "vllm", "serve",
+                    "serve",
                     config.model_name,
                     "--host", "0.0.0.0",  # Bind to all interfaces
                     "--port", str(port),
@@ -206,6 +218,10 @@ class VLLMLauncher(ModelLauncher):
                     "scheduling_policy": "--scheduling-policy",
                     "guided_decoding_backend": "--guided-decoding-backend",
                     "disable_log_requests": "--disable-log-requests",
+                    "moe_backend": "--moe-backend",
+                    "attention_backend": "--attention-backend",
+                    "async_scheduling": "--async-scheduling",
+                    "dtype": "--dtype",
                 }
                 for arg_key, cli_flag in PASSTHROUGH_ARGS.items():
                     val = config.extra_args.get(arg_key)
@@ -223,19 +239,35 @@ class VLLMLauncher(ModelLauncher):
                 if vllm_quant and vllm_quant.lower() != "awq":
                     docker_cmd.extend(["--quantization", vllm_quant])
 
-                # Add speculative decoding if specified
-                if config.speculative_model:
+                # Add speculative decoding if specified.
+                # Two modes are supported:
+                #  - External draft model (e.g. DFlash, EAGLE): both `speculative_model`
+                #    and `speculative_method` are set.
+                #  - Built-in MTP head (e.g. Qwen3.6 NVFP4): only `speculative_method`
+                #    is set; vLLM loads the MTP layers from the base model itself
+                #    (no separate `model` key in the JSON).
+                # Previously only the "external draft" branch was enabled, so MTP-only
+                # configs silently dropped the speculative-config flag.
+                if config.speculative_model or config.speculative_method:
                     import json
                     spec_config = {
-                        "model": config.speculative_model,
                         "num_speculative_tokens": config.num_speculative_tokens,
                     }
-                    # Add method if explicitly specified
+                    if config.speculative_model:
+                        spec_config["model"] = config.speculative_model
                     if config.speculative_method:
                         spec_config["method"] = config.speculative_method
-
+                    # Some models (e.g. Qwen3.6 NVFP4 NVIDIA recipe) need extra
+                    # keys inside --speculative-config that aren't first-class
+                    # fields here — most notably `moe_backend: "triton"` for the
+                    # MTP head's MoE path, which is independent of the main
+                    # model's moe_backend. `speculative_extra` is merged in
+                    # verbatim so any future spec-config key works without a
+                    # launcher code change.
+                    if getattr(config, "speculative_extra", None):
+                        spec_config.update(config.speculative_extra)
                     docker_cmd.extend(["--speculative-config", json.dumps(spec_config)])
-                    logger.info(f"Enabling speculative decoding with draft model: {config.speculative_model}")
+                    logger.info(f"Enabling speculative decoding: {spec_config}")
 
                 logger.debug(f"Docker command: {' '.join(docker_cmd)}")
 
