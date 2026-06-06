@@ -7,10 +7,11 @@ This project has access to local LLM models through Sparkstation gateway.
 
 ## Available Models
 
-- `qwen3.5-35b` - Qwen/Qwen3.5-35B-A3B (MXFP4)
+- `qwen3.5-35b` - nvidia/Qwen3.6-35B-A3B-NVFP4
 - `bge-m3` - BAAI/bge-m3
 - `clip-vit` - openai/clip-vit-large-patch14
 - `species-detect` - species-ensemble
+- `face-detect` - face-recognition
 
 ## Available Profiles
 
@@ -20,7 +21,7 @@ Switch profiles with `sparkstation start -d --profile <name>`:
 - **prod**: qwen3.5-35b
 - **inference**: qwen3.5-35b
 - **openclaw**: qwen3.5-35b, bge-m3
-- **image-indexing**: qwen3.5-35b, bge-m3, clip-vit, species-detect
+- **image-indexing**: qwen3.5-35b, bge-m3, clip-vit, species-detect, face-detect
 
 ## API Endpoint
 
@@ -41,7 +42,7 @@ client = OpenAI(
 
 # Make a request
 response = client.chat.completions.create(
-    model="qwen3.5-35b",
+    model="qwen3-vl-4b",
     messages=[
         {"role": "user", "content": "Hello!"}
     ]
@@ -57,7 +58,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer dummy-key" \
   -d '{
-    "model": "qwen3.5-35b",
+    "model": "qwen3-vl-4b",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -66,7 +67,7 @@ curl http://localhost:8000/v1/chat/completions \
 
 ```python
 stream = client.chat.completions.create(
-    model="qwen3.5-35b",
+    model="qwen3-vl-4b",
     messages=[{"role": "user", "content": "Tell me a story"}],
     stream=True
 )
@@ -78,13 +79,13 @@ for chunk in stream:
 
 ## Vision (Image Analysis)
 
-The `qwen3.5-35b` model supports vision capabilities. You can pass images via URL or base64:
+The `None` model supports vision capabilities. You can pass images via URL or base64:
 
 ### With Image URL
 
 ```python
 response = client.chat.completions.create(
-    model="qwen3.5-35b",
+    model="None",
     messages=[
         {
             "role": "user",
@@ -106,7 +107,7 @@ with open("image.jpg", "rb") as f:
     image_data = base64.b64encode(f.read()).decode('utf-8')
 
 response = client.chat.completions.create(
-    model="qwen3.5-35b",
+    model="None",
     messages=[
         {
             "role": "user",
@@ -227,14 +228,10 @@ print(f"Similarity: {similarity}")
 - Models are already running and ready to use
 - Use the gateway endpoint (`http://localhost:8000/v1`) for all requests
 - All models support standard OpenAI APIs:
-  - Chat: `/v1/chat/completions` (qwen3-vl-30b, bge-m3, species-detect)
+  - Chat: `/v1/chat/completions` (qwen3.5-35b, bge-m3, species-detect, face-detect)
   - Embeddings: `/v1/embeddings` (clip-vit)
 
 ### Model-Specific Details
-
-- **Vision Chat** (`qwen3-vl-30b`):
-  - Supports image analysis via URL or base64
-  - Uses standard OpenAI vision format: `{"type": "image_url", "image_url": {"url": "..."}}`
 
 - **Image Embeddings** (`clip-vit`):
   - Generates 768-dim embeddings for images and cross-modal search

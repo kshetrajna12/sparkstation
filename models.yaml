@@ -1,42 +1,58 @@
 # Sparkstation Models Configuration
 # Define models to auto-load on startup
 #
-# Unified on Qwen3.6-35B-A3B with MXFP4 quantization (namake-taro patches)
-# - Evaluated 2026-04-20 against 3.5 baseline: tied within noise (55.7 vs 56.3 tok/s)
-# - Replaces: qwen3-vl-30b, gpt-oss-20b, qwen3-vl-4b, nemotron3-nano, Qwen3.5-35B-A3B
-# - Natively multimodal (vision + text), tool calling, reasoning
-# - 55.7 tok/s on GB10 with MXFP4, TTFT p50=85ms (single-client, 10 requests)
-# - Docker image: vllm-qwen35-mxfp4:cu130 (vLLM 0.17.0 + namake-taro patches)
+# Unified on Qwen3.6-35B-A3B with NVFP4 + MTP speculative decoding, following the
+# NVIDIA model-card recipe for nvidia/Qwen3.6-35B-A3B-NVFP4.
+# - autoresearch iter-5 (2026-06-05): swapped from MXFP4 + namake-taro patches to
+#   NVFP4 + Marlin MoE + Flashinfer attention + built-in MTP head.
+# - Why NVFP4: Blackwell 5th-gen Tensor Cores execute NVFP4 natively. Halves weights
+#   from MXFP4 (~22GB → ~11GB on disk) and unblocks upstream vLLM (MARLIN MXFP4 MoE
+#   kernel on sm_121 had a shared-mem race that pinned us to vllm-qwen35-mxfp4:cu130).
+# - Why MTP: Qwen3.6-35B-A3B ships a multi-token prediction head; method "mtp" runs
+#   it via the base model with no separate draft model.
+# - sm_121a env vars + flag set per HF model card:
+#   https://huggingface.co/nvidia/Qwen3.6-35B-A3B-NVFP4
 # - Alias "qwen3.5-35b" intentionally preserved for client backward compatibility;
-#   do NOT rename — downstream clients pin that string. Upstream vLLM >= 0.17.1
-#   breaks MXFP4 MoE on GB10 sm_121 (MARLIN shared-mem race), so this image stays
-#   until namake-taro ships newer patches or vllm-project/vllm#30135 lands.
+#   do NOT rename — downstream clients pin that string.
+# - Rollback path: revert this file (or git checkout previous models.yaml) and run
+#   `sparkstation models swap qwen3.5-35b`.
 
 # Auto-load these models when supervisor starts
 autoload:
   enabled: true
   models:
-    # autoresearch iteration #1: Qwen3.6-35B-A3B runtime MXFP4
-    # (same alias, same docker image, same extra_args as Qwen3.5 — only
-    # the HF name changed. Arch is qwen3_5_moe for both, so the existing
-    # vllm-qwen35-mxfp4:cu130 image handles it as a drop-in.)
-    - name: "Qwen/Qwen3.6-35B-A3B"
+    # autoresearch iteration #5: NVFP4 + built-in MTP (qwen3_next_mtp)
+    - name: "nvidia/Qwen3.6-35B-A3B-NVFP4"
       alias: "qwen3.5-35b"
       backend: "vllm"
       model_type: "chat"
-      quantization: "mxfp4"
+      quantization: "modelopt"
       memory_gb: 40
       idle_timeout_minutes: 60
       auto_suspend_enabled: false
-      docker_image: "vllm-qwen35-mxfp4:cu130"
+      docker_image: "vllm/vllm-openai:nightly"
+      speculative_method: "mtp"
+      num_speculative_tokens: 1
+      speculative_extra:
+        moe_backend: "triton"
+      env_vars:
+        VLLM_USE_FLASHINFER_MOE_FP4: "0"
+        VLLM_FP8_MOE_BACKEND: "flashinfer_cutlass"
+        FLASHINFER_DISABLE_VERSION_CHECK: "1"
+        CUTE_DSL_ARCH: "sm_121a"
       extra_args:
         max_model_len: 65536
-        max_num_batched_tokens: 2096
+        max_num_batched_tokens: 8192
         max_concurrent_requests: 4
         tool_call_parser: "qwen3_coder"
         reasoning_parser: "qwen3"
         kv_cache_dtype: "fp8"
         enable_prefix_caching: true
+        enable_chunked_prefill: true
+        moe_backend: "marlin"
+        attention_backend: "flashinfer"
+        async_scheduling: true
+        dtype: "auto"
 
     # Text embedding model for semantic search and RAG
     - name: "BAAI/bge-large-en-v1.5"
@@ -75,85 +91,140 @@ autoload:
 profiles:
   # Development profile — single unified model
   dev:
-    - name: "Qwen/Qwen3.6-35B-A3B"
+    - name: "nvidia/Qwen3.6-35B-A3B-NVFP4"
       alias: "qwen3.5-35b"
       backend: "vllm"
       model_type: "chat"
-      quantization: "mxfp4"
+      quantization: "modelopt"
       memory_gb: 40
       default: true
       auto_suspend_enabled: false
-      docker_image: "vllm-qwen35-mxfp4:cu130"
+      docker_image: "vllm/vllm-openai:nightly"
+      speculative_method: "mtp"
+      num_speculative_tokens: 1
+      speculative_extra:
+        moe_backend: "triton"
+      env_vars:
+        VLLM_USE_FLASHINFER_MOE_FP4: "0"
+        VLLM_FP8_MOE_BACKEND: "flashinfer_cutlass"
+        FLASHINFER_DISABLE_VERSION_CHECK: "1"
+        CUTE_DSL_ARCH: "sm_121a"
       extra_args:
         max_model_len: 65536
-        max_num_batched_tokens: 2096
+        max_num_batched_tokens: 8192
         max_concurrent_requests: 4
         tool_call_parser: "qwen3_coder"
         reasoning_parser: "qwen3"
         kv_cache_dtype: "fp8"
         enable_prefix_caching: true
+        enable_chunked_prefill: true
+        moe_backend: "marlin"
+        attention_backend: "flashinfer"
+        async_scheduling: true
+        dtype: "auto"
 
   # Production profile — single unified model (replaces gpt-oss-20b + qwen3-vl-4b)
   prod:
-    - name: "Qwen/Qwen3.6-35B-A3B"
+    - name: "nvidia/Qwen3.6-35B-A3B-NVFP4"
       alias: "qwen3.5-35b"
       backend: "vllm"
       model_type: "chat"
-      quantization: "mxfp4"
+      quantization: "modelopt"
       memory_gb: 40
       default: true
       auto_suspend_enabled: false
-      docker_image: "vllm-qwen35-mxfp4:cu130"
+      docker_image: "vllm/vllm-openai:nightly"
+      speculative_method: "mtp"
+      num_speculative_tokens: 1
+      speculative_extra:
+        moe_backend: "triton"
+      env_vars:
+        VLLM_USE_FLASHINFER_MOE_FP4: "0"
+        VLLM_FP8_MOE_BACKEND: "flashinfer_cutlass"
+        FLASHINFER_DISABLE_VERSION_CHECK: "1"
+        CUTE_DSL_ARCH: "sm_121a"
       extra_args:
         max_model_len: 65536
-        max_num_batched_tokens: 2096
+        max_num_batched_tokens: 8192
         max_concurrent_requests: 4
         tool_call_parser: "qwen3_coder"
         reasoning_parser: "qwen3"
         kv_cache_dtype: "fp8"
         enable_prefix_caching: true
+        enable_chunked_prefill: true
+        moe_backend: "marlin"
+        attention_backend: "flashinfer"
+        async_scheduling: true
+        dtype: "auto"
 
   # Inference only
   inference:
-    - name: "Qwen/Qwen3.6-35B-A3B"
+    - name: "nvidia/Qwen3.6-35B-A3B-NVFP4"
       alias: "qwen3.5-35b"
       backend: "vllm"
       model_type: "chat"
-      quantization: "mxfp4"
+      quantization: "modelopt"
       memory_gb: 40
       default: true
       auto_suspend_enabled: false
-      docker_image: "vllm-qwen35-mxfp4:cu130"
+      docker_image: "vllm/vllm-openai:nightly"
+      speculative_method: "mtp"
+      num_speculative_tokens: 1
+      speculative_extra:
+        moe_backend: "triton"
+      env_vars:
+        VLLM_USE_FLASHINFER_MOE_FP4: "0"
+        VLLM_FP8_MOE_BACKEND: "flashinfer_cutlass"
+        FLASHINFER_DISABLE_VERSION_CHECK: "1"
+        CUTE_DSL_ARCH: "sm_121a"
       extra_args:
         max_model_len: 65536
-        max_num_batched_tokens: 2096
+        max_num_batched_tokens: 8192
         max_concurrent_requests: 4
         tool_call_parser: "qwen3_coder"
         reasoning_parser: "qwen3"
         kv_cache_dtype: "fp8"
         enable_prefix_caching: true
+        enable_chunked_prefill: true
+        moe_backend: "marlin"
+        attention_backend: "flashinfer"
+        async_scheduling: true
+        dtype: "auto"
 
   # OpenClaw mode — unified model + embeddings (~57.5 GiB total)
-  # Replaces nemotron3-nano + qwen3-vl-4b with single qwen3.6-35b
   openclaw:
-    - name: "Qwen/Qwen3.6-35B-A3B"
+    - name: "nvidia/Qwen3.6-35B-A3B-NVFP4"
       alias: "qwen3.5-35b"
       backend: "vllm"
       model_type: "chat"
-      quantization: "mxfp4"
+      quantization: "modelopt"
       default: true
       memory_gb: 40
       idle_timeout_minutes: 60
       auto_suspend_enabled: false
-      docker_image: "vllm-qwen35-mxfp4:cu130"
+      docker_image: "vllm/vllm-openai:nightly"
+      speculative_method: "mtp"
+      num_speculative_tokens: 1
+      speculative_extra:
+        moe_backend: "triton"
+      env_vars:
+        VLLM_USE_FLASHINFER_MOE_FP4: "0"
+        VLLM_FP8_MOE_BACKEND: "flashinfer_cutlass"
+        FLASHINFER_DISABLE_VERSION_CHECK: "1"
+        CUTE_DSL_ARCH: "sm_121a"
       extra_args:
         max_model_len: 65536
-        max_num_batched_tokens: 2096
+        max_num_batched_tokens: 8192
         max_concurrent_requests: 8
         tool_call_parser: "qwen3_coder"
         reasoning_parser: "qwen3"
         kv_cache_dtype: "fp8"
         enable_prefix_caching: true
+        enable_chunked_prefill: true
+        moe_backend: "marlin"
+        attention_backend: "flashinfer"
+        async_scheduling: true
+        dtype: "auto"
 
     - name: "BAAI/bge-m3"
       alias: "bge-m3"
@@ -166,25 +237,39 @@ profiles:
 
   # Image indexing mode — unified model + embeddings + CLIP + species (~52.5 GiB total)
   image-indexing:
-    # autoresearch iteration #1: Qwen3.6-35B-A3B runtime MXFP4
-    - name: "Qwen/Qwen3.6-35B-A3B"
+    # autoresearch iteration #5: NVFP4 + built-in MTP
+    - name: "nvidia/Qwen3.6-35B-A3B-NVFP4"
       alias: "qwen3.5-35b"
       backend: "vllm"
       model_type: "chat"
-      quantization: "mxfp4"
+      quantization: "modelopt"
       default: true
-      memory_gb: 40  # MXFP4 ~18GB weights + ~22GB KV cache
+      memory_gb: 40  # NVFP4 ~11GB weights + KV cache + MTP head + headroom
       idle_timeout_minutes: 60
       auto_suspend_enabled: false
-      docker_image: "vllm-qwen35-mxfp4:cu130"
+      docker_image: "vllm/vllm-openai:nightly"
+      speculative_method: "mtp"
+      num_speculative_tokens: 1
+      speculative_extra:
+        moe_backend: "triton"
+      env_vars:
+        VLLM_USE_FLASHINFER_MOE_FP4: "0"
+        VLLM_FP8_MOE_BACKEND: "flashinfer_cutlass"
+        FLASHINFER_DISABLE_VERSION_CHECK: "1"
+        CUTE_DSL_ARCH: "sm_121a"
       extra_args:
         max_model_len: 65536
-        max_num_batched_tokens: 2096
+        max_num_batched_tokens: 8192
         max_concurrent_requests: 4
         tool_call_parser: "qwen3_coder"
         reasoning_parser: "qwen3"
         kv_cache_dtype: "fp8"
         enable_prefix_caching: true
+        enable_chunked_prefill: true
+        moe_backend: "marlin"
+        attention_backend: "flashinfer"
+        async_scheduling: true
+        dtype: "auto"
 
     - name: "BAAI/bge-m3"
       alias: "bge-m3"

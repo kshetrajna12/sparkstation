@@ -155,3 +155,84 @@ point at `Qwen/Qwen3.6-35B-A3B`). A sparkstation restart applies the change.
 **Upgrade is blocked** until either:
 1. namake-taro publishes patches for a newer vLLM base, OR
 2. Upstream vLLM merges the sm_121 MARLIN MoE fixes (tracking #30135, #35924, #37030).
+
+### Iteration 5 — NVFP4 + MTP on upstream vLLM 0.22.1 (2026-06-05) — SHIPPED, TUNING OPEN
+
+NVIDIA published `nvidia/Qwen3.6-35B-A3B-NVFP4` with a DGX Spark recipe on the HF
+model card. Combined with `vllm/vllm-openai:nightly` (the *non-cu130* tag, which
+turned out to also be cu130 underneath at vLLM 0.22.1rc1.dev195), the iter-4
+blocker dissolves: MARLIN NvFp4 MoE backend, FlashInfer attention, ModelOpt-mixed
+quantization detection — all working out of the box.
+
+**Deployed config** (image-indexing profile, all six chat entries unified):
+- `nvidia/Qwen3.6-35B-A3B-NVFP4` via `vllm/vllm-openai:nightly` (vLLM 0.22.1rc1)
+- `--quantization modelopt` → vLLM detects `modelopt_mixed`
+- `--moe-backend marlin --attention-backend flashinfer --kv-cache-dtype fp8`
+- `--enable-chunked-prefill --async-scheduling --enable-prefix-caching`
+- `--max-num-batched-tokens 8192 --max-num-seqs 4 --max-model-len 65536`
+- env vars per HF card: `VLLM_USE_FLASHINFER_MOE_FP4=0`, `VLLM_FP8_MOE_BACKEND=flashinfer_cutlass`,
+  `FLASHINFER_DISABLE_VERSION_CHECK=1`, `CUTE_DSL_ARCH=sm_121a`
+- `--speculative-config {"method":"mtp","num_speculative_tokens":1,"moe_backend":"triton"}`
+
+Local snapshot tags: `vllm-openai:nightly-2026-06-05`,
+`vllm-openai:cu130-nightly-2026-06-05` (kept to pin the working build against
+future nightly drift).
+
+**Bench results (single-stream, 10 reqs, 3 warmup, max_tokens=256, enable_thinking=False):**
+- num_speculative_tokens=3 (HF recipe default): **34.0 tok/s** (-39% vs baseline)
+- num_speculative_tokens=1: **45.7 tok/s** (-18% vs baseline)
+- ttft p50: ~92 ms for both (vs 78 ms baseline)
+
+c=1 regression is real but the NVFP4 path has wins the bench doesn't show:
+- Weights: ~11 GB vs ~22 GB MXFP4 (frees ~10 GB for KV cache or another model)
+- HF card reports 433 tok/s at c=32 (where MTP earns its keep) — not yet validated
+- Mainline vLLM (no namake-taro patches) — DFlash drafter becomes reachable
+
+**Path-clearing fixes shipped along the way** (Phase 1.5 — supervisor + CLI):
+1. `ModelStartRequest` was missing `docker_image`, `env_vars`, `volumes`, `speculative_extra`
+   — API-restarted models couldn't preserve image overrides.
+2. `/models/start` blocked by stale STOPPED/SUSPENDED registry entry (swap blocker;
+   error claimed "already running" which was false).
+3. Multiple `.value` calls on `model.status` (a string due to ConfigDict(use_enum_values=True))
+   crashed `/models/{id}/suspend`, `/resume`, `/status`, half-completing a suspend.
+4. `/models/{id}/status` Pydantic schema missing `model_type` → always 500.
+5. `registry.reconcile_state` orphan-detection compared SHORT docker IDs against FULL
+   IDs in DB → wiped every legitimate container on every supervisor restart (the
+   "restart flaky" memo was the symptom).
+6. `resource_manager` didn't re-register surviving RUNNING/STARTING models on
+   restart → port-allocation collisions on the next launch.
+7. `cli.py start` unconditionally `db_path.unlink()`'d on detached mode — undid the
+   reconcile-based adoption and forced cold reload of every model. Removed.
+8. Lifespan purge wiped STARTING entries even with live containers → killed
+   mid-cold-load models.
+9. `pyproject.toml` `[tool.hatch.build.targets.wheel]` only packaged `supervisor/`
+   and `gateway/` — the installed CLI failed with `ModuleNotFoundError: cli`.
+   Added `cli.py`/`cli_init.py` via `force-include`.
+10. `PROJECT_ROOT = Path(__file__).resolve().parent` resolved to site-packages when
+    invoked via the installed CLI → `models.yaml` lookup + gateway-yaml writes
+    silently went to wrong paths. Replaced with cwd-walk-up-to-find-models.yaml.
+11. vllm_launcher always prepended `vllm serve` even though
+    `vllm/vllm-openai:*` images have `ENTRYPOINT ["vllm","serve"]` → doubled command
+    and `unrecognized arguments`. Now forces `--entrypoint vllm`.
+12. `speculative-config` only emitted when `speculative_model` was set, blocking
+    built-in MTP heads (no draft model). Now emits for either model OR method,
+    and supports `speculative_extra` for vendor-specific keys.
+13. Launcher passthroughs added: `compressed-tensors` + `modelopt` quantizations,
+    `--moe-backend`, `--attention-backend`, `--async-scheduling`, `--dtype`.
+14. CLI `models stop/start/swap <alias>` commands added with a `_restart_gateway()`
+    helper that rewrites litellm.yaml + bounces the gateway process. Stop+start
+    on bge-m3 verified end-to-end before the chat-model swap.
+
+**Still open / deferred** (separate work items):
+- Concurrent throughput bench (c=4/8/16/32) to confirm the HF claim
+- MTP acceptance-rate logging (vLLM doesn't surface it; need a custom probe)
+- Per-alias 503+Retry-After during swap (the current gateway-restart causes a
+  brief outage across ALL aliases, not just the one being swapped) — needs a
+  custom middleware in front of LiteLLM (auto_resume_middleware.py is scaffolded
+  but not wired).
+- Rename the `qwen3.5-35b` alias to something honest (3.6-35b or `chat`) — clients
+  pin the string, so this needs a coordinated change across Wildlife Indexer +
+  Caddy + Cloudflare Access policies.
+- Memory tuning: `memory_gb: 40` may be conservative now that weights are 11 GB.
+- DFlash drafter for Qwen3.6-35B-A3B (z-lab) is mainline-vLLM compatible now —
+  worth A/B-ing against MTP once concurrent throughput is profiled.
