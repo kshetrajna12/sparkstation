@@ -57,6 +57,25 @@ Sparkstation is **production-ready** with all core features implemented and test
 
 ## What's New (Since Oct 27)
 
+### June 30, 2026 Updates (iter-6 / cluster mode)
+- ✅ **Two-DGX-Spark cluster support**: Chat can now run alone on a dedicated Spark ("worker1") with the full 119 GB unified memory for KV cache (100 GB budget, 262K native context, 8 concurrent seqs). Auxiliary backends (embeddings + vision) stay on the primary Spark.
+- ✅ **SSH-controlled Docker daemons**: Supervisor talks to each host's Docker daemon over SSH — no interactive SSH sessions ever leave the control node.
+- ✅ **models.yaml structural refactor**: Each model is now defined ONCE in a top-level `models:` dict; profiles are dicts of `alias → override_dict`. Different profiles can put the same alias on different hosts / memory budgets without redefining the model.
+- ✅ **Split-config for sensitive topology**: Cluster topology (real IPs, ssh_users, hostnames) lives in a gitignored `.sparkstation.local.yaml` that deep-merges over `models.yaml` at load. Public repo stays free of internal network details.
+- ✅ **New CLI subcommand**: `sparkstation cluster status | sync-cache | ncclbench`.
+
+**Throughput** (concurrent bench, single-host chat vs dedicated-chat on worker1):
+
+| conc | Before (chat on primary) | After (dedicated on worker1) | Δ |
+|---|---|---|---|
+| 1 | 41.9 tok/s | 44.8 | +7% |
+| 4 | 72.7 | 74.5 | +2% |
+| 8 | 90.9 | 120.3 | +32% |
+| 16 | 99.2 | 143.0 | +44% |
+| 32 | 106.9 | 159.2 | +49% |
+
+**Latency**: TTFT p50 at c=16 collapsed from 5.7s → 1.4s (-75%); at c=32 from 15.5s → 7.1s (-54%). The wins start showing at c=8 and grow with concurrency, as expected when chat is no longer sharing the memory bus with vision/embedding backends.
+
 ### November 28, 2025 Updates
 - ✅ **NVIDIA containers 25.11**: Upgraded vLLM 0.11.0, SGLang 0.5.4, PyTorch 2.10.0
 - ✅ **Qwen3-VL-4B-Instruct-FP8**: Upgraded vision model with FP8 quantization

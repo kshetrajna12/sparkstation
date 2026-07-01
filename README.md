@@ -47,6 +47,187 @@ Model Backends (vLLM, SGLang, TRT-LLM)
 
 ---
 
+## Cluster mode (multi-Spark)
+
+Sparkstation supports a multi-node cluster where each model pins to a logical
+`host:` role (e.g. `primary`, `worker1`) and the supervisor drives Docker on
+each role's daemon over SSH. No interactive SSH ever leaves the control node —
+`docker run`, `docker stop`, `docker logs`, and image loads are all issued
+non-interactively by setting `DOCKER_HOST=ssh://<ssh-user>@<worker-ip>` per
+command.
+
+### How it works
+
+- Cluster roles (`primary`, `worker1`, ...) are logical labels — not
+  hostnames. `primary` always resolves to the machine running the supervisor.
+- For any model with `host: worker1`, the launcher sets
+  `DOCKER_HOST=ssh://<ssh-user>@<worker-ip>` on the `docker run` invocation.
+  Everything else (image name, args, GPU flags) is identical to single-host.
+- Inter-role traffic (gateway → backend, NCCL between workers, HF cache pulls)
+  flows over whatever network your `cluster.hosts.*` IPs resolve to. If you
+  have a direct QSFP link between two Sparks, put the QSFP-side IP in the
+  config; if you're on 10 GbE, use that address. Sparkstation does not care.
+
+### Public/private config split
+
+The cluster config is split into two files so you can commit the model
+topology without leaking network layout:
+
+- **`models.yaml`** (public, committed): defines `cluster.hosts.primary`,
+  every `models.<alias>` block, `profiles.<name>`, and `default_profile`.
+  The `primary` entry is always the local machine, so its IP is `127.0.0.1`
+  (or omitted) and reveals nothing.
+- **`.sparkstation.local.yaml`** (gitignored, per-machine): defines the real
+  IPs, SSH users, and hostnames for any `cluster.hosts.*` entry other than
+  `primary`. Loaded and merged on top of `models.yaml` at supervisor startup.
+
+Minimal `.sparkstation.local.yaml`:
+
+```yaml
+cluster:
+  hosts:
+    worker1:
+      ip: <worker-ip>
+      ssh_user: <ssh-user>
+      hostname: <hostname>
+      docker_host: ssh://<ssh-user>@<worker-ip>
+```
+
+Rationale: even a single worker IP tells a reader which subnet the cluster
+lives on, whether it's cabled directly or routed, and often which building.
+Keep it out of git.
+
+### One-time worker setup
+
+Before adding a worker to a profile, run these once on the primary:
+
+1. **Passwordless SSH from primary → worker.** Either:
+   ```bash
+   ssh-copy-id <ssh-user>@<worker-ip>
+   ```
+   or use NVIDIA's `discover-sparks` script if you're on a fresh DGX pair.
+   Verify: `ssh <ssh-user>@<worker-ip> true` must succeed with no prompt.
+
+2. **Docker installed on the worker, and the SSH user in the `docker`
+   group** (so no sudo is needed for `docker run`):
+   ```bash
+   ssh -t <ssh-user>@<worker-ip> sudo usermod -aG docker '$USER'
+   ```
+   Log out and back in on the worker for group membership to take effect.
+
+3. **HuggingFace cache path exists** at `~/.cache/huggingface/hub` on the
+   worker. The first `sparkstation cluster sync-cache` run creates it; you
+   can also `mkdir -p` it by hand.
+
+4. **Same Docker major version on both nodes** is recommended (not strictly
+   required — the SSH transport speaks the daemon's HTTP API, so patch
+   mismatches are usually fine).
+
+### `sparkstation cluster` subcommand reference
+
+```bash
+# Reachability, docker version per role, models grouped by host
+sparkstation cluster status
+
+# Rsync a HuggingFace cache subdir to a worker over SSH
+sparkstation cluster sync-cache worker1 --only Qwen--Qwen3.6-35B-A3B-NVFP4
+sparkstation cluster sync-cache worker1 --dry-run
+
+# Run the 2-node NCCL all_gather bench (delegates to sibling repo)
+sparkstation cluster ncclbench
+sparkstation cluster ncclbench --script /path/to/nccl-bench.sh
+```
+
+Notes:
+
+- `sync-cache` is resumable — it's rsync under the hood, so re-running after
+  an interrupted transfer picks up where it left off.
+- `--only <subdir>` limits the sync to a single `models--*` subdirectory,
+  which is much faster than syncing the whole hub cache when you're only
+  adding one model.
+- If your local HF cache is root-owned (a common footgun after running
+  `huggingface-cli download` under sudo), rsync will fail on the worker
+  side. Fix with `sudo chown -R $USER:$USER ~/.cache/huggingface` on the
+  primary before retrying.
+- `ncclbench` shells out to `homecloud-infra/qsfp/nccl-bench.sh` in a
+  sibling checkout by default; use `--script` to point at a custom path.
+
+### Image sync between nodes
+
+For custom images not on `nvcr.io` (e.g. `clip-server`, `face-server`,
+`species-server`, `flux-server`, `vllm-qwen35-mxfp4:cu130`), you need to
+copy the image to the worker's local Docker daemon:
+
+```bash
+docker save vllm-qwen35-mxfp4:cu130 | ssh <ssh-user>@<worker-ip> 'docker load'
+```
+
+Public registry images (anything under `nvcr.io`, `docker.io`, `ghcr.io`)
+don't need this — just `docker pull` on the worker (or let the first
+`docker run` pull implicitly), assuming the worker has the same registry
+credentials configured.
+
+### Example: dedicated-chat mode
+
+A common cluster layout puts the chat model on a dedicated worker with more
+memory headroom, while the auxiliary backends (embeddings, CLIP, detectors)
+stay on the primary alongside the gateway. Profile-scoped overrides let you
+change `host`, `memory_gb`, and `max_num_seqs` without duplicating the
+whole model entry:
+
+```yaml
+# models.yaml (excerpt)
+models:
+  qwen3.5-35b:
+    backend: vllm
+    image: vllm-qwen35-mxfp4:cu130
+    memory_gb: 48
+    max_num_seqs: 8
+    # host omitted -> defaults to primary
+
+profiles:
+  dedicated-chat:
+    models:
+      # Chat model relocated to worker1 with expanded memory + concurrency
+      qwen3.5-35b:
+        host: worker1
+        memory_gb: 96
+        max_num_seqs: 32
+      # Auxiliaries stay on primary (host defaults to primary)
+      bge-m3: {}
+      clip-vit: {}
+      species-detect: {}
+      face-detect: {}
+```
+
+Diff from a single-host `image-indexing` profile: just the three overridden
+fields on the chat entry. Everything else — image, args, quantization —
+inherits from the top-level `models.qwen3.5-35b` block.
+
+Start it the usual way:
+
+```bash
+sparkstation start -d --profile dedicated-chat
+```
+
+### What's cluster-aware and what isn't
+
+| Component | Cluster-aware? |
+|---|---|
+| Model launcher (per-host `DOCKER_HOST`) | Yes |
+| Reconciler (drift detection per host) | Yes |
+| Gateway backend URLs (per-host IP) | Yes |
+| Per-host resource allocation (memory/GPU) | Yes |
+| `models.yaml` resolver + profile overrides | Yes |
+| Prometheus metrics `host` label | **Not yet** — all metrics report as if from `primary`; planned follow-up |
+| Grafana dashboards | **Not yet** — silently aggregates across hosts because of the missing label |
+
+If you're running a two-Spark cluster and rely on Grafana for per-host
+memory/temperature views, wait for the metrics-labeling patch before
+splitting a heavy model onto a worker.
+
+---
+
 ## Quick Start
 
 ### For New Users (Automated Setup)

@@ -12,14 +12,15 @@
 1. [Architecture Overview](#architecture-overview)
 2. [Prerequisites](#prerequisites)
 3. [Quick Start (Docker Mode - Recommended)](#quick-start-docker-mode---recommended)
-4. [Directory Layout](#directory-layout)
-5. [Configuration](#configuration)
-6. [Systemd Services](#systemd-services)
-7. [Model Configuration](#model-configuration)
-8. [Monitoring](#monitoring)
-9. [Maintenance](#maintenance)
-10. [Troubleshooting](#troubleshooting)
-11. [Advanced: Subprocess Mode](#advanced-subprocess-mode)
+4. [Cluster mode (multi-Spark)](#cluster-mode-multi-spark)
+5. [Directory Layout](#directory-layout)
+6. [Configuration](#configuration)
+7. [Systemd Services](#systemd-services)
+8. [Model Configuration](#model-configuration)
+9. [Monitoring](#monitoring)
+10. [Maintenance](#maintenance)
+11. [Troubleshooting](#troubleshooting)
+12. [Advanced: Subprocess Mode](#advanced-subprocess-mode)
 
 ---
 
@@ -202,6 +203,100 @@ sparkstation models list
 
 ---
 
+## Cluster mode (multi-Spark)
+
+Sparkstation can span more than one DGX Spark by promoting one host to **primary** and attaching one or more **worker** hosts. All CLI, gateway, and supervisor traffic still land on the primary; the primary places selected models on workers over SSH and drives their Docker daemons directly.
+
+### When to use it
+
+- **Multi-agent workloads** that fan out concurrent chat requests and saturate a single Spark's KV cache.
+- **Dedicated chat host**: move the largest chat model to its own worker so vision/embedding/detection models on the primary don't have to share GPU memory or throughput.
+- Any deployment where physical isolation per model class is worth the extra setup cost.
+
+### Prerequisites
+
+- **Passwordless SSH** from the primary user to `<ssh-user>@<worker-ip>`. Validate with:
+  ```bash
+  ssh -o BatchMode=yes <ssh-user>@<worker-ip> true
+  ```
+- **Docker + NVIDIA Container Toolkit** installed on **both** hosts, and the SSH user in the `docker` group on the worker.
+- **Matching Docker versions** are preferred (mixed versions may work but are not the tested configuration).
+- **HuggingFace cache mirrored** to the worker before first launch, so cold-start doesn't re-download large snapshots:
+  ```bash
+  sparkstation cluster sync-cache worker1
+  ```
+  This rsyncs `/var/lib/models` from the primary to the worker.
+
+### Public/private config split
+
+Cluster config is intentionally split into two files so real network details never land in git:
+
+- **`models.yaml`** (committed) — cluster role names, model specs, per-profile `host:` overrides.
+- **`.sparkstation.local.yaml`** (gitignored) — maps role names to real `<worker-ip>` / `<ssh-user>` / `<hostname>` values.
+
+Example `models.yaml` fragment:
+
+```yaml
+cluster:
+  hosts:
+    - name: primary
+    - name: worker1
+
+profiles:
+  image-indexing:
+    overrides:
+      qwen3.5-35b:
+        host: worker1
+        memory_gb: 100
+        extra_args:
+          max_model_len: 32768
+          max_num_seqs: 64
+```
+
+Example `.sparkstation.local.yaml` (never committed):
+
+```yaml
+cluster:
+  hosts:
+    - name: worker1
+      ssh_user: <ssh-user>
+      address: <worker-ip>
+      hostname: <hostname>
+```
+
+### Swap the chat model onto a dedicated worker
+
+With the profile override above in place:
+
+```bash
+sparkstation models swap qwen3.5-35b
+```
+
+The supervisor tears down the primary-hosted instance, launches a new container on `worker1` over SSH, updates gateway routing, and reports the new host in `sparkstation status`.
+
+### Rollback (chat back to primary)
+
+Edit the `image-indexing` profile in `models.yaml` — either delete the `host: worker1` line from the `qwen3.5-35b` override, or set it to `host: primary` — then re-swap:
+
+```bash
+sparkstation models swap qwen3.5-35b
+```
+
+The chat model returns to the primary host with its base spec (default `max_model_len` / `max_num_seqs`, no expanded batching room).
+
+### Benchmark: dedicated chat worker
+
+Moving the 35B chat model onto its own Spark, with the expanded batching config above, materially improves throughput and time-to-first-token under concurrent chat load:
+
+| Concurrency | Throughput before | Throughput after | TTFT before | TTFT after |
+|-------------|-------------------|------------------|-------------|------------|
+| c=16        | —                 | —                | 5.7 s       | 1.4 s      |
+| c=32        | 107 tok/s         | 159 tok/s (+49%) | —           | —          |
+
+The TTFT collapse at c=16 (5.7 s → 1.4 s) is the largest UX win for multi-agent workflows; the c=32 throughput bump (+49%) is the sustained-load win.
+
+---
+
 ## Directory Layout
 
 ```bash
@@ -244,6 +339,9 @@ VLLM_DOCKER_IMAGE=nvcr.io/nvidia/vllm:25.11-py3
 TOTAL_UNIFIED_MEMORY_GB=128
 MEMORY_HARD_LIMIT_GB=110  # 85% of total
 MAX_RESIDENT_MODELS=5
+# Note: in cluster mode, this budget is enforced on the PRIMARY host only.
+# Remote workers have their own capacity, managed on the target host —
+# per-host memory tracking is a follow-up (see Monitoring for the same caveat).
 
 # Auto-suspend
 AUTO_SUSPEND_ENABLED=true
@@ -327,6 +425,14 @@ sudo systemctl daemon-reload
 sudo systemctl enable sparkstation-maintenance.timer
 sudo systemctl start sparkstation-maintenance.timer
 ```
+
+### Restart behavior with cluster mode
+
+When the supervisor restarts (systemctl restart, `sparkstation stop && sparkstation start`, or crash-recover), the cluster additions are backwards-compatible:
+
+- The SQLite migration that adds the `host` column to the model-instance table is **idempotent** — existing single-host DBs are upgraded in place on first boot with no data wipe. Rolling back to a single-host build with the same DB is also safe (the column is simply unused).
+- On startup, the reconcile loop iterates over every persisted instance and probes its Docker daemon on the assigned host (local socket for `primary`, SSH-tunneled Docker for remote workers). Containers missing from their target daemon are marked stopped and re-launched per the current profile.
+- The recommended restart flow is still `sparkstation stop && sparkstation start --profile <name>` — `sparkstation restart` is known to race with the DB lock and is not cluster-hardened yet.
 
 ---
 
@@ -422,6 +528,8 @@ See `monitoring/README.md` for detailed setup.
 - `model_status` - Model status (0-4)
 - `resident_models_count` - Active models
 - `model_requests_total` - Request counter per model
+
+> **Cluster note:** these metrics do not yet carry a `host` label. In a multi-Spark cluster, today's Grafana dashboards silently aggregate values across the primary and any workers (e.g. `unified_memory_used_bytes` and `gpu_*` reflect only the primary's exporter). A `host` label on all series is on the roadmap; until then, treat cluster-wide dashboards as primary-host views.
 
 ---
 
@@ -678,6 +786,8 @@ extra_args:
 - **Max concurrent models**: 3 (configurable)
 - **Thermal management**: Auto-suspend at 80°C sustained
 - **Auto-suspend**: Frees GPU after 30 min idle
+
+> **Cluster note:** the unified-memory budget and hard limit above apply to the **primary** host only. Remote workers report their own capacity to the target-host Docker daemon and are not currently rolled up into the primary's memory accounting; per-host memory tracking is a follow-up.
 
 ---
 

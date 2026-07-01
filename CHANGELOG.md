@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.4.0] - 2026-06-30
+
+### Added
+- **Two-DGX-Spark cluster support** (iter-6 / cluster mode)
+  - Chat can now run alone on a dedicated Spark ("worker1") with the full 119 GB unified memory available for KV cache
+  - Chat budget: 100 GB KV, 262K native context, 8 concurrent sequences
+  - Auxiliary backends (embeddings + vision) remain on the primary Spark
+  - Supervisor drives each host's Docker daemon over SSH; no interactive SSH sessions ever leave the control node
+- **New CLI subcommand**: `sparkstation cluster`
+  - `sparkstation cluster status` — per-host resource state and running models
+  - `sparkstation cluster sync-cache` — propagate HuggingFace cache between hosts
+  - `sparkstation cluster ncclbench` — NCCL microbenchmark across hosts
+
+### Changed
+- **models.yaml structural refactor**
+  - Each model is now defined ONCE in a top-level `models:` dict
+  - Profiles are dicts of `alias → override_dict` (memory, host, args)
+  - Different profiles can put the same alias on different hosts / memory budgets without redefining the model
+- **Split-config for cluster topology**
+  - Sensitive topology (real IPs, ssh_users, hostnames) now lives in a gitignored `.sparkstation.local.yaml`
+  - The local file deep-merges over `models.yaml` at load time
+  - Public repo stays free of internal network details
+
+### Performance
+Concurrent throughput bench, chat on primary Spark vs dedicated on worker1:
+
+| conc | Before | After | Δ |
+|---|---|---|---|
+| 1 | 41.9 tok/s | 44.8 | +7% |
+| 4 | 72.7 | 74.5 | +2% |
+| 8 | 90.9 | 120.3 | +32% |
+| 16 | 99.2 | 143.0 | +44% |
+| 32 | 106.9 | 159.2 | +49% |
+
+Latency: TTFT p50 at c=16 dropped from 5.7s → 1.4s (-75%); at c=32 from 15.5s → 7.1s (-54%). Gains scale with concurrency, as chat no longer contends with vision/embedding backends on the memory bus.
+
+---
+
 ## [0.3.0] - 2025-11-28
 
 ### Changed
@@ -374,6 +412,7 @@ This is the initial scaffolding release implementing the core architecture from 
 
 ---
 
+[0.4.0]: https://github.com/kshetrajna12/sparkstation/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/kshetrajna12/sparkstation/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/kshetrajna12/sparkstation/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/kshetrajna12/sparkstation/releases/tag/v0.1.0
