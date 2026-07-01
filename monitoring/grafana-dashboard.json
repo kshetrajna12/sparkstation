@@ -80,7 +80,8 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "unified_memory_used_bytes",
+          "expr": "unified_memory_used_bytes{host=~\"$host\"}",
+          "legendFormat": "{{host}}",
           "refId": "A"
         }
       ],
@@ -146,7 +147,8 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "gpu_temperature_celsius",
+          "expr": "gpu_temperature_celsius{host=~\"$host\"}",
+          "legendFormat": "{{host}}",
           "refId": "A"
         }
       ],
@@ -233,7 +235,8 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "gpu_power_draw_watts",
+          "expr": "gpu_power_draw_watts{host=~\"$host\"}",
+          "legendFormat": "{{host}}",
           "refId": "A"
         }
       ],
@@ -385,8 +388,8 @@
         "overrides": [
           {
             "matcher": {
-              "id": "byName",
-              "options": "Limit"
+              "id": "byRegexp",
+              "options": ".*Limit"
             },
             "properties": [
               {
@@ -440,8 +443,8 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "unified_memory_used_bytes",
-          "legendFormat": "Used",
+          "expr": "unified_memory_used_bytes{host=~\"$host\"}",
+          "legendFormat": "{{host}} Used",
           "refId": "A"
         },
         {
@@ -449,8 +452,8 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "unified_memory_limit_bytes",
-          "legendFormat": "Limit",
+          "expr": "unified_memory_limit_bytes{host=~\"$host\"}",
+          "legendFormat": "{{host}} Limit",
           "refId": "B"
         }
       ],
@@ -545,7 +548,8 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "gpu_temperature_celsius",
+          "expr": "gpu_temperature_celsius{host=~\"$host\"}",
+          "legendFormat": "{{host}}",
           "refId": "A"
         }
       ],
@@ -639,9 +643,9 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "model_status",
+          "expr": "model_status{host=~\"$host\"}",
           "format": "time_series",
-          "legendFormat": "{{model_name}}",
+          "legendFormat": "{{host}} · {{model_name}}",
           "refId": "A"
         }
       ],
@@ -730,8 +734,8 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "model_memory_used_bytes",
-          "legendFormat": "{{model_name}}",
+          "expr": "model_memory_used_bytes{host=~\"$host\"}",
+          "legendFormat": "{{host}} · {{model_name}}",
           "refId": "A"
         }
       ],
@@ -921,8 +925,8 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "rate(model_requests_total[5m])",
-          "legendFormat": "{{model_name}}",
+          "expr": "rate(model_requests_total{host=~\"$host\"}[5m])",
+          "legendFormat": "{{host}} · {{model_name}}",
           "refId": "A"
         }
       ],
@@ -1013,8 +1017,8 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.95, rate(model_request_latency_seconds_bucket[5m]))",
-          "legendFormat": "{{model_name}} p95",
+          "expr": "histogram_quantile(0.95, rate(model_request_latency_seconds_bucket{host=~\"$host\"}[5m]))",
+          "legendFormat": "{{host}} · {{model_name}} p95",
           "refId": "A"
         },
         {
@@ -1022,13 +1026,188 @@
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"
           },
-          "expr": "histogram_quantile(0.50, rate(model_request_latency_seconds_bucket[5m]))",
-          "legendFormat": "{{model_name}} p50",
+          "expr": "histogram_quantile(0.50, rate(model_request_latency_seconds_bucket{host=~\"$host\"}[5m]))",
+          "legendFormat": "{{host}} · {{model_name}} p50",
           "refId": "B"
         }
       ],
       "title": "Request Latency (p50, p95)",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "text": "Stopped"
+                },
+                "1": {
+                  "color": "yellow",
+                  "text": "Starting"
+                },
+                "2": {
+                  "color": "green",
+                  "text": "Running"
+                },
+                "3": {
+                  "color": "blue",
+                  "text": "Suspended"
+                },
+                "4": {
+                  "color": "red",
+                  "text": "Failed"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 33
+      },
+      "id": 12,
+      "options": {
+        "cellHeight": "sm",
+        "footer": {
+          "countRows": false,
+          "fields": "",
+          "reducer": [
+            "sum"
+          ],
+          "show": false
+        },
+        "showHeader": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "model_status{host=~\"$host\"}",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Models by host",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true
+            },
+            "indexByName": {
+              "Value": 3,
+              "host": 0,
+              "model_id": 2,
+              "model_name": 1
+            },
+            "renameByName": {
+              "Value": "status"
+            }
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 80000000000
+              },
+              {
+                "color": "red",
+                "value": 107374182400
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 33
+      },
+      "id": 13,
+      "options": {
+        "displayMode": "gradient",
+        "minVizHeight": 10,
+        "minVizWidth": 0,
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "showUnfilled": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (host) (model_memory_used_bytes{host=~\"$host\"})",
+          "legendFormat": "{{host}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Per-host memory usage",
+      "type": "bargauge"
     }
   ],
   "refresh": "10s",
@@ -1040,7 +1219,35 @@
     "dgx-spark"
   ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "definition": "label_values(model_status, host)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Host",
+        "multi": true,
+        "name": "host",
+        "options": [],
+        "query": {
+          "query": "label_values(model_status, host)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      }
+    ]
   },
   "time": {
     "from": "now-1h",

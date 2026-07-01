@@ -110,20 +110,27 @@ async def lifespan(app: FastAPI):
     # on the orphaned container's port. Keep STARTING + live container; the
     # health-check loop transitions it to RUNNING within ~10s.
     import subprocess as _sp
+    from supervisor.cluster_helpers import merged_env as _merged_env
     all_models = await registry.list_all()
     for model in all_models:
         container_alive = False
         if model.container_id:
+            # Talk to the daemon on THIS model's host, not always the local one.
+            # Without this, chat on worker1 gets "container_alive: False"
+            # (its container_id doesn't exist locally), the row gets purged,
+            # and autoload double-launches it on the wrong host with port collisions.
             result = _sp.run(
                 ["docker", "inspect", "-f", "{{.State.Running}}", model.container_id],
                 capture_output=True, text=True,
+                env=_merged_env(model.host or "primary"),
+                timeout=15,  # SSH transport is slower than the local socket
             )
             container_alive = result.returncode == 0 and result.stdout.strip() == "true"
         if model.status in [ModelStatus.RUNNING, ModelStatus.STARTING] and container_alive:
             continue
         logger.info(
             f"Purging stale DB entry: {model.model_alias or model.model_name} "
-            f"(status: {model.status}, container_alive: {container_alive})"
+            f"(host={model.host or 'primary'}, status: {model.status}, container_alive: {container_alive})"
         )
         await registry.delete(model.id)
 
@@ -623,13 +630,16 @@ async def health_check():
 @app.get("/metrics")
 async def get_metrics():
     """Prometheus metrics endpoint."""
-    # Update metrics before returning
+    # Update metrics before returning. System-level metrics (unified memory,
+    # GPU temp / power) are pinned to host="primary" for now — the supervisor
+    # only scrapes its own local nvidia-smi / /proc/meminfo. A worker-side
+    # exporter would populate host="worker1" etc. for the same metric names.
     if resource_manager:
         status = resource_manager.get_resource_status()
-        metrics.unified_memory_used_bytes.set(status["unified_memory_used_gb"] * 1024**3)
-        metrics.unified_memory_limit_bytes.set(status["unified_memory_limit_gb"] * 1024**3)
-        metrics.gpu_temperature_celsius.set(status["gpu_temperature_c"])
-        metrics.gpu_power_draw_watts.set(status["gpu_power_draw_w"])
+        metrics.unified_memory_used_bytes.labels(host="primary").set(status["unified_memory_used_gb"] * 1024**3)
+        metrics.unified_memory_limit_bytes.labels(host="primary").set(status["unified_memory_limit_gb"] * 1024**3)
+        metrics.gpu_temperature_celsius.labels(host="primary").set(status["gpu_temperature_c"])
+        metrics.gpu_power_draw_watts.labels(host="primary").set(status["gpu_power_draw_w"])
         metrics.resident_models_count.set(status["resident_models_count"])
 
     if registry:
@@ -647,6 +657,9 @@ async def get_metrics():
             "failed": 4,
         }
         for model in all_models:
+            model_host = model.host or "primary"
+            display_name = model.model_alias or model.model_name
+
             # Set model status
             # Handle both enum and string status values
             if hasattr(model.status, 'value'):
@@ -655,21 +668,24 @@ async def get_metrics():
                 status_str = str(model.status)
             status_value = status_map.get(status_str.lower(), 0)
             metrics.model_status.labels(
-                model_name=model.model_alias or model.model_name,
+                host=model_host,
+                model_name=display_name,
                 model_id=model.id
             ).set(status_value)
 
             # Set model memory usage
             if model.memory_gb:
                 metrics.model_memory_used_bytes.labels(
-                    model_name=model.model_alias or model.model_name
+                    host=model_host,
+                    model_name=display_name,
                 ).set(model.memory_gb * 1024**3)
 
             # Set last request timestamp
             if model.last_request_time:
                 timestamp = model.last_request_time.timestamp()
                 metrics.model_last_request_timestamp.labels(
-                    model_name=model.model_alias or model.model_name
+                    host=model_host,
+                    model_name=display_name,
                 ).set(timestamp)
 
     return metrics.metrics_response()
