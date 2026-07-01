@@ -20,36 +20,39 @@ def run_init(profile):
     profiles_info = {}
 
     try:
-        import yaml
-        with open("models.yaml") as f:
-            config = yaml.safe_load(f)
+        # Use the resolver so profile overrides + local overlay both apply,
+        # rather than duplicating YAML-parsing logic here.
+        from supervisor.models_config import load_models_config, get_profile_models
 
-        # Build profile info for all profiles
-        for profile_name, profile_models in config.get("profiles", {}).items():
-            profiles_info[profile_name] = []
-            for model in profile_models:
-                profiles_info[profile_name].append({
-                    "name": model.get("alias") or model.get("name", "unknown").split("/")[-1],
-                    "full_name": model.get("name", "unknown"),
-                    "model_type": model.get("model_type", "chat"),
-                })
+        cfg = load_models_config()
 
-        if profile:
-            # Use specific profile's models
-            if profile in profiles_info:
-                for m in profiles_info[profile]:
-                    models_info.append({"name": m["name"], "full_name": m["full_name"]})
-            else:
-                click.secho(f"Profile '{profile}' not found. Available: {', '.join(profiles_info.keys())}", fg="red")
+        # Build profile info for all profiles by resolving each one.
+        for profile_name in cfg.profiles:
+            resolved = get_profile_models(profile_name)
+            profiles_info[profile_name] = [
+                {
+                    "name": m.alias or (m.name.split("/")[-1] if m.name else "unknown"),
+                    "full_name": m.name,
+                    "model_type": m.model_type,
+                }
+                for m in resolved
+            ]
+
+        # Choose which profile's models to document
+        target_profile = profile or cfg.default_profile
+        if target_profile:
+            if target_profile not in profiles_info:
+                click.secho(
+                    f"Profile '{target_profile}' not found. Available: {', '.join(profiles_info.keys())}",
+                    fg="red",
+                )
                 sys.exit(1)
+            for m in profiles_info[target_profile]:
+                models_info.append({"name": m["name"], "full_name": m["full_name"]})
         else:
-            # Use autoload models (default)
-            autoload_models = config.get("autoload", {}).get("models", [])
-            for model in autoload_models:
-                models_info.append({
-                    "name": model.get("alias") or model.get("name", "unknown").split("/")[-1],
-                    "full_name": model.get("name", "unknown"),
-                })
+            # No profile hint anywhere — enumerate every defined model
+            for alias, defn in cfg.models.items():
+                models_info.append({"name": alias, "full_name": defn.name})
     except Exception:
         # Fallback if models.yaml doesn't exist or can't be parsed
         models_info = [

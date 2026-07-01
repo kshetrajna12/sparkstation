@@ -167,11 +167,16 @@ def _write_gateway_yaml():
         if m["status"] != "running":
             continue
         alias = m.get("alias") or m["model_name"].split("/")[-1]
+        # Use base_url from supervisor rather than hardcoding 127.0.0.1 — for
+        # models on remote cluster hosts (e.g. `host: worker1`) the URL is
+        # the QSFP-side IP so LiteLLM's proxy reaches the container over the
+        # 200 GbE direct link, not the LAN.
+        base = m.get("base_url") or f"http://127.0.0.1:{m['port']}"
         entry = {
             "model_name": alias,
             "litellm_params": {
                 "model": f"openai/{m['model_name']}",
-                "api_base": f"http://127.0.0.1:{m['port']}/v1",
+                "api_base": f"{base}/v1",
                 "api_key": "EMPTY",
                 "drop_params": True,
             },
@@ -469,53 +474,26 @@ def status(ctx):
 
 
 def _models_yaml_lookup(alias: str, profile: Optional[str] = None) -> Optional[dict]:
-    """Find the models.yaml entry for an alias.
+    """Find the resolved model config for an alias.
 
     Resolution order:
-      1. Named profile (CLI --profile flag), if given — fail if alias not present.
-      2. STARTUP_PROFILE env var, if set.
-      3. autoload section.
-      4. All profiles, first match wins.
+      1. Named profile (CLI --profile flag), if given — resolves through that
+         profile's overrides. Returns None if the alias isn't enabled in it.
+      2. STARTUP_PROFILE env var, if set (same behavior).
+      3. `default_profile` from models.yaml.
+      4. Base spec (no profile overrides).
 
-    Returns the raw dict so docker_image / extra_args / speculative-* flow through
-    to /models/start unchanged.
-
-    The CLI process inherits its env from the caller's shell, not the supervisor's
-    process — so STARTUP_PROFILE is usually unset for CLI invocations. Falling
-    through to "any profile" matches user expectation that `sparkstation models
-    start bge-m3` works as long as `bge-m3` is configured somewhere.
+    Delegates the deep-merge of base + profile overrides to
+    supervisor.models_config.find_model_by_alias so the CLI and supervisor
+    always see the same resolved config for a given alias in a given profile.
     """
-    import yaml
-    with open(PROJECT_ROOT / "models.yaml") as f:
-        config = yaml.safe_load(f) or {}
+    from supervisor.models_config import find_model_by_alias
 
-    def _match(entries: list) -> Optional[dict]:
-        for m in entries or []:
-            if m.get("alias") == alias or m.get("name") == alias:
-                return m
+    profile = profile or os.environ.get("STARTUP_PROFILE")  # None → find_model_by_alias uses default_profile
+    resolved = find_model_by_alias(alias, profile_name=profile)
+    if resolved is None:
         return None
-
-    # Explicit --profile: only that profile, no fallback (so the user gets a
-    # clear error instead of silently picking up a different config).
-    if profile:
-        return _match(config.get("profiles", {}).get(profile, []))
-
-    # STARTUP_PROFILE env, if set, takes precedence over autoload.
-    env_profile = os.environ.get("STARTUP_PROFILE")
-    if env_profile:
-        hit = _match(config.get("profiles", {}).get(env_profile, []))
-        if hit:
-            return hit
-
-    # Then autoload, then any profile.
-    hit = _match(config.get("autoload", {}).get("models", []))
-    if hit:
-        return hit
-    for _profile_name, profile_models in config.get("profiles", {}).items():
-        hit = _match(profile_models)
-        if hit:
-            return hit
-    return None
+    return resolved.model_dump()
 
 
 def _start_model_via_api(model_cfg: dict, supervisor_url: str) -> str:
@@ -525,6 +503,9 @@ def _start_model_via_api(model_cfg: dict, supervisor_url: str) -> str:
         "backend": model_cfg["backend"],
         "model_type": model_cfg.get("model_type", "chat"),
         "model_alias": model_cfg.get("alias"),
+        # Cluster role from models.yaml (defaults to "primary" if not set,
+        # matching pre-cluster single-host behavior).
+        "host": model_cfg.get("host", "primary"),
         "quantization": model_cfg.get("quantization") or "none",
         "memory_gb": model_cfg.get("memory_gb"),
         "idle_timeout_minutes": model_cfg.get("idle_timeout_minutes", 30),
@@ -720,6 +701,186 @@ def models_logs(model_id, follow, tail):
         subprocess.run(cmd)
     except KeyboardInterrupt:
         pass
+
+
+# ─── Cluster subcommands (Docker-over-SSH workers) ─────────────────────────
+
+
+def _cluster_docker_env(host_role: str) -> dict:
+    """env dict for a subprocess docker call targeting a cluster role.
+
+    Delegates to supervisor.models_config so the base + gitignored-local file
+    merge stays in one place. Returns os.environ unchanged for the local role.
+    """
+    from supervisor.models_config import get_cluster_config
+
+    env = os.environ.copy()
+    try:
+        docker_host = get_cluster_config().docker_host_env(host_role)
+        if docker_host:
+            env["DOCKER_HOST"] = docker_host
+    except Exception:
+        pass
+    return env
+
+
+@cli.group()
+def cluster():
+    """Manage cluster hosts (Docker-over-SSH workers).
+
+    A cluster is defined in models.yaml under the top-level `cluster:` block.
+    Roles are logical labels (primary/worker1/...), not hostnames — you assign
+    your own IPs. Every subcommand here reads that block.
+    """
+    pass
+
+
+@cluster.command("status")
+@click.pass_context
+def cluster_status(ctx):
+    """Show each host's reachability, Docker version, and running models."""
+    from supervisor.models_config import get_cluster_config
+    try:
+        cluster_cfg = get_cluster_config()
+    except Exception as e:
+        click.secho(f"Failed to load cluster config: {e}", fg="red")
+        sys.exit(1)
+    hosts_cfg = {role: h.model_dump() for role, h in cluster_cfg.hosts.items()}
+
+    # Query supervisor for models (best-effort; may not be running)
+    supervisor_url = ctx.obj["supervisor_url"]
+    models_by_host = {}
+    try:
+        r = httpx.get(f"{supervisor_url}/models/detailed", timeout=3)
+        for m in r.json().get("models", []):
+            models_by_host.setdefault(m.get("host") or "primary", []).append(m)
+    except Exception:
+        pass
+
+    click.echo("Cluster hosts:")
+    for role, host_cfg in hosts_cfg.items():
+        ip = host_cfg.get("ip")
+        label = host_cfg.get("label") or role
+        is_local = ip is None or ip in ("127.0.0.1", "localhost", "::1")
+
+        if is_local:
+            reach = click.style("local", fg="cyan")
+        else:
+            ping = subprocess.run(
+                ["ping", "-c", "1", "-W", "1", ip],
+                capture_output=True, text=True,
+            )
+            reach = (click.style(f"{ip} reachable", fg="green")
+                     if ping.returncode == 0
+                     else click.style(f"{ip} UNREACHABLE", fg="red"))
+
+        # Docker version via merged env (uses DOCKER_HOST=ssh://... for remote)
+        try:
+            dv = subprocess.run(
+                ["docker", "version", "--format", "{{.Server.Version}}"],
+                capture_output=True, text=True, timeout=8,
+                env=_cluster_docker_env(role),
+            )
+            docker_info = (f"docker {dv.stdout.strip()}"
+                           if dv.returncode == 0
+                           else click.style(f"docker: {dv.stderr.strip()[:80] or 'unreachable'}", fg="red"))
+        except Exception as e:
+            docker_info = click.style(f"docker: {e}", fg="red")
+
+        click.echo(f"\n  ● {role} ({label})")
+        click.echo(f"       reach:  {reach}")
+        click.echo(f"       {docker_info}")
+
+        host_models = models_by_host.get(role, [])
+        if host_models:
+            for m in host_models:
+                status_color = "green" if m["status"] == "running" else "yellow"
+                click.echo(f"       • {click.style(m['alias'] or m['model_name'], bold=True):20s} "
+                           f"{click.style(m['status'], fg=status_color):10s}  "
+                           f"{m['health_status']}")
+        else:
+            click.echo("       (no models assigned)")
+
+
+@cluster.command("sync-cache")
+@click.argument("host_role")
+@click.option("--only", multiple=True,
+              help="Sync specific HF cache subdirs (e.g. --only models--nvidia--Qwen3.6-35B-A3B-NVFP4). Repeatable.")
+@click.option("--dry-run", is_flag=True, help="Show what rsync would do, don't transfer.")
+def cluster_sync_cache(host_role, only, dry_run):
+    """Mirror ~/.cache/huggingface (or specific model subdirs) to a worker
+    over SSH+rsync. Resumable, delta-only after first sync.
+
+    Runs as the local user, so root-owned files inside the HF cache (there
+    are many — vLLM containers write as root) are read via 'other' bits and
+    will land as owner-user on the worker. First-run tip: this WILL error on
+    root-owned dirs whose mode is 0600. If you see permission errors, chown
+    the HF cache to your user on both nodes once (fixes it forever).
+    """
+    from supervisor.models_config import get_cluster_config
+    cluster_cfg = get_cluster_config()
+    if host_role not in cluster_cfg.hosts:
+        click.secho(f"Unknown host role '{host_role}'. Known: {list(cluster_cfg.hosts.keys())}", fg="red")
+        sys.exit(1)
+    host_cfg = cluster_cfg.hosts[host_role]
+    ip = host_cfg.ip
+    ssh_user = host_cfg.ssh_user
+    if ip is None or ip in ("127.0.0.1", "localhost", "::1"):
+        click.secho(f"Host '{host_role}' is local — nothing to sync.", fg="yellow")
+        return
+    if not ssh_user:
+        click.secho(f"Host '{host_role}' has ip={ip} but no ssh_user (set it in .sparkstation.local.yaml)", fg="red")
+        sys.exit(1)
+
+    src_root = Path.home() / ".cache" / "huggingface" / "hub"
+    dst_path = host_cfg.hf_cache_path or f"/home/{ssh_user}/.cache/huggingface/hub"
+
+    # Ensure remote dir exists
+    subprocess.run(["ssh", f"{ssh_user}@{ip}", f"mkdir -p {dst_path}"], check=False)
+
+    subdirs = list(only) if only else [""]
+    for sub in subdirs:
+        src = src_root / sub if sub else src_root
+        if not src.exists():
+            click.secho(f"Source not found, skipping: {src}", fg="yellow")
+            continue
+        # Trailing slash matters for rsync (copies contents, not the dir itself)
+        src_str = str(src) + ("/" if sub else "/")
+        dst = f"{ssh_user}@{ip}:{dst_path}/{sub}/" if sub else f"{ssh_user}@{ip}:{dst_path}/"
+        cmd = ["rsync", "-avz", "--partial", "--info=progress2"]
+        if dry_run:
+            cmd.append("--dry-run")
+        cmd.extend([src_str, dst])
+        click.echo(click.style(f"→ {' '.join(cmd)}", fg="cyan"))
+        # Inherit stdout so rsync's progress line renders live
+        subprocess.run(cmd, check=False)
+
+
+@cluster.command("ncclbench")
+@click.option("--script", default=None,
+              help="Path to nccl-bench.sh (default: ../homecloud-infra/qsfp/nccl-bench.sh next to sparkstation repo)")
+def cluster_ncclbench(script):
+    """Run the two-node NCCL all_gather benchmark over the QSFP link.
+
+    Delegates to homecloud-infra/qsfp/nccl-bench.sh which mpirun's the
+    NVIDIA NCCL test suite across the two Sparks. Assumes setup-nccl.sh has
+    already been run on both nodes (creates ~/nccl and ~/nccl-tests).
+
+    IMPORTANT: There's a live forum report (June 2026) of GB10 QSFP links
+    negotiating 200G but delivering ~12 Gbps payload. Run this to confirm
+    your link actually delivers before designing anything around 200 Gb/s.
+    """
+    if script is None:
+        # Default: look for the homecloud-infra checkout as a sibling repo
+        candidate = PROJECT_ROOT.parent / "homecloud-infra" / "qsfp" / "nccl-bench.sh"
+        if candidate.exists():
+            script = str(candidate)
+        else:
+            click.secho(f"nccl-bench.sh not found at expected sibling repo: {candidate}", fg="red")
+            click.secho("Pass --script /path/to/nccl-bench.sh explicitly.", fg="yellow")
+            sys.exit(1)
+    click.echo(click.style(f"Running: {script}", fg="cyan"))
+    subprocess.run(["bash", script], check=False)
 
 
 # ─── Init command (generates CLAUDE.md) ────────────────────────────────────
