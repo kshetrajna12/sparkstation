@@ -178,13 +178,22 @@ class ResourceManager:
                 return port
         raise ResourceError("No available ports in range")
 
-    def allocate_model(self, model_id: str, estimated_memory_gb: float) -> int:
+    def allocate_model(self, model_id: str, estimated_memory_gb: float,
+                       host: str = "primary") -> int:
         """
         Allocate resources for a model.
 
         Args:
             model_id: Unique model identifier
-            estimated_memory_gb: Expected memory usage
+            estimated_memory_gb: Expected memory usage (on the target host)
+            host: Cluster role the model runs on. When != "primary" the
+                  memory limit isn't enforced here — the primary supervisor's
+                  113 GB budget is only about the primary Spark. Remote hosts
+                  have their own physical limits which we don't track from
+                  here (yet); a bad allocation surfaces as a docker OOM on
+                  the target when the container fails to start. Ports are
+                  still tracked globally so we don't hand out the same one
+                  twice across hosts.
 
         Returns:
             Allocated port number
@@ -192,7 +201,7 @@ class ResourceManager:
         Raises:
             ResourceError: If allocation fails
         """
-        if not self.can_allocate_model(estimated_memory_gb):
+        if host == "primary" and not self.can_allocate_model(estimated_memory_gb):
             raise ResourceError(
                 f"Cannot allocate model {model_id}: resource limits exceeded"
             )
@@ -200,10 +209,15 @@ class ResourceManager:
         # Allocate port
         port = self.allocate_port()
         self.allocated_ports[model_id] = port
-        self.model_memory_usage[model_id] = estimated_memory_gb
+        # Only count memory against the primary Spark's budget. Remote-host
+        # memory tracking is a follow-up; the memory-usage metrics + auto-
+        # suspend heuristics all operate against the primary's unified memory.
+        if host == "primary":
+            self.model_memory_usage[model_id] = estimated_memory_gb
 
         logger.info(
-            f"Allocated resources for {model_id}: port={port}, memory={estimated_memory_gb}GB"
+            f"Allocated resources for {model_id} on host={host}: "
+            f"port={port}, memory={estimated_memory_gb}GB"
         )
 
         return port

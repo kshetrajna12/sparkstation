@@ -240,7 +240,7 @@ async def lifespan(app: FastAPI):
                     )
 
                 # Allocate port
-                port = resource_manager.allocate_model(model_id, memory_estimate)
+                port = resource_manager.allocate_model(model_id, memory_estimate, host=model_config.host)
 
                 # Create model config
                 from supervisor.models import ModelConfig, Backend, ModelType
@@ -249,6 +249,7 @@ async def lifespan(app: FastAPI):
                     backend=Backend(model_config.backend),
                     model_type=ModelType(model_config.model_type),
                     model_alias=model_config.alias,
+                    host=model_config.host,
                     num_gpus=1,
                     quantization=model_config.quantization,
                     idle_timeout_minutes=model_config.idle_timeout_minutes,
@@ -274,6 +275,7 @@ async def lifespan(app: FastAPI):
                     "backend": config.backend.value,
                     "model_type": config.model_type.value,
                     "model_alias": config.model_alias,
+                    "host": config.host,
                     "gpu_ids": instance.gpu_ids,
                     "port": port,
                     "quantization": config.quantization,
@@ -327,7 +329,7 @@ async def lifespan(app: FastAPI):
                 model_id = registry.generate_id(model_config.name)
                 memory_estimate = model_config.memory_gb if model_config.memory_gb is not None else 5.0
 
-                port = resource_manager.allocate_model(model_id, memory_estimate)
+                port = resource_manager.allocate_model(model_id, memory_estimate, host=model_config.host)
 
                 from supervisor.models import ModelConfig, Backend, ModelType
                 config = ModelConfig(
@@ -335,6 +337,7 @@ async def lifespan(app: FastAPI):
                     backend=Backend(model_config.backend),
                     model_type=ModelType(model_config.model_type),
                     model_alias=model_config.alias,
+                    host=model_config.host,
                     num_gpus=1,
                     quantization=model_config.quantization,
                     idle_timeout_minutes=model_config.idle_timeout_minutes,
@@ -353,6 +356,7 @@ async def lifespan(app: FastAPI):
                     "backend": config.backend.value,
                     "model_type": config.model_type.value,
                     "model_alias": config.model_alias,
+                    "host": config.host,
                     "gpu_ids": instance.gpu_ids,
                     "port": port,
                     "quantization": config.quantization,
@@ -393,7 +397,7 @@ async def lifespan(app: FastAPI):
                 model_id = registry.generate_id(model_config.name)
                 memory_estimate = model_config.memory_gb if model_config.memory_gb is not None else 5.0
 
-                port = resource_manager.allocate_model(model_id, memory_estimate)
+                port = resource_manager.allocate_model(model_id, memory_estimate, host=model_config.host)
 
                 from supervisor.models import ModelConfig, Backend, ModelType
                 config = ModelConfig(
@@ -401,6 +405,7 @@ async def lifespan(app: FastAPI):
                     backend=Backend(model_config.backend),
                     model_type=ModelType(model_config.model_type),
                     model_alias=model_config.alias,
+                    host=model_config.host,
                     num_gpus=1,
                     quantization=model_config.quantization,
                     idle_timeout_minutes=model_config.idle_timeout_minutes,
@@ -419,6 +424,7 @@ async def lifespan(app: FastAPI):
                     "backend": config.backend.value,
                     "model_type": config.model_type.value,
                     "model_alias": config.model_alias,
+                    "host": config.host,
                     "gpu_ids": instance.gpu_ids,
                     "port": port,
                     "quantization": config.quantization,
@@ -455,7 +461,7 @@ async def lifespan(app: FastAPI):
                 model_id = registry.generate_id(model_config.name)
                 memory_estimate = model_config.memory_gb if model_config.memory_gb is not None else 1.0
 
-                port = resource_manager.allocate_model(model_id, memory_estimate)
+                port = resource_manager.allocate_model(model_id, memory_estimate, host=model_config.host)
 
                 from supervisor.models import ModelConfig, Backend, ModelType
                 config = ModelConfig(
@@ -463,6 +469,7 @@ async def lifespan(app: FastAPI):
                     backend=Backend(model_config.backend),
                     model_type=ModelType(model_config.model_type),
                     model_alias=model_config.alias,
+                    host=model_config.host,
                     num_gpus=1,
                     quantization=model_config.quantization,
                     idle_timeout_minutes=model_config.idle_timeout_minutes,
@@ -481,6 +488,7 @@ async def lifespan(app: FastAPI):
                     "backend": config.backend.value,
                     "model_type": config.model_type.value,
                     "model_alias": config.model_alias,
+                    "host": config.host,
                     "gpu_ids": instance.gpu_ids,
                     "port": port,
                     "quantization": config.quantization,
@@ -518,7 +526,7 @@ async def lifespan(app: FastAPI):
                     model_id = registry.generate_id(model_config.name)
                     memory_estimate = model_config.memory_gb if model_config.memory_gb is not None else 35.0
 
-                    port = resource_manager.allocate_model(model_id, memory_estimate)
+                    port = resource_manager.allocate_model(model_id, memory_estimate, host=model_config.host)
 
                     from supervisor.models import ModelConfig, Backend, ModelType
                     config = ModelConfig(
@@ -704,9 +712,11 @@ async def list_models_detailed():
                 "alias": model.model_alias,
                 "backend": model.backend,
                 "model_type": model.model_type,
+                "host": model.host or "primary",
                 "status": model.status,
                 "health_status": model.health_status,
                 "port": model.port,
+                "base_url": model.base_url,
                 "memory_gb": model.memory_gb,
                 "is_default": (model.model_alias or model.model_name) == default_model_alias,
                 "last_request_time": model.last_request_time.isoformat()
@@ -763,9 +773,10 @@ async def start_model(request: ModelStartRequest):
                 request.model_name, request.quantization
             )
 
-        # Allocate resources
+        # Allocate resources (memory limit is only enforced for the primary
+        # host; remote hosts have their own capacity managed on the target).
         try:
-            port = resource_manager.allocate_model(model_id, memory_estimate)
+            port = resource_manager.allocate_model(model_id, memory_estimate, host=request.host)
         except ResourceError as e:
             current = resource_manager.get_unified_memory_usage()
             raise InsufficientResourcesError(str(e), current, resource_manager.hard_limit_gb)
@@ -776,6 +787,7 @@ async def start_model(request: ModelStartRequest):
             backend=request.backend,
             model_type=request.model_type,
             model_alias=request.model_alias,
+            host=request.host,
             num_gpus=request.num_gpus,
             quantization=request.quantization,
             idle_timeout_minutes=request.idle_timeout_minutes,
@@ -803,6 +815,7 @@ async def start_model(request: ModelStartRequest):
                 "backend": config.backend.value,
                 "model_type": config.model_type.value,
                 "model_alias": config.model_alias,
+                "host": config.host,
                 "gpu_ids": instance.gpu_ids,
                 "port": port,
                 "quantization": config.quantization,

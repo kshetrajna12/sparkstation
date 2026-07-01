@@ -88,6 +88,11 @@ class ModelInstanceDB(Base):
     restart_count = Column(Integer, default=0)  # Number of restart attempts
     last_restart_time = Column(DateTime, nullable=True)  # Last restart timestamp
 
+    # Cluster role (from cluster.hosts in models.yaml). Nullable for legacy
+    # rows that predate cluster support — the registry mapper defaults NULL
+    # back to "primary" so pre-cluster deployments keep working unchanged.
+    host = Column(String, nullable=True)
+
 
 # Pydantic models for API
 class ModelConfig(BaseModel):
@@ -97,6 +102,7 @@ class ModelConfig(BaseModel):
     backend: Backend = Field(..., description="LLM backend to use")
     model_type: ModelType = Field(ModelType.CHAT, description="Model type (chat or embedding)")
     model_alias: Optional[str] = Field(None, description="Alias for easier reference")
+    host: str = Field("primary", description="Cluster role (key in cluster.hosts)")
     num_gpus: int = Field(1, description="Number of GPUs to allocate")
     quantization: Optional[str] = Field("fp8", description="Quantization type (fp8, int4, awq)")
     idle_timeout_minutes: int = Field(30, description="Minutes before auto-suspend")
@@ -126,6 +132,9 @@ class ModelInstance(BaseModel):
     model_alias: Optional[str] = None
     backend: Backend
     model_type: ModelType = ModelType.CHAT
+    # Cluster role this instance lives on. Persisted so reconcile / stop /
+    # health-check know which docker daemon to talk to for this container.
+    host: str = "primary"
     status: ModelStatus
     health_status: HealthStatus = HealthStatus.UNKNOWN
     port: int
@@ -160,6 +169,7 @@ class ModelStartRequest(BaseModel):
     backend: Backend
     model_type: ModelType = ModelType.CHAT
     model_alias: Optional[str] = None
+    host: str = "primary"  # Cluster role — must exist in models.yaml cluster.hosts
     num_gpus: int = 1
     quantization: Optional[str] = "fp8"
     idle_timeout_minutes: int = 30

@@ -11,6 +11,7 @@ import httpx
 from supervisor.launchers.base import ModelLauncher, LaunchError
 from supervisor.models import ModelConfig, ModelInstance, ModelStatus, HealthStatus, Backend, ModelType
 from supervisor.config import settings
+from supervisor.cluster_helpers import merged_env, base_url_for_host
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,10 @@ class SGLangLauncher(ModelLauncher):
         try:
             # Launch using Docker (recommended)
             if settings.use_docker:
+                # Cluster-aware env: local for host=primary, DOCKER_HOST=ssh://...
+                # for remote roles.
+                subprocess_env = merged_env(config.host)
+
                 # Build docker run command for SGLang
                 docker_cmd = [
                     "docker",
@@ -96,43 +101,46 @@ class SGLangLauncher(ModelLauncher):
 
                 logger.debug(f"Docker command: {' '.join(docker_cmd)}")
 
-                # Launch Docker container
+                # Launch Docker container on the assigned host
                 result = subprocess.run(
                     docker_cmd,
                     capture_output=True,
                     text=True,
                     check=True,
+                    env=subprocess_env,
                 )
 
                 container_id = result.stdout.strip()
-                logger.info(f"Docker container started: {container_id[:12]}, model_id={model_id}")
+                logger.info(f"Docker container started on host={config.host}: {container_id[:12]}, model_id={model_id}")
 
                 # Wait a moment for container to start
                 await asyncio.sleep(3)
 
-                # Check if container is still running
+                # Check if container is still running (same host)
                 check_cmd = ["docker", "inspect", "-f", "{{.State.Running}}", container_id]
-                check_result = subprocess.run(check_cmd, capture_output=True, text=True)
+                check_result = subprocess.run(check_cmd, capture_output=True, text=True, env=subprocess_env)
 
                 if check_result.stdout.strip() != "true":
                     # Get container logs for debugging
                     logs_cmd = ["docker", "logs", container_id]
-                    logs_result = subprocess.run(logs_cmd, capture_output=True, text=True)
+                    logs_result = subprocess.run(logs_cmd, capture_output=True, text=True, env=subprocess_env)
                     error_context = logs_result.stdout + logs_result.stderr
                     raise LaunchError(f"Docker container failed to start. Logs:\n{error_context[:1000]}")
 
-                # Create instance
+                # Create instance. base_url resolves to the target host's IP so
+                # the gateway + health-check can reach it over QSFP.
                 instance = ModelInstance(
                     id=model_id,
                     model_name=config.model_name,
                     model_alias=config.model_alias,
                     backend=Backend.SGLANG,
                     model_type=config.model_type,
+                    host=config.host,
                     status=ModelStatus.STARTING,
                     health_status=HealthStatus.UNKNOWN,
                     port=port,
                     gpu_ids=[0],  # DGX Spark: single GPU
-                    base_url=f"http://127.0.0.1:{port}",
+                    base_url=base_url_for_host(config.host, port),
                     container_id=container_id,
                     started_at=datetime.now(),
                     auto_suspend_enabled=config.auto_suspend_enabled,
@@ -165,22 +173,25 @@ class SGLangLauncher(ModelLauncher):
         """
         try:
             if instance.container_id:
+                subprocess_env = merged_env(instance.host or "primary")
                 # Stop Docker container
                 result = subprocess.run(
                     ["docker", "stop", instance.container_id],
                     capture_output=True,
                     text=True,
                     timeout=30,
+                    env=subprocess_env,
                 )
 
                 if result.returncode == 0:
-                    logger.info(f"Stopped SGLang container: {instance.container_id[:12]}")
+                    logger.info(f"Stopped SGLang container: {instance.container_id[:12]} on host={instance.host or 'primary'}")
 
                     # Remove container
                     subprocess.run(
                         ["docker", "rm", instance.container_id],
                         capture_output=True,
                         text=True,
+                        env=subprocess_env,
                     )
                     logger.debug(f"Removed container: {instance.container_id[:12]}")
                     return True
@@ -207,15 +218,17 @@ class SGLangLauncher(ModelLauncher):
         """
         try:
             if instance.container_id:
+                subprocess_env = merged_env(instance.host or "primary")
                 result = subprocess.run(
                     ["docker", "pause", instance.container_id],
                     capture_output=True,
                     text=True,
                     timeout=10,
+                    env=subprocess_env,
                 )
 
                 if result.returncode == 0:
-                    logger.info(f"Paused SGLang container: {instance.container_id[:12]}")
+                    logger.info(f"Paused SGLang container: {instance.container_id[:12]} on host={instance.host or 'primary'}")
                     return True
                 else:
                     logger.error(f"Failed to pause container: {result.stderr}")
@@ -240,15 +253,17 @@ class SGLangLauncher(ModelLauncher):
         """
         try:
             if instance.container_id:
+                subprocess_env = merged_env(instance.host or "primary")
                 result = subprocess.run(
                     ["docker", "unpause", instance.container_id],
                     capture_output=True,
                     text=True,
                     timeout=10,
+                    env=subprocess_env,
                 )
 
                 if result.returncode == 0:
-                    logger.info(f"Unpaused SGLang container: {instance.container_id[:12]}")
+                    logger.info(f"Unpaused SGLang container: {instance.container_id[:12]} on host={instance.host or 'primary'}")
                     return True
                 else:
                     logger.error(f"Failed to unpause container: {result.stderr}")

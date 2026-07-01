@@ -12,6 +12,7 @@ import httpx
 from supervisor.launchers.base import ModelLauncher, LaunchError
 from supervisor.models import ModelConfig, ModelInstance, ModelStatus, HealthStatus, Backend, ModelType
 from supervisor.config import settings
+from supervisor.cluster_helpers import merged_env, base_url_for_host
 
 logger = logging.getLogger(__name__)
 
@@ -51,16 +52,23 @@ class FluxLauncher(ModelLauncher):
         try:
             # Launch using Docker
             if settings.use_docker:
-                # Check if flux-server image exists
+                # Cluster-aware env: local for host=primary, DOCKER_HOST=ssh://...
+                # for remote roles. Custom images (clip-server, face-server,
+                # species-server) must exist on the target host — see
+                # `sparkstation cluster sync-images` (TODO) or build manually.
+                subprocess_env = merged_env(config.host)
+
+                # Check if flux-server image exists on the target host
                 check_image = subprocess.run(
                     ["docker", "images", "-q", "flux-server:latest"],
                     capture_output=True,
                     text=True,
+                    env=subprocess_env,
                 )
 
                 if not check_image.stdout.strip():
                     raise LaunchError(
-                        "FLUX Docker image not found. Please build it first:\n"
+                        f"FLUX Docker image not found on host={config.host}. Please build it there:\n"
                         "  cd docker/flux\n"
                         "  docker build --platform linux/arm64 -t flux-server:latest ."
                     )
@@ -84,28 +92,29 @@ class FluxLauncher(ModelLauncher):
 
                 logger.debug(f"Docker command: {' '.join(docker_cmd)}")
 
-                # Launch Docker container
+                # Launch Docker container on the assigned host
                 result = subprocess.run(
                     docker_cmd,
                     capture_output=True,
                     text=True,
                     check=True,
+                    env=subprocess_env,
                 )
 
                 container_id = result.stdout.strip()
-                logger.info(f"Docker container started: {container_id[:12]}, model_id={model_id}")
+                logger.info(f"Docker container started on host={config.host}: {container_id[:12]}, model_id={model_id}")
 
                 # Wait a moment for container to start
                 await asyncio.sleep(3)
 
                 # Check if container is still running
                 check_cmd = ["docker", "inspect", "-f", "{{.State.Running}}", container_id]
-                check_result = subprocess.run(check_cmd, capture_output=True, text=True)
+                check_result = subprocess.run(check_cmd, capture_output=True, text=True, env=subprocess_env)
 
                 if check_result.stdout.strip() != "true":
                     # Get container logs for debugging
                     logs_cmd = ["docker", "logs", container_id]
-                    logs_result = subprocess.run(logs_cmd, capture_output=True, text=True)
+                    logs_result = subprocess.run(logs_cmd, capture_output=True, text=True, env=subprocess_env)
                     error_context = logs_result.stdout + logs_result.stderr
                     raise LaunchError(f"Docker container failed to start. Logs:\n{error_context[:1000]}")
 
@@ -116,11 +125,12 @@ class FluxLauncher(ModelLauncher):
                     model_alias=config.model_alias,
                     backend=Backend.FLUX,
                     model_type=ModelType.IMAGE,
+                    host=config.host,
                     status=ModelStatus.STARTING,
                     health_status=HealthStatus.UNKNOWN,
                     port=port,
                     gpu_ids=[0],  # DGX Spark: single GPU
-                    base_url=f"http://127.0.0.1:{port}",
+                    base_url=base_url_for_host(config.host, port),
                     container_id=container_id,
                     started_at=datetime.now(),
                     auto_suspend_enabled=config.auto_suspend_enabled,
@@ -153,22 +163,25 @@ class FluxLauncher(ModelLauncher):
         """
         try:
             if instance.container_id:
+                subprocess_env = merged_env(instance.host or "primary")
                 # Stop Docker container
                 result = subprocess.run(
                     ["docker", "stop", instance.container_id],
                     capture_output=True,
                     text=True,
                     timeout=30,
+                    env=subprocess_env,
                 )
 
                 if result.returncode == 0:
-                    logger.info(f"Stopped FLUX container: {instance.container_id[:12]}")
+                    logger.info(f"Stopped FLUX container: {instance.container_id[:12]} on host={instance.host or 'primary'}")
 
                     # Remove container
                     subprocess.run(
                         ["docker", "rm", instance.container_id],
                         capture_output=True,
                         text=True,
+                        env=subprocess_env,
                     )
                     logger.debug(f"Removed container: {instance.container_id[:12]}")
                     return True
@@ -195,15 +208,17 @@ class FluxLauncher(ModelLauncher):
         """
         try:
             if instance.container_id:
+                subprocess_env = merged_env(instance.host or "primary")
                 result = subprocess.run(
                     ["docker", "pause", instance.container_id],
                     capture_output=True,
                     text=True,
                     timeout=10,
+                    env=subprocess_env,
                 )
 
                 if result.returncode == 0:
-                    logger.info(f"Paused FLUX container: {instance.container_id[:12]}")
+                    logger.info(f"Paused FLUX container: {instance.container_id[:12]} on host={instance.host or 'primary'}")
                     return True
                 else:
                     logger.error(f"Failed to pause container: {result.stderr}")
@@ -228,15 +243,17 @@ class FluxLauncher(ModelLauncher):
         """
         try:
             if instance.container_id:
+                subprocess_env = merged_env(instance.host or "primary")
                 result = subprocess.run(
                     ["docker", "unpause", instance.container_id],
                     capture_output=True,
                     text=True,
                     timeout=10,
+                    env=subprocess_env,
                 )
 
                 if result.returncode == 0:
-                    logger.info(f"Unpaused FLUX container: {instance.container_id[:12]}")
+                    logger.info(f"Unpaused FLUX container: {instance.container_id[:12]} on host={instance.host or 'primary'}")
                     return True
                 else:
                     logger.error(f"Failed to unpause container: {result.stderr}")

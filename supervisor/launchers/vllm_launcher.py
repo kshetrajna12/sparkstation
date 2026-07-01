@@ -13,6 +13,7 @@ import httpx
 from supervisor.launchers.base import ModelLauncher, LaunchError
 from supervisor.models import ModelConfig, ModelInstance, ModelStatus, HealthStatus, Backend, ModelType
 from supervisor.config import settings
+from supervisor.cluster_helpers import merged_env, base_url_for_host
 
 logger = logging.getLogger(__name__)
 
@@ -271,43 +272,53 @@ class VLLMLauncher(ModelLauncher):
 
                 logger.debug(f"Docker command: {' '.join(docker_cmd)}")
 
-                # Launch Docker container
+                # Launch Docker container against the model's assigned host.
+                # For host="primary" (or any loopback ip) merged_env() returns
+                # os.environ unchanged and this behaves exactly as before.
+                # For a remote role it prepends DOCKER_HOST=ssh://... which
+                # Docker CLI routes through OpenSSH — no separate agent needed.
+                subprocess_env = merged_env(config.host)
+
                 result = subprocess.run(
                     docker_cmd,
                     capture_output=True,
                     text=True,
                     check=True,
+                    env=subprocess_env,
                 )
 
                 container_id = result.stdout.strip()
-                logger.info(f"Docker container started: {container_id[:12]}, model_id={model_id}")
+                logger.info(f"Docker container started on host={config.host}: {container_id[:12]}, model_id={model_id}")
 
                 # Wait a moment for container to start
                 await asyncio.sleep(3)
 
-                # Check if container is still running
+                # Check if container is still running (on the same host)
                 check_cmd = ["docker", "inspect", "-f", "{{.State.Running}}", container_id]
-                check_result = subprocess.run(check_cmd, capture_output=True, text=True)
+                check_result = subprocess.run(check_cmd, capture_output=True, text=True, env=subprocess_env)
 
                 if check_result.stdout.strip() != "true":
-                    # Get container logs for debugging
+                    # Get container logs for debugging (same host)
                     logs_cmd = ["docker", "logs", container_id]
-                    logs_result = subprocess.run(logs_cmd, capture_output=True, text=True)
+                    logs_result = subprocess.run(logs_cmd, capture_output=True, text=True, env=subprocess_env)
                     error_context = logs_result.stdout + logs_result.stderr
                     raise LaunchError(f"Docker container failed to start. Logs:\n{error_context[:1000]}")
 
-                # Create instance
+                # Create instance. base_url must be reachable from the supervisor
+                # process for health checks and the gateway to route traffic — so
+                # for a remote host it resolves to the QSFP-side IP, not 127.0.0.1.
                 instance = ModelInstance(
                     id=model_id,
                     model_name=config.model_name,
                     model_alias=config.model_alias,
                     backend=Backend.VLLM,
                     model_type=config.model_type,
+                    host=config.host,
                     status=ModelStatus.STARTING,
                     health_status=HealthStatus.UNKNOWN,
                     port=port,
                     gpu_ids=[0],  # DGX Spark: single GPU
-                    base_url=f"http://{settings.host}:{port}",
+                    base_url=base_url_for_host(config.host, port),
                     container_id=container_id,
                     started_at=datetime.now(),
                     auto_suspend_enabled=config.auto_suspend_enabled,
@@ -315,7 +326,7 @@ class VLLMLauncher(ModelLauncher):
                     extra_args=config.extra_args,
                 )
 
-                logger.info(f"vLLM Docker container ready: container_id={container_id[:12]}, model_id={model_id}")
+                logger.info(f"vLLM Docker container ready: container_id={container_id[:12]}, model_id={model_id}, host={config.host}")
                 return instance
 
             # Launch as subprocess (legacy mode for conda/micromamba environments)
@@ -420,7 +431,9 @@ class VLLMLauncher(ModelLauncher):
                     return True
 
             elif instance.container_id:
-                # Stop Docker container
+                # Stop Docker container on the correct host — instance.host
+                # (persisted at launch time) tells us which daemon owns it.
+                subprocess_env = merged_env(instance.host or "primary")
                 try:
                     # Stop container with timeout
                     subprocess.run(
@@ -428,14 +441,16 @@ class VLLMLauncher(ModelLauncher):
                         capture_output=True,
                         text=True,
                         timeout=15,  # Give extra time
+                        env=subprocess_env,
                     )
-                    logger.info(f"Stopped Docker container {instance.container_id[:12]}")
+                    logger.info(f"Stopped Docker container {instance.container_id[:12]} on host={instance.host or 'primary'}")
 
                     # Remove container
                     subprocess.run(
                         ["docker", "rm", instance.container_id],
                         capture_output=True,
                         text=True,
+                        env=subprocess_env,
                     )
                     logger.info(f"Removed Docker container {instance.container_id[:12]}")
                     return True
@@ -447,11 +462,13 @@ class VLLMLauncher(ModelLauncher):
                         ["docker", "kill", instance.container_id],
                         capture_output=True,
                         text=True,
+                        env=subprocess_env,
                     )
                     subprocess.run(
                         ["docker", "rm", instance.container_id],
                         capture_output=True,
                         text=True,
+                        env=subprocess_env,
                     )
                     logger.warning(f"Force killed and removed Docker container {instance.container_id[:12]}")
                     return True

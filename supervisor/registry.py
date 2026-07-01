@@ -27,9 +27,35 @@ class ModelRegistry:
         )
 
     async def initialize(self):
-        """Initialize database tables."""
+        """Initialize database tables + apply lightweight forward-compat migrations.
+
+        `create_all` only creates tables that don't exist — it won't add new columns
+        to an existing table. For SQLite, adding an optional column to an existing
+        DB is safe via `ALTER TABLE ADD COLUMN`. We do it idempotently here so
+        upgrading past pre-cluster deploys (where `host` didn't exist) doesn't
+        require a manual `sqlite3` step or a DB wipe.
+        """
+        from sqlalchemy import text
         async with self.engine.begin() as conn:
             await conn.run_sync(ModelInstanceDB.metadata.create_all)
+
+            # Idempotent per-column adds. Keeps the list small on purpose —
+            # if the schema drifts far from the original, do a proper migration.
+            pending_columns = [
+                ("host", "VARCHAR"),
+            ]
+            result = await conn.execute(text("PRAGMA table_info(model_instances)"))
+            existing = {row[1] for row in result.fetchall()}
+            for col_name, col_type in pending_columns:
+                if col_name in existing:
+                    continue
+                try:
+                    await conn.execute(
+                        text(f"ALTER TABLE model_instances ADD COLUMN {col_name} {col_type}")
+                    )
+                    logger.info(f"Registry migration: added model_instances.{col_name}")
+                except Exception as e:
+                    logger.warning(f"Registry migration skipped for {col_name}: {e}")
         logger.info("Model registry initialized")
 
     async def create(self, instance: ModelInstance) -> ModelInstance:
@@ -49,6 +75,7 @@ class ModelRegistry:
                 model_alias=instance.model_alias,
                 backend=instance.backend,
                 model_type=instance.model_type,
+                host=instance.host or "primary",
                 status=instance.status,
                 health_status=instance.health_status,
                 port=instance.port,
@@ -206,6 +233,9 @@ class ModelRegistry:
             model_alias=db_instance.model_alias,
             backend=Backend(db_instance.backend),
             model_type=ModelType(db_instance.model_type) if db_instance.model_type else ModelType.CHAT,
+            # Legacy rows (from before cluster support) have NULL host; treat as
+            # "primary" so pre-cluster deployments keep working after upgrade.
+            host=db_instance.host or "primary",
             status=ModelStatus(db_instance.status),
             health_status=HealthStatus(db_instance.health_status),
             port=db_instance.port,
@@ -229,13 +259,18 @@ class ModelRegistry:
 
     async def reconcile_state(self) -> Dict[str, Any]:
         """
-        Reconcile database state with actual running containers.
-        Called on startup to fix inconsistencies.
+        Reconcile database state with actual running containers, across
+        every host in the cluster.
 
-        Returns:
-            Summary of reconciliation actions
+        For each model in the registry, checks the docker daemon on the model's
+        assigned host (via DOCKER_HOST=ssh://... for remote roles). Also enumerates
+        sparkstation-* containers on every host to catch orphans.
+
+        Called on startup to fix inconsistencies.
         """
         import subprocess
+        from supervisor.cluster_helpers import merged_env
+        from supervisor.models_config import get_cluster_config
 
         logger.info("Starting database reconciliation...")
         summary = {
@@ -254,13 +289,18 @@ class ModelRegistry:
             if not model.container_id:
                 continue
 
+            # Per-model host env so remote containers get inspected on the
+            # right daemon (not the local one).
+            model_env = merged_env(model.host or "primary")
+
             # Check if container exists and is running
             try:
                 result = subprocess.run(
                     ["docker", "inspect", "-f", "{{.State.Running}}", model.container_id],
                     capture_output=True,
                     text=True,
-                    timeout=5,
+                    timeout=10,  # SSH transport adds latency vs local socket
+                    env=model_env,
                 )
 
                 container_running = result.stdout.strip() == "true"
@@ -269,7 +309,7 @@ class ModelRegistry:
                 # Fix mismatches
                 if container_running and not db_thinks_running:
                     # Container is running but DB says stopped - mark as running
-                    logger.warning(f"Container {model.container_id[:12]} is running but DB says stopped. Fixing...")
+                    logger.warning(f"Container {model.container_id[:12]} is running on host={model.host or 'primary'} but DB says stopped. Fixing...")
                     model.status = ModelStatus.RUNNING
                     model.health_status = HealthStatus.UNKNOWN
                     await self.update(model)
@@ -277,7 +317,7 @@ class ModelRegistry:
 
                 elif not container_running and db_thinks_running:
                     # Container stopped but DB says running - mark as stopped
-                    logger.warning(f"Container {model.container_id[:12]} stopped but DB says running. Fixing...")
+                    logger.warning(f"Container {model.container_id[:12]} stopped on host={model.host or 'primary'} but DB says running. Fixing...")
                     model.status = ModelStatus.STOPPED
                     model.health_status = HealthStatus.UNHEALTHY
                     model.stopped_at = datetime.now()
@@ -285,33 +325,38 @@ class ModelRegistry:
                     summary["fixed_stopped"].append(model.id)
 
             except subprocess.TimeoutExpired:
-                logger.error(f"Timeout checking container {model.container_id[:12]}")
+                logger.error(f"Timeout checking container {model.container_id[:12]} on host={model.host or 'primary'}")
             except Exception as e:
                 # Container doesn't exist - mark as stopped
-                logger.warning(f"Container {model.container_id[:12]} doesn't exist: {e}. Marking as stopped...")
+                logger.warning(f"Container {model.container_id[:12]} doesn't exist on host={model.host or 'primary'}: {e}. Marking as stopped...")
                 model.status = ModelStatus.STOPPED
                 model.health_status = HealthStatus.UNHEALTHY
                 model.stopped_at = datetime.now()
                 await self.update(model)
                 summary["fixed_stopped"].append(model.id)
 
-        # Check for orphaned containers (containers running but not in DB).
-        # CRITICAL: `docker ps --format "{{.ID}}"` returns the SHORT (12-char) id by
-        # default, but `model.container_id` in the DB is the FULL (64-char) id (from
-        # `docker run -d`'s stdout). Without --no-trunc, the comparison below
-        # ALWAYS misses, and every supervisor restart wipes every live container
-        # as a false "orphan" — then has to reload them all from cold. This was
-        # the root cause of the long-running "restart flaky" memo.
-        try:
-            result = subprocess.run(
-                ["docker", "ps", "-a", "--filter", "name=sparkstation-", "--no-trunc", "--format", "{{.ID}}:{{.Names}}"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
+        # Check for orphaned containers on every host. Loop through
+        # cluster.hosts so we catch stragglers left on the worker too, not just
+        # the primary. `--no-trunc` is essential — see bug #6 note in earlier
+        # commit for why short-ID matching wiped every legitimate container.
+        cluster = get_cluster_config()
+        known_container_ids = {m.container_id for m in models if m.container_id}
+        for host_role in cluster.hosts:
+            host_env = merged_env(host_role)
+            try:
+                result = subprocess.run(
+                    ["docker", "ps", "-a", "--filter", "name=sparkstation-", "--no-trunc", "--format", "{{.ID}}:{{.Names}}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    env=host_env,
+                )
 
-            if result.returncode == 0 and result.stdout.strip():
-                known_container_ids = {m.container_id for m in models if m.container_id}
+                if result.returncode != 0:
+                    logger.warning(f"docker ps failed on host={host_role}: {result.stderr[:200]}")
+                    continue
+                if not result.stdout.strip():
+                    continue
 
                 for line in result.stdout.strip().split("\n"):
                     if ":" not in line:
@@ -319,16 +364,17 @@ class ModelRegistry:
                     container_id, name = line.split(":", 1)
 
                     if container_id not in known_container_ids:
-                        logger.warning(f"Found orphaned container {name} ({container_id[:12]}). Removing...")
+                        logger.warning(f"Found orphaned container {name} ({container_id[:12]}) on host={host_role}. Removing...")
                         subprocess.run(
                             ["docker", "rm", "-f", container_id],
                             capture_output=True,
-                            timeout=10,
+                            timeout=15,
+                            env=host_env,
                         )
-                        summary["removed_orphaned"].append(name)
+                        summary["removed_orphaned"].append(f"{host_role}:{name}")
 
-        except Exception as e:
-            logger.error(f"Failed to check for orphaned containers: {e}")
+            except Exception as e:
+                logger.error(f"Failed to check for orphaned containers on host={host_role}: {e}")
 
         logger.info(f"Reconciliation complete: {summary}")
         return summary
