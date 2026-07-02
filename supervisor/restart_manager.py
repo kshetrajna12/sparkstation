@@ -6,7 +6,7 @@ Implements exponential backoff and restart attempt tracking.
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Set
 
 from supervisor.registry import ModelRegistry
 from supervisor.resources import ResourceManager
@@ -57,17 +57,100 @@ class RestartManager:
             # Repeat last value if not enough specified
             self.backoff_minutes.append(self.backoff_minutes[-1])
 
-    async def handle_failed_model(self, model_id: str):
+        # Background watcher that catches FAILED transitions from ANY path
+        # (reconcile, container-exit, direct API, race conditions), not just
+        # the health-check → max-consecutive-failures path. Prior to this
+        # loop, a container that crashed mid-run and got marked FAILED via
+        # some other route would sit dead forever: list_running() excludes
+        # FAILED, so the health-check counter never incremented, and
+        # handle_failed_model() was never called.
+        self.watch_interval_seconds = settings.auto_restart_watch_interval_seconds
+        self._task: Optional[asyncio.Task] = None
+        # Model ids currently in a restart attempt (backoff sleep OR active
+        # relaunch). Prevents the watcher and the health-check callback from
+        # both firing on the same model.
+        self._in_flight: Set[str] = set()
+
+    async def start(self):
+        """Start the FAILED-model watcher loop."""
+        if self._task is None and self.enabled:
+            self._task = asyncio.create_task(self._watch_failed_loop())
+            logger.info(
+                f"RestartManager watcher started (interval: {self.watch_interval_seconds}s, "
+                f"max_attempts: {self.max_attempts}, backoff: {self.backoff_minutes} min)"
+            )
+
+    async def stop(self):
+        """Stop the watcher loop."""
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+    async def _watch_failed_loop(self):
+        """Poll for FAILED models and trigger restart for any not already in flight."""
+        while True:
+            try:
+                await asyncio.sleep(self.watch_interval_seconds)
+                all_models = await self.registry.list_all()
+                for model in all_models:
+                    if model.status != ModelStatus.FAILED:
+                        continue
+                    if model.id in self._in_flight:
+                        continue
+                    if model.restart_count >= self.max_attempts:
+                        # Already permanently failed — don't spam retries.
+                        continue
+                    logger.warning(
+                        f"Watcher found FAILED model not in restart flight: "
+                        f"{model.model_alias or model.model_name} (id={model.id}) — triggering handle_failed_model"
+                    )
+                    self._in_flight.add(model.id)
+                    asyncio.create_task(self._handle_and_untrack(model.id))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Restart watcher loop error: {e}", exc_info=True)
+
+    async def _handle_and_untrack(self, model_id: str):
+        """Wrap handle_failed_model with in_flight cleanup on any exit."""
+        try:
+            await self.handle_failed_model(model_id, _already_tracked=True)
+        finally:
+            self._in_flight.discard(model_id)
+
+    async def handle_failed_model(self, model_id: str, _already_tracked: bool = False):
         """
-        Handle a model that has been marked as FAILED by health checks.
+        Handle a model that has been marked as FAILED.
 
         Args:
             model_id: ID of failed model
+            _already_tracked: Internal — True when called by the watcher
+                (in_flight already has model_id). External callers (e.g. the
+                health-check callback) leave this False; we add to in_flight
+                here so a subsequent watcher pass won't double-fire.
         """
         if not self.enabled:
             logger.info(f"Auto-restart disabled, skipping {model_id}")
             return
 
+        if not _already_tracked:
+            if model_id in self._in_flight:
+                logger.debug(f"handle_failed_model: {model_id} already in flight, skipping")
+                return
+            self._in_flight.add(model_id)
+
+        try:
+            await self._handle_failed_model_impl(model_id)
+        finally:
+            if not _already_tracked:
+                self._in_flight.discard(model_id)
+
+    async def _handle_failed_model_impl(self, model_id: str):
+        """The original body of handle_failed_model, minus the in_flight bookkeeping."""
         model = await self.registry.get(model_id)
         if not model:
             logger.error(f"Model {model_id} not found in registry")

@@ -163,6 +163,11 @@ async def lifespan(app: FastAPI):
         await health_check_manager.start()
         logger.info("Health check manager activated")
 
+    # RestartManager runs its own watcher independent of health checks, so
+    # crashes marked FAILED via reconcile / container-exit / any other path
+    # get recovered too — not just the health-check-counter path.
+    await restart_manager.start()
+
     # Auto-load models from config (or from named profile)
     from supervisor.models_config import get_autoload_models, get_profile_models
     from supervisor.models import ModelStartRequest
@@ -591,6 +596,8 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down Supervisor...")
     if health_check_manager:
         await health_check_manager.stop()
+    if restart_manager:
+        await restart_manager.stop()
     await auto_suspend_manager.stop()
     await gateway_sync.stop()
 

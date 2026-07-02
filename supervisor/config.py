@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     auto_restart_enabled: bool = True  # Auto-restart failed models
     auto_restart_max_attempts: int = 3  # Max restart attempts per model
     auto_restart_backoff_minutes: str = "1,5,15"  # Exponential backoff (comma-separated)
+    auto_restart_watch_interval_seconds: int = 30  # How often the RestartManager
+    # polls for FAILED models that no code path has yet triggered a restart for.
+    # 30s means a crash detected via reconcile / container-exit is recovered
+    # within ~30s + backoff (default 1 min).
 
     # LiteLLM Gateway settings
     litellm_admin_url: str = "http://127.0.0.1:8000"

@@ -145,8 +145,27 @@ class HealthCheckManager:
         """Check health of all running models."""
         running_models = await self.registry.list_running()
 
-        if not running_models:
+        # Also list FAILED models so we can log them each cycle. list_running()
+        # excludes FAILED, which used to hide dead models: a crash-then-mark-
+        # failed path (reconcile, container-exit) would show up as "4 healthy"
+        # forever with no warning that a supposedly-registered model was gone.
+        # RestartManager's watcher handles the actual recovery; this log is
+        # for operator visibility.
+        all_models = await self.registry.list_all()
+        failed_models = [m for m in all_models if m.status == ModelStatus.FAILED]
+
+        if not running_models and not failed_models:
             logger.debug("No running models to health check")
+            return
+
+        if failed_models:
+            failed_names = ", ".join(m.model_alias or m.model_name for m in failed_models)
+            logger.warning(
+                f"{len(failed_models)} model(s) in FAILED state — "
+                f"RestartManager should be handling recovery: {failed_names}"
+            )
+
+        if not running_models:
             return
 
         logger.info(f"Running health checks on {len(running_models)} models")

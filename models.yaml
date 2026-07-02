@@ -64,6 +64,18 @@ models:
       kv_cache_dtype: "fp8"
       enable_prefix_caching: true
       enable_chunked_prefill: true
+      # marlin — the only backend the NvFP4 oracle accepts for this
+      # deployment shape (this quant scheme + our env vars). Tried the
+      # alternatives on 2026-07-02:
+      #   - triton: rejected — "not supported for NvFP4 MoE"
+      #   - cutlass: rejected — "does not support the deployment
+      #     configuration since kernel does not support quantization
+      #     scheme QuantKey(u8, scale(f8e4...))"
+      # marlin runs fine but has an intermittent CUDA cudaErrorUnknown
+      # in fused_marlin_moe → moe_sum on sm_121 (Blackwell) — hit it
+      # ~5h into steady load. Recovery relies on the supervisor's
+      # auto-restart machinery, which is being repaired in parallel
+      # (Bug A: FAILED transitions weren't triggering restart).
       moe_backend: "marlin"
       attention_backend: "flashinfer"
       async_scheduling: true
