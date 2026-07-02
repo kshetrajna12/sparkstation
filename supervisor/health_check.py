@@ -294,16 +294,25 @@ class HealthCheckManager:
             # Remove from failure tracking (will be handled by restart logic)
             del self.failure_counts[model_id]
 
-            # Trigger restart if manager available
+            # Persist the FAILED status BEFORE triggering restart. The old
+            # ordering (schedule task → await registry.update) was a TOCTOU
+            # race: create_task yields, the task's own await self.registry.get
+            # reads the still-running row, and handle_failed_model's
+            # `if model.status != FAILED: return` swallows the trigger. Real
+            # incident 2026-07-01 20:17 EDT — chat was marked FAILED but the
+            # restart guard bailed 83ms later reading status="running", and
+            # the model sat dead for 3h until manual intervention. The
+            # RestartManager watcher (auto_restart_watch_interval_seconds)
+            # is the belt-and-suspenders safety net.
+            await self.registry.update(model)
+
             if self.restart_manager:
                 logger.info(f"Triggering restart for {display_name}")
-                # Schedule restart in background (don't block health checks)
                 asyncio.create_task(self.restart_manager.handle_failed_model(model_id))
         else:
             # Still RUNNING but UNHEALTHY
             model.health_status = HealthStatus.UNHEALTHY
-
-        await self.registry.update(model)
+            await self.registry.update(model)
 
     async def check_model_now(self, model_id: str) -> bool:
         """
