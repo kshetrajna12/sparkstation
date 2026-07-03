@@ -45,7 +45,13 @@ models:
     memory_gb: 40  # single-host default; image-indexing overrides to 100
     idle_timeout_minutes: 60
     auto_suspend_enabled: false
-    docker_image: "vllm/vllm-openai:nightly"
+    # PINNED (2026-07-02): the rolling :nightly (v0.23.1rc1.dev714) generates
+    # garbage on GB10 — "!!!!!" with thinking off, never-terminating reasoning
+    # with it on (sm_121 FP4 kernel corruption). This tag = image f6353499db8e
+    # (v0.22.1rc1.dev195, 2026-06 build), retagged on BOTH hosts. Re-test the
+    # rolling nightly before ever unpinning; verify output sanity, not just
+    # tok/s — the broken build benches 2× faster while emitting garbage.
+    docker_image: "vllm/vllm-openai:nightly-20260611-goodgb10"
     speculative_method: "mtp"
     num_speculative_tokens: 1
     speculative_extra:
@@ -166,6 +172,14 @@ profiles:
     qwen3.5-35b:
       host: worker1
       memory_gb: 100  # ~19 GB headroom on the 119 GB Spark
+      # MTP disabled (iter-6/7, 2026-07-02): spec-decode forces cudagraph_mode
+      # down to PIECEWISE with FlashInfer attention on BOTH v0.22 and v0.23
+      # nightlies, and benches far below MTP-off (41 vs 72.8 tok/s c=1 for
+      # MTP-3 on v0.23; also lost at c=4/8). Full A/B in autoresearch.md.
+      speculative_method: null
+      env_vars:
+        # Engine-suggested Marlin tweak for small-N GEMMs (sm_121).
+        VLLM_MARLIN_USE_ATOMIC_ADD: "1"
       extra_args:
         max_model_len: 262144   # native max per NVFP4 model card
         max_num_batched_tokens: 16384

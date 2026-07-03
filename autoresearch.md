@@ -236,3 +236,56 @@ c=1 regression is real but the NVFP4 path has wins the bench doesn't show:
 - Memory tuning: `memory_gb: 40` may be conservative now that weights are 11 GB.
 - DFlash drafter for Qwen3.6-35B-A3B (z-lab) is mainline-vLLM compatible now —
   worth A/B-ing against MTP once concurrent throughput is profiled.
+
+### Iteration 6 — MTP OFF + full CUDA graphs (2026-07-02) — SHIPPED (interim winner)
+Root cause of the iter-5 single-stream regression found in the engine log:
+`FULL_AND_PIECEWISE is not supported with spec-decode for attention backend
+FlashInferBackend ... setting cudagraph_mode=PIECEWISE`. MTP k=1 was paying the
+drafter cost AND downgrading CUDA graphs to piecewise. Disabled MTP via
+image-indexing profile override (`speculative_method: null`), added
+`VLLM_MARLIN_USE_ATOMIC_ADD=1` (engine-suggested small-N GEMM tweak).
+
+**Bench (same harness, worker1, 262K ctx, marlin+flashinfer):**
+- c=1: **72.8 tok/s** (vs 47.1 with MTP k=1 → +55%), TTFT p50 108 ms
+- c=4: **122.7 tok/s agg** (vs 76.1 → +61%), TTFT p50 152 ms (was 460!)
+- c=8: **188.7 tok/s agg** (vs 116.4 → +62%), TTFT p50 206 ms (was 641)
+
+Also finally beats the old MXFP4 baseline (56 tok/s) by +29% single-stream.
+
+**Next (iter-7, in progress):** external DGX Spark reports (~90-102 tok/s) run
+this exact checkpoint with MTP-3 on NEWER vLLM nightlies where spec-decode
+keeps full cudagraphs. A/B: `vllm/vllm-openai:cu130-nightly` (2026-07 build)
++ `{"method":"mtp","num_speculative_tokens":3,"moe_backend":"triton"}` vs
+iter-6 config. Keep whichever wins; MTP acceptance is workload-dependent, so
+judge at c=1 AND c=4/8.
+
+### Iteration 7 — MTP-3 + fresh v0.23 nightly A/B (2026-07-02) — REVERTED (both parts)
+External DGX Spark reports (~90-102 tok/s) suggested MTP-3 on newer vLLM.
+Tested on fresh `vllm/vllm-openai:nightly` (v0.23.1rc1.dev714, 20h old):
+
+**MTP-3 on v0.23:** 41.0 tok/s c=1 / 118.6 c=4 / 168.1 c=8 — loses to
+MTP-off everywhere. The `FULL_AND_PIECEWISE not supported with spec-decode
+(FlashInferBackend)` cudagraph downgrade still fires on v0.23; MTP acceptance
+doesn't compensate on our workload. The external ~100 tok/s reports don't
+reproduce here.
+
+**MTP-off on v0.23:** benched 71.4 c=1 / 212.5 c=4 / 398.6 c=8 — LOOKS like a
+2× concurrent win, BUT the output is garbage: `!!!!!...` with
+enable_thinking=false, never-terminating reasoning with thinking on (classic
+sm_121 FP4 kernel corruption). The throughput numbers are meaningless.
+**Lesson: always sanity-check output content alongside tok/s — a broken
+kernel benches fast.**
+
+**Action:** pinned the known-good 2026-06 build as
+`vllm/vllm-openai:nightly-20260611-goodgb10` (image f6353499db8e, tagged on
+both hosts) and set it as the model's docker_image. Iter-6 config (MTP off,
+marlin, flashinfer, full cudagraphs) is the keeper: **72.8 tok/s c=1 /
+122.7 c=4 / 188.7 c=8, TTFT p50 108/152/206 ms** — +55-63% over the shipped
+iter-5 config and +29% over the old MXFP4 baseline.
+
+**Open questions for a future round:**
+- Re-test rolling nightly periodically (garbage bug may get fixed; v0.23's
+  scheduler showed real batching upside if output becomes correct).
+- MTP with attention_backend=flash_attn or triton (avoids the FlashInfer
+  cudagraph downgrade) — untested; may finally let MTP pay off.
+- vLLM PR #40082 `flashinfer_cutedsl_sm12x` MoE backend (+2-6% claim).
