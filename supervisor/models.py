@@ -123,6 +123,70 @@ class ModelConfig(BaseModel):
     env_vars: Dict[str, str] = Field(default_factory=dict, description="Extra container env vars")
     volumes: List[str] = Field(default_factory=list, description="Extra volume mounts (host:container)")
 
+    @classmethod
+    def from_saved_config(cls, saved: Dict[str, Any]) -> "ModelConfig":
+        """Rebuild the launch config from a ModelInstance.saved_config snapshot.
+
+        Every relaunch path (auto-restart, resume-from-suspend) must go through
+        this so the replacement container is launched with the SAME host,
+        docker image, model type, env vars, volumes, and speculative config as
+        the original — hand-rolled partial reconstructions previously dropped
+        `host`/`docker_image` and relaunched worker models on the primary with
+        the default image.
+        """
+        return cls(
+            model_name=saved["model_name"],
+            backend=Backend(saved["backend"]),
+            model_type=ModelType(saved.get("model_type", "chat")),
+            model_alias=saved.get("model_alias"),
+            host=saved.get("host") or "primary",
+            num_gpus=len(saved.get("gpu_ids") or [0]),
+            quantization=saved.get("quantization"),
+            idle_timeout_minutes=saved.get("idle_timeout_minutes", 30),
+            auto_suspend_enabled=saved.get("auto_suspend_enabled", True),
+            speculative_model=saved.get("speculative_model"),
+            num_speculative_tokens=saved.get("num_speculative_tokens", 5),
+            speculative_method=saved.get("speculative_method"),
+            speculative_extra=saved.get("speculative_extra") or {},
+            extra_args=saved.get("extra_args") or {},
+            docker_image=saved.get("docker_image"),
+            env_vars=saved.get("env_vars") or {},
+            volumes=saved.get("volumes") or [],
+        )
+
+
+def build_saved_config(
+    config: ModelConfig,
+    gpu_ids: List[int],
+    port: int,
+    memory_gb: Optional[float],
+) -> Dict[str, Any]:
+    """Snapshot of everything ModelConfig.from_saved_config needs to relaunch."""
+    def _val(x):
+        return x.value if hasattr(x, "value") else x
+
+    return {
+        "model_name": config.model_name,
+        "backend": _val(config.backend),
+        "model_type": _val(config.model_type),
+        "model_alias": config.model_alias,
+        "host": config.host,
+        "gpu_ids": gpu_ids,
+        "port": port,
+        "memory_gb": memory_gb,
+        "quantization": config.quantization,
+        "auto_suspend_enabled": config.auto_suspend_enabled,
+        "idle_timeout_minutes": config.idle_timeout_minutes,
+        "speculative_model": config.speculative_model,
+        "num_speculative_tokens": config.num_speculative_tokens,
+        "speculative_method": config.speculative_method,
+        "speculative_extra": config.speculative_extra,
+        "extra_args": config.extra_args,
+        "docker_image": config.docker_image,
+        "env_vars": config.env_vars,
+        "volumes": config.volumes,
+    }
+
 
 class ModelInstance(BaseModel):
     """Runtime model instance."""

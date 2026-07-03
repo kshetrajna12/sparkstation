@@ -114,20 +114,49 @@ class HealthCheckManager:
             try:
                 display_name = model.model_alias or model.model_name
 
+                # Give up on models stuck in STARTING past the timeout — a
+                # relaunch whose container died would otherwise sit in
+                # STARTING forever (never health-counted, never restarted).
+                started_at = model.started_at
+                if started_at and (datetime.now() - started_at).total_seconds() > settings.starting_timeout_minutes * 60:
+                    logger.error(
+                        f"Model {display_name} stuck in STARTING for over "
+                        f"{settings.starting_timeout_minutes} min — marking FAILED"
+                    )
+                    fresh = await self.registry.get(model.id)
+                    if fresh and fresh.status == ModelStatus.STARTING:
+                        fresh.status = ModelStatus.FAILED
+                        fresh.health_status = HealthStatus.UNHEALTHY
+                        await self.registry.update(fresh)
+                    continue
+
                 # Try to health check the model (without counting failures)
                 try:
                     # Use /health endpoint for all models (liveness check)
                     response = await self.client.get(f"{model.base_url}/health")
 
                     if response.status_code == 200:
+                        # Re-fetch before promoting: the row may have been
+                        # deleted (purge/recycle) or transitioned elsewhere
+                        # (stop/suspend) while the probe was in flight —
+                        # writing the stale object back would resurrect it
+                        # as RUNNING.
+                        fresh = await self.registry.get(model.id)
+                        if fresh is None or fresh.status != ModelStatus.STARTING:
+                            logger.info(
+                                f"Model {display_name} no longer STARTING "
+                                f"({'deleted' if fresh is None else fresh.status}), skipping promotion"
+                            )
+                            continue
+
                         # Model is healthy! Transition to RUNNING
-                        model.status = ModelStatus.RUNNING
-                        model.health_status = HealthStatus.HEALTHY
-                        model.last_health_check = datetime.now()
+                        fresh.status = ModelStatus.RUNNING
+                        fresh.health_status = HealthStatus.HEALTHY
+                        fresh.last_health_check = datetime.now()
                         # Reset any failure counts from before
-                        if model.id in self.failure_counts:
-                            del self.failure_counts[model.id]
-                        await self.registry.update(model)
+                        if fresh.id in self.failure_counts:
+                            del self.failure_counts[fresh.id]
+                        await self.registry.update(fresh)
 
                         logger.info(f"✓ Model {display_name} is now RUNNING (transitioned from STARTING)")
                     else:
@@ -252,6 +281,24 @@ class HealthCheckManager:
         if model:
             model.health_status = HealthStatus.HEALTHY
             model.last_health_check = datetime.now()
+
+            # Decay restart_count after sustained healthy uptime so only
+            # consecutive rapid failures count toward max_attempts —
+            # otherwise occasional recovered crashes accumulate over days
+            # and the model eventually goes permanently FAILED.
+            if (
+                model.restart_count > 0
+                and model.last_restart_time
+                and (datetime.now() - model.last_restart_time).total_seconds()
+                > settings.restart_count_reset_minutes * 60
+            ):
+                logger.info(
+                    f"Model {display_name} healthy for over "
+                    f"{settings.restart_count_reset_minutes} min since last restart — "
+                    f"resetting restart_count (was {model.restart_count})"
+                )
+                model.restart_count = 0
+
             await self.registry.update(model)
 
         logger.debug(f"Health check passed: {display_name}")

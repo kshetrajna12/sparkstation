@@ -3,6 +3,7 @@ API key authentication for Supervisor endpoints.
 
 Implements X-API-Key header validation with configurable enforcement.
 """
+import hmac
 import logging
 from typing import Optional
 
@@ -72,8 +73,8 @@ async def require_api_key(request: Request) -> None:
             headers={"WWW-Authenticate": "ApiKey"},
         )
 
-    # Validate API key
-    if provided_key != settings.api_key:
+    # Validate API key (constant-time compare — plain != leaks timing)
+    if not hmac.compare_digest(provided_key, settings.api_key):
         logger.warning(
             f"Unauthorized request to {request.url.path}: Invalid X-API-Key"
         )
@@ -110,7 +111,7 @@ class APIKeyAuth:
         # Extract and validate
         provided_key = request.headers.get("X-API-Key")
 
-        if not provided_key or provided_key != self.api_key:
+        if not provided_key or not hmac.compare_digest(provided_key, self.api_key):
             logger.warning(f"Unauthorized request to {request.url.path}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

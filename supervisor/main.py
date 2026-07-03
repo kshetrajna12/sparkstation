@@ -26,6 +26,7 @@ from supervisor.models import (
     ResourceStatus,
     LiteLLMModelFormat,
     ModelConfig,
+    build_saved_config,
 )
 from supervisor.registry import ModelRegistry
 from supervisor.resources import ResourceManager, ResourceError
@@ -145,7 +146,10 @@ async def lifespan(app: FastAPI):
         if _surviving.status in [ModelStatus.RUNNING, ModelStatus.STARTING]:
             if _surviving.port:
                 resource_manager.allocated_ports[_surviving.id] = _surviving.port
-            if _surviving.memory_gb:
+            # Memory only counts against the primary Spark's budget (same rule
+            # as allocate_model) — counting worker-host models here would
+            # double-book the primary and cause spurious InsufficientResources.
+            if _surviving.memory_gb and (_surviving.host or "primary") == "primary":
                 resource_manager.model_memory_usage[_surviving.id] = _surviving.memory_gb
     launcher_factory = LauncherFactory()
     auto_suspend_manager = AutoSuspendManager(registry, launcher_factory, resource_manager)
@@ -282,26 +286,7 @@ async def lifespan(app: FastAPI):
                 instance.memory_gb = memory_estimate
 
                 # Save config for auto-restart
-                instance.saved_config = {
-                    "model_name": config.model_name,
-                    "backend": config.backend.value,
-                    "model_type": config.model_type.value,
-                    "model_alias": config.model_alias,
-                    "host": config.host,
-                    "gpu_ids": instance.gpu_ids,
-                    "port": port,
-                    "quantization": config.quantization,
-                    "auto_suspend_enabled": config.auto_suspend_enabled,
-                    "idle_timeout_minutes": config.idle_timeout_minutes,
-                    "speculative_model": config.speculative_model,
-                    "num_speculative_tokens": config.num_speculative_tokens,
-                    "speculative_method": config.speculative_method,
-                    "speculative_extra": config.speculative_extra,
-                    "extra_args": config.extra_args,
-                    "docker_image": config.docker_image,
-                    "env_vars": config.env_vars,
-                    "volumes": config.volumes,
-                }
+                instance.saved_config = build_saved_config(config, instance.gpu_ids, port, memory_estimate)
 
                 # Save to registry
                 await registry.create(instance)
@@ -363,22 +348,7 @@ async def lifespan(app: FastAPI):
                 launcher = launcher_factory.get_launcher(config.backend)
                 instance = await launcher.launch(config, model_id, port, memory_gb=memory_estimate)
                 instance.memory_gb = memory_estimate
-                instance.saved_config = {
-                    "model_name": config.model_name,
-                    "backend": config.backend.value,
-                    "model_type": config.model_type.value,
-                    "model_alias": config.model_alias,
-                    "host": config.host,
-                    "gpu_ids": instance.gpu_ids,
-                    "port": port,
-                    "quantization": config.quantization,
-                    "auto_suspend_enabled": config.auto_suspend_enabled,
-                    "idle_timeout_minutes": config.idle_timeout_minutes,
-                    "extra_args": config.extra_args,
-                    "docker_image": config.docker_image,
-                    "env_vars": config.env_vars,
-                    "volumes": config.volumes,
-                }
+                instance.saved_config = build_saved_config(config, instance.gpu_ids, port, memory_estimate)
 
                 await registry.create(instance)
                 clip_model_ids.append(instance.id)
@@ -431,22 +401,7 @@ async def lifespan(app: FastAPI):
                 launcher = launcher_factory.get_launcher(config.backend)
                 instance = await launcher.launch(config, model_id, port, memory_gb=memory_estimate)
                 instance.memory_gb = memory_estimate
-                instance.saved_config = {
-                    "model_name": config.model_name,
-                    "backend": config.backend.value,
-                    "model_type": config.model_type.value,
-                    "model_alias": config.model_alias,
-                    "host": config.host,
-                    "gpu_ids": instance.gpu_ids,
-                    "port": port,
-                    "quantization": config.quantization,
-                    "auto_suspend_enabled": config.auto_suspend_enabled,
-                    "idle_timeout_minutes": config.idle_timeout_minutes,
-                    "extra_args": config.extra_args,
-                    "docker_image": config.docker_image,
-                    "env_vars": config.env_vars,
-                    "volumes": config.volumes,
-                }
+                instance.saved_config = build_saved_config(config, instance.gpu_ids, port, memory_estimate)
 
                 await registry.create(instance)
                 species_model_ids.append(model_id)
@@ -495,22 +450,7 @@ async def lifespan(app: FastAPI):
                 launcher = launcher_factory.get_launcher(config.backend)
                 instance = await launcher.launch(config, model_id, port, memory_gb=memory_estimate)
                 instance.memory_gb = memory_estimate
-                instance.saved_config = {
-                    "model_name": config.model_name,
-                    "backend": config.backend.value,
-                    "model_type": config.model_type.value,
-                    "model_alias": config.model_alias,
-                    "host": config.host,
-                    "gpu_ids": instance.gpu_ids,
-                    "port": port,
-                    "quantization": config.quantization,
-                    "auto_suspend_enabled": config.auto_suspend_enabled,
-                    "idle_timeout_minutes": config.idle_timeout_minutes,
-                    "extra_args": config.extra_args,
-                    "docker_image": config.docker_image,
-                    "env_vars": config.env_vars,
-                    "volumes": config.volumes,
-                }
+                instance.saved_config = build_saved_config(config, instance.gpu_ids, port, memory_estimate)
 
                 await registry.create(instance)
                 face_model_ids.append(model_id)
@@ -546,6 +486,7 @@ async def lifespan(app: FastAPI):
                         backend=Backend(model_config.backend),
                         model_type=ModelType(model_config.model_type),
                         model_alias=model_config.alias,
+                        host=model_config.host,
                         num_gpus=1,
                         quantization=model_config.quantization,
                         idle_timeout_minutes=model_config.idle_timeout_minutes,
@@ -559,21 +500,7 @@ async def lifespan(app: FastAPI):
                     launcher = launcher_factory.get_launcher(config.backend)
                     instance = await launcher.launch(config, model_id, port, memory_gb=memory_estimate)
                     instance.memory_gb = memory_estimate
-                    instance.saved_config = {
-                        "model_name": config.model_name,
-                        "backend": config.backend.value,
-                        "model_type": config.model_type.value,
-                        "model_alias": config.model_alias,
-                        "gpu_ids": instance.gpu_ids,
-                        "port": port,
-                        "quantization": config.quantization,
-                        "auto_suspend_enabled": config.auto_suspend_enabled,
-                        "idle_timeout_minutes": config.idle_timeout_minutes,
-                        "extra_args": config.extra_args,
-                        "docker_image": config.docker_image,
-                        "env_vars": config.env_vars,
-                        "volumes": config.volumes,
-                    }
+                    instance.saved_config = build_saved_config(config, instance.gpu_ids, port, memory_estimate)
 
                     await registry.create(instance)
                     logger.info(f"Auto-loaded FLUX model: {model_config.alias or model_config.name}")
@@ -642,7 +569,8 @@ async def get_metrics():
     # only scrapes its own local nvidia-smi / /proc/meminfo. A worker-side
     # exporter would populate host="worker1" etc. for the same metric names.
     if resource_manager:
-        status = resource_manager.get_resource_status()
+        # to_thread: shells out to nvidia-smi (up to 3×5s) — don't stall the loop
+        status = await asyncio.to_thread(resource_manager.get_resource_status)
         # These are the supervisor's ALLOCATION view (sum of declared model
         # memory budgets) — NOT actual OS memory pressure. node_exporter +
         # the sparkstation_rules.yml recording rule expose the real /proc/
@@ -658,7 +586,12 @@ async def get_metrics():
         suspended = await registry.list_suspended()
         metrics.suspended_models_count.set(len(suspended))
 
-        # Update per-model metrics
+        # Update per-model metrics. Clear first: generate_id mints a fresh
+        # model_id per start, so without this every start/stop/swap cycle
+        # leaks a stale label set that keeps exporting forever.
+        metrics.model_status.clear()
+        metrics.model_memory_used_bytes.clear()
+        metrics.model_last_request_timestamp.clear()
         all_models = await registry.list_all()
         # Status mapping: string -> numeric for Prometheus
         status_map = {
@@ -804,7 +737,10 @@ async def start_model(request: ModelStartRequest):
         # Allocate resources (memory limit is only enforced for the primary
         # host; remote hosts have their own capacity managed on the target).
         try:
-            port = resource_manager.allocate_model(model_id, memory_estimate, host=request.host)
+            # to_thread: can_allocate_model inside shells out to nvidia-smi
+            port = await asyncio.to_thread(
+                resource_manager.allocate_model, model_id, memory_estimate, host=request.host
+            )
         except ResourceError as e:
             current = resource_manager.get_unified_memory_usage()
             raise InsufficientResourcesError(str(e), current, resource_manager.hard_limit_gb)
@@ -838,26 +774,7 @@ async def start_model(request: ModelStartRequest):
 
             # CRITICAL: Save config for auto-restart and resume
             # This MUST be set here so restart_manager can recover failed models
-            instance.saved_config = {
-                "model_name": config.model_name,
-                "backend": config.backend.value,
-                "model_type": config.model_type.value,
-                "model_alias": config.model_alias,
-                "host": config.host,
-                "gpu_ids": instance.gpu_ids,
-                "port": port,
-                "quantization": config.quantization,
-                "auto_suspend_enabled": config.auto_suspend_enabled,
-                "idle_timeout_minutes": config.idle_timeout_minutes,
-                "speculative_model": config.speculative_model,
-                "num_speculative_tokens": config.num_speculative_tokens,
-                "speculative_method": config.speculative_method,
-                "speculative_extra": config.speculative_extra,
-                "extra_args": config.extra_args,
-                "docker_image": config.docker_image,
-                "env_vars": config.env_vars,
-                "volumes": config.volumes,
-            }
+            instance.saved_config = build_saved_config(config, instance.gpu_ids, port, memory_estimate)
         except Exception as e:
             raise ModelLaunchError(request.backend.value, str(e))
 
@@ -1080,7 +997,7 @@ async def get_resources():
     if resource_manager is None:
         raise HTTPException(status_code=503, detail="Resource manager not initialized")
 
-    status = resource_manager.get_resource_status()
+    status = await asyncio.to_thread(resource_manager.get_resource_status)
     return ResourceStatus(**status)
 
 

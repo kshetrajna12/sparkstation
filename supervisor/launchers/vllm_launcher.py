@@ -279,7 +279,11 @@ class VLLMLauncher(ModelLauncher):
                 # Docker CLI routes through OpenSSH — no separate agent needed.
                 subprocess_env = merged_env(config.host)
 
-                result = subprocess.run(
+                # to_thread: docker over SSH (cluster workers) can take seconds;
+                # a blocking run() here would stall the whole event loop —
+                # health checks, /models API, everything.
+                result = await asyncio.to_thread(
+                    subprocess.run,
                     docker_cmd,
                     capture_output=True,
                     text=True,
@@ -295,12 +299,16 @@ class VLLMLauncher(ModelLauncher):
 
                 # Check if container is still running (on the same host)
                 check_cmd = ["docker", "inspect", "-f", "{{.State.Running}}", container_id]
-                check_result = subprocess.run(check_cmd, capture_output=True, text=True, env=subprocess_env)
+                check_result = await asyncio.to_thread(
+                    subprocess.run, check_cmd, capture_output=True, text=True, env=subprocess_env
+                )
 
                 if check_result.stdout.strip() != "true":
                     # Get container logs for debugging (same host)
                     logs_cmd = ["docker", "logs", container_id]
-                    logs_result = subprocess.run(logs_cmd, capture_output=True, text=True, env=subprocess_env)
+                    logs_result = await asyncio.to_thread(
+                        subprocess.run, logs_cmd, capture_output=True, text=True, env=subprocess_env
+                    )
                     error_context = logs_result.stdout + logs_result.stderr
                     raise LaunchError(f"Docker container failed to start. Logs:\n{error_context[:1000]}")
 
@@ -331,6 +339,26 @@ class VLLMLauncher(ModelLauncher):
 
             # Launch as subprocess (legacy mode for conda/micromamba environments)
             elif config.use_subprocess:
+                if not settings.vllm_python_path:
+                    # This branch predates Docker mode and never got a command
+                    # builder — it referenced an undefined `cmd` and crashed
+                    # with NameError. Fail with a clear message instead.
+                    raise LaunchError(
+                        "Subprocess mode requires VLLM_PYTHON_PATH; use Docker mode "
+                        "(USE_DOCKER=true) — subprocess launching is legacy/unsupported."
+                    )
+                cmd = [
+                    settings.vllm_python_path, "-m", "vllm.entrypoints.openai.api_server",
+                    "--model", config.model_name,
+                    "--host", "0.0.0.0",
+                    "--port", str(port),
+                    "--trust-remote-code",
+                    "--max-model-len", str(max_len),
+                    "--max-num-seqs", str(max_concurrent),
+                ]
+                if vllm_quant and vllm_quant.lower() != "awq":
+                    cmd.extend(["--quantization", vllm_quant])
+
                 # CRITICAL: Open log file to prevent pipe buffer deadlock
                 # Without this, backend logs fill the pipe buffer and the process hangs
                 log_dir = Path("data/model_logs")
@@ -435,8 +463,10 @@ class VLLMLauncher(ModelLauncher):
                 # (persisted at launch time) tells us which daemon owns it.
                 subprocess_env = merged_env(instance.host or "primary")
                 try:
-                    # Stop container with timeout
-                    subprocess.run(
+                    # Stop container with timeout (to_thread: don't block the
+                    # event loop for up to 15s, especially over SSH transport)
+                    await asyncio.to_thread(
+                        subprocess.run,
                         ["docker", "stop", "-t", "10", instance.container_id],
                         capture_output=True,
                         text=True,
@@ -446,7 +476,8 @@ class VLLMLauncher(ModelLauncher):
                     logger.info(f"Stopped Docker container {instance.container_id[:12]} on host={instance.host or 'primary'}")
 
                     # Remove container
-                    subprocess.run(
+                    await asyncio.to_thread(
+                        subprocess.run,
                         ["docker", "rm", instance.container_id],
                         capture_output=True,
                         text=True,
@@ -458,13 +489,15 @@ class VLLMLauncher(ModelLauncher):
                 except subprocess.TimeoutExpired:
                     # Force kill if timeout
                     logger.warning(f"Docker container {instance.container_id[:12]} didn't stop gracefully, forcing kill")
-                    subprocess.run(
+                    await asyncio.to_thread(
+                        subprocess.run,
                         ["docker", "kill", instance.container_id],
                         capture_output=True,
                         text=True,
                         env=subprocess_env,
                     )
-                    subprocess.run(
+                    await asyncio.to_thread(
+                        subprocess.run,
                         ["docker", "rm", instance.container_id],
                         capture_output=True,
                         text=True,

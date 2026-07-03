@@ -60,11 +60,20 @@ class Settings(BaseSettings):
     health_check_interval_seconds: int = 300  # 5 minutes
     health_check_timeout_seconds: int = 5
     health_check_max_failures: int = 3  # Mark as FAILED after N consecutive failures
+    # A model stuck in STARTING longer than this is marked FAILED (and picked
+    # up by the RestartManager). Generous on purpose: a 35B cold load with
+    # torch.compile can take 10-20 minutes on a Spark.
+    starting_timeout_minutes: int = 30
 
     # Model restart policy
     auto_restart_enabled: bool = True  # Auto-restart failed models
     auto_restart_max_attempts: int = 3  # Max restart attempts per model
     auto_restart_backoff_minutes: str = "1,5,15"  # Exponential backoff (comma-separated)
+    # Reset restart_count once a model has stayed healthy this long after its
+    # last restart. Without decay, an intermittent-but-recoverable crash (e.g.
+    # the marlin cudaErrorUnknown every ~5h) accumulates to max_attempts over
+    # days and the model goes permanently FAILED despite every restart working.
+    restart_count_reset_minutes: int = 60
     auto_restart_watch_interval_seconds: int = 30  # How often the RestartManager
     # polls for FAILED models that no code path has yet triggered a restart for.
     # 30s means a crash detected via reconcile / container-exit is recovered

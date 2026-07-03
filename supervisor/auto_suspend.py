@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from supervisor.registry import ModelRegistry
 from supervisor.resources import ResourceManager
-from supervisor.models import ModelStatus, ModelInstance
+from supervisor.models import ModelStatus, HealthStatus, ModelInstance
 from supervisor.launchers.factory import LauncherFactory
 from supervisor.config import settings
 
@@ -77,7 +77,8 @@ class AutoSuspendManager:
         now = datetime.now()
 
         # DGX Spark: Check thermal status with hysteresis
-        gpu_temp = self.resource_manager.get_gpu_temperature()
+        # (to_thread: nvidia-smi can block up to 5s)
+        gpu_temp = await asyncio.to_thread(self.resource_manager.get_gpu_temperature)
 
         # Hysteresis logic: only suspend if temp sustained high
         if gpu_temp > self.thermal_suspend_threshold_c:
@@ -170,18 +171,27 @@ class AutoSuspendManager:
             logger.warning(f"Cannot suspend model {model_id}: not running")
             return
 
-        # Save config for resume
-        model.saved_config = {
-            "model_name": model.model_name,
-            "backend": model.backend.value if hasattr(model.backend, 'value') else model.backend,
-            "model_alias": model.model_alias,
-            "gpu_ids": model.gpu_ids,
-            "port": model.port,
-            "quantization": model.extra_args.get("quantization"),
-            "auto_suspend_enabled": model.auto_suspend_enabled,
-            "idle_timeout_minutes": model.idle_timeout_minutes,
-            "extra_args": model.extra_args,
-        }
+        # Keep the saved_config written at launch time — it's the complete
+        # snapshot (host, docker_image, model_type, env_vars, volumes,
+        # speculative config, memory_gb). Overwriting it with a partial
+        # reconstruction here used to make resume relaunch with the wrong
+        # image/host/type. Only build a minimal fallback if launch never
+        # saved one.
+        if not model.saved_config:
+            model.saved_config = {
+                "model_name": model.model_name,
+                "backend": model.backend.value if hasattr(model.backend, 'value') else model.backend,
+                "model_type": model.model_type.value if hasattr(model.model_type, 'value') else model.model_type,
+                "model_alias": model.model_alias,
+                "host": model.host or "primary",
+                "gpu_ids": model.gpu_ids,
+                "port": model.port,
+                "memory_gb": model.memory_gb,
+                "quantization": (model.extra_args or {}).get("quantization"),
+                "auto_suspend_enabled": model.auto_suspend_enabled,
+                "idle_timeout_minutes": model.idle_timeout_minutes,
+                "extra_args": model.extra_args or {},
+            }
 
         # Stop the model process
         launcher = self.launcher_factory.get_launcher(model.backend)
@@ -227,43 +237,45 @@ class AutoSuspendManager:
         logger.info(f"Resuming model {model_id}...")
 
         try:
-            # Check if we can allocate resources
-            memory_estimate = self.resource_manager.estimate_model_memory(
-                model.model_name, model.saved_config.get("quantization", "fp8")
-            )
+            # Rebuild the exact original launch config (host, docker image,
+            # model type, env vars, volumes, speculative config).
+            from supervisor.models import ModelConfig
 
-            if not self.resource_manager.can_allocate_model(memory_estimate):
-                logger.error(f"Cannot resume {model_id}: insufficient resources")
-                return False
+            config = ModelConfig.from_saved_config(model.saved_config)
 
-            # Allocate resources (reuse port)
-            self.resource_manager.model_memory_usage[model_id] = memory_estimate
+            # Prefer the explicitly configured memory budget over the
+            # name-based heuristic.
+            memory_estimate = model.saved_config.get("memory_gb") or model.memory_gb
+            if memory_estimate is None:
+                memory_estimate = self.resource_manager.estimate_model_memory(
+                    model.model_name, model.saved_config.get("quantization", "fp8")
+                )
 
-            # Restart the model with saved config
-            from supervisor.models import ModelConfig, Backend
-
-            config = ModelConfig(
-                model_name=model.saved_config["model_name"],
-                backend=Backend(model.saved_config["backend"]),
-                model_alias=model.saved_config.get("model_alias"),
-                num_gpus=len(model.saved_config.get("gpu_ids", [0])),
-                quantization=model.saved_config.get("quantization"),
-                idle_timeout_minutes=model.saved_config["idle_timeout_minutes"],
-                auto_suspend_enabled=model.saved_config["auto_suspend_enabled"],
-                speculative_model=model.saved_config.get("speculative_model"),
-                num_speculative_tokens=model.saved_config.get("num_speculative_tokens", 5),
-                speculative_method=model.saved_config.get("speculative_method"),
-                extra_args=model.saved_config.get("extra_args", {}),
-            )
+            # Memory limits are only tracked for the primary Spark.
+            if config.host == "primary":
+                can_allocate = await asyncio.to_thread(
+                    self.resource_manager.can_allocate_model, memory_estimate
+                )
+                if not can_allocate:
+                    logger.error(f"Cannot resume {model_id}: insufficient resources")
+                    return False
+                # Allocate resources (reuse port)
+                self.resource_manager.model_memory_usage[model_id] = memory_estimate
 
             launcher = self.launcher_factory.get_launcher(config.backend)
-            new_instance = await launcher.launch(config, model_id, model.port)
+            new_instance = await launcher.launch(config, model_id, model.port, memory_gb=memory_estimate)
 
-            # Update registry
-            model.status = ModelStatus.RUNNING
+            # Update registry. STARTING (not RUNNING) — the startup monitor
+            # promotes it once /health responds. Persist the NEW container_id,
+            # otherwise reconcile_state() later treats the resumed container
+            # as an orphan and removes it.
+            model.status = ModelStatus.STARTING
+            model.health_status = HealthStatus.UNKNOWN
             model.pid = new_instance.pid
+            model.container_id = new_instance.container_id
             model.last_request_time = datetime.now()
             model.started_at = new_instance.started_at
+            model.stopped_at = None
             await self.registry.update(model)
 
             logger.info(f"Model {model_id} resumed and ready")

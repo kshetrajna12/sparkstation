@@ -10,7 +10,7 @@ from typing import Optional, Set
 
 from supervisor.registry import ModelRegistry
 from supervisor.resources import ResourceManager
-from supervisor.models import ModelStatus, ModelInstance, ModelConfig, Backend
+from supervisor.models import ModelStatus, HealthStatus, ModelInstance, ModelConfig
 from supervisor.launchers.factory import LauncherFactory
 from supervisor.config import settings
 
@@ -213,43 +213,52 @@ class RestartManager:
             except Exception as e:
                 logger.warning(f"Failed to stop existing process: {e}")
 
-            # Check resources
-            memory_estimate = self.resource_manager.estimate_model_memory(
-                model.model_name, model.saved_config.get("quantization", "fp8")
-            )
+            # Rebuild the exact original launch config (host, docker image,
+            # model type, env vars, volumes, speculative config). A partial
+            # reconstruction here used to relaunch worker-pinned models on the
+            # primary with the default image.
+            config = ModelConfig.from_saved_config(model.saved_config)
 
-            if not self.resource_manager.can_allocate_model(memory_estimate):
-                logger.error(
-                    f"Cannot restart {model_id}: insufficient resources, will retry later"
+            # Memory: prefer the explicitly configured allocation over the
+            # name-based heuristic (which mis-sizes MoE names like "35B-A3B").
+            memory_estimate = model.saved_config.get("memory_gb") or model.memory_gb
+            if memory_estimate is None:
+                memory_estimate = self.resource_manager.estimate_model_memory(
+                    model.model_name, model.saved_config.get("quantization", "fp8")
                 )
-                # Don't increment restart count if resource issue (not model's fault)
-                return
 
-            # Allocate resources (reuse port if available)
-            self.resource_manager.model_memory_usage[model_id] = memory_estimate
+            # Memory limits are only tracked for the primary Spark (same rule
+            # as ResourceManager.allocate_model).
+            if config.host == "primary":
+                can_allocate = await asyncio.to_thread(
+                    self.resource_manager.can_allocate_model, memory_estimate
+                )
+                if not can_allocate:
+                    logger.error(
+                        f"Cannot restart {model_id}: insufficient resources, will retry later"
+                    )
+                    # Don't increment restart count if resource issue (not model's fault)
+                    return
+                # Allocate resources (reuse port if available)
+                self.resource_manager.model_memory_usage[model_id] = memory_estimate
 
-            # Recreate model config from saved config
-            config = ModelConfig(
-                model_name=model.saved_config["model_name"],
-                backend=Backend(model.saved_config["backend"]),
-                model_alias=model.saved_config.get("model_alias"),
-                num_gpus=len(model.saved_config.get("gpu_ids", [0])),
-                quantization=model.saved_config.get("quantization"),
-                idle_timeout_minutes=model.saved_config["idle_timeout_minutes"],
-                auto_suspend_enabled=model.saved_config["auto_suspend_enabled"],
-                speculative_model=model.saved_config.get("speculative_model"),
-                num_speculative_tokens=model.saved_config.get("num_speculative_tokens", 5),
-                speculative_method=model.saved_config.get("speculative_method"),
-                extra_args=model.saved_config.get("extra_args", {}),
-            )
+            # Launch model. Pass memory_gb so gpu_memory_utilization is derived
+            # from the model's real budget instead of the 0.9 default.
+            new_instance = await launcher.launch(config, model_id, model.port, memory_gb=memory_estimate)
 
-            # Launch model
-            new_instance = await launcher.launch(config, model_id, model.port)
-
-            # Update registry
-            model.status = ModelStatus.RUNNING
+            # Update registry. STARTING (not RUNNING): the replacement backend
+            # still has to cold-load weights; the startup monitor promotes it
+            # to RUNNING once /health responds, and only then does gateway
+            # sync route traffic to it. Persisting the NEW container_id is
+            # load-bearing — with the old id in the DB, the next
+            # reconcile_state() classified the live replacement container as
+            # an orphan and docker rm -f'd it.
+            model.status = ModelStatus.STARTING
+            model.health_status = HealthStatus.UNKNOWN
             model.pid = new_instance.pid
+            model.container_id = new_instance.container_id
             model.started_at = new_instance.started_at
+            model.stopped_at = None
             model.restart_count += 1
             model.last_restart_time = datetime.now()
             model.last_request_time = datetime.now()  # Reset idle timer

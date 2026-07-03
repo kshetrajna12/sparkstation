@@ -173,7 +173,8 @@ class ResourceManager:
             ResourceError: If no ports available
         """
         allocated_set = set(self.allocated_ports.values())
-        for port in range(*self.port_range):
+        # port_range is inclusive on both ends (8001-8100 = 100 ports)
+        for port in range(self.port_range[0], self.port_range[1] + 1):
             if port not in allocated_set:
                 return port
         raise ResourceError("No available ports in range")

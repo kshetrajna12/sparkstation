@@ -21,7 +21,24 @@ class ModelRegistry:
 
     def __init__(self, database_url: Optional[str] = None):
         self.database_url = database_url or settings.supervisor_database_url
-        self.engine = create_async_engine(self.database_url, echo=False)
+        # timeout=5 → SQLite busy_timeout. Health checks fan out N concurrent
+        # registry.update()s (plus the auto-suspend loop, restart watcher, and
+        # record_request); SQLite is single-writer, and with the default
+        # busy_timeout of 0 any colliding write fails instantly ("database is
+        # locked"). WAL mode further lets readers proceed during a write.
+        self.engine = create_async_engine(
+            self.database_url, echo=False, connect_args={"timeout": 5}
+        )
+        if self.database_url.startswith("sqlite"):
+            from sqlalchemy import event
+
+            @event.listens_for(self.engine.sync_engine, "connect")
+            def _set_sqlite_pragmas(dbapi_conn, _record):
+                cursor = dbapi_conn.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA synchronous=NORMAL")
+                cursor.close()
+
         self.async_session = async_sessionmaker(
             self.engine, class_=AsyncSession, expire_on_commit=False
         )
@@ -117,14 +134,25 @@ class ModelRegistry:
             return None
 
     async def get_by_alias(self, alias: str) -> Optional[ModelInstance]:
-        """Get model instance by alias."""
+        """Get model instance by alias.
+
+        model_alias has no unique constraint and purge/recycle paths can
+        transiently leave duplicates — scalar_one_or_none() would raise
+        MultipleResultsFound and 500 every caller. Prefer the newest row.
+        """
         async with self.async_session() as session:
             result = await session.execute(
-                select(ModelInstanceDB).where(ModelInstanceDB.model_alias == alias)
+                select(ModelInstanceDB)
+                .where(ModelInstanceDB.model_alias == alias)
+                .order_by(ModelInstanceDB.started_at.desc())
             )
-            db_instance = result.scalar_one_or_none()
-            if db_instance:
-                return self._to_pydantic(db_instance)
+            db_instances = result.scalars().all()
+            if len(db_instances) > 1:
+                logger.warning(
+                    f"{len(db_instances)} registry rows share alias '{alias}' — using newest"
+                )
+            if db_instances:
+                return self._to_pydantic(db_instances[0])
             return None
 
     async def list_all(self) -> List[ModelInstance]:
@@ -179,6 +207,10 @@ class ModelRegistry:
                     health_status=instance.health_status,
                     pid=instance.pid,
                     container_id=instance.container_id,
+                    # started_at changes on restart/resume relaunches; without
+                    # persisting it, uptime and stuck-STARTING timeouts would
+                    # be computed from the ORIGINAL launch time.
+                    started_at=instance.started_at,
                     last_health_check=instance.last_health_check,
                     last_request_time=instance.last_request_time,
                     stopped_at=instance.stopped_at,
@@ -268,9 +300,18 @@ class ModelRegistry:
 
         Called on startup to fix inconsistencies.
         """
+        import asyncio
+        import functools
         import subprocess
         from supervisor.cluster_helpers import merged_env
         from supervisor.models_config import get_cluster_config
+
+        # docker-over-SSH calls can take seconds each; run them off the event
+        # loop so background tasks (health checks, API) aren't stalled.
+        async def _run(cmd, timeout, env):
+            return await asyncio.to_thread(
+                functools.partial(subprocess.run, cmd, capture_output=True, text=True, timeout=timeout, env=env)
+            )
 
         logger.info("Starting database reconciliation...")
         summary = {
@@ -295,10 +336,8 @@ class ModelRegistry:
 
             # Check if container exists and is running
             try:
-                result = subprocess.run(
+                result = await _run(
                     ["docker", "inspect", "-f", "{{.State.Running}}", model.container_id],
-                    capture_output=True,
-                    text=True,
                     timeout=10,  # SSH transport adds latency vs local socket
                     env=model_env,
                 )
@@ -344,10 +383,8 @@ class ModelRegistry:
         for host_role in cluster.hosts:
             host_env = merged_env(host_role)
             try:
-                result = subprocess.run(
+                result = await _run(
                     ["docker", "ps", "-a", "--filter", "name=sparkstation-", "--no-trunc", "--format", "{{.ID}}:{{.Names}}"],
-                    capture_output=True,
-                    text=True,
                     timeout=15,
                     env=host_env,
                 )
@@ -365,9 +402,8 @@ class ModelRegistry:
 
                     if container_id not in known_container_ids:
                         logger.warning(f"Found orphaned container {name} ({container_id[:12]}) on host={host_role}. Removing...")
-                        subprocess.run(
+                        await _run(
                             ["docker", "rm", "-f", container_id],
-                            capture_output=True,
                             timeout=15,
                             env=host_env,
                         )
