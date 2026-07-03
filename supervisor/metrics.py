@@ -13,15 +13,21 @@ from prometheus_client import Gauge, Counter, Histogram, generate_latest, CONTEN
 from fastapi import Response
 
 
-# Memory metrics (per-host — today only primary is populated). Adding a
-# per-worker sample requires a scraper that exports nvidia-smi + /proc/meminfo
-# on the worker; see docs/cluster.md (TODO) for the pattern.
-unified_memory_used_bytes = Gauge(
-    "unified_memory_used_bytes", "Total unified memory usage in bytes", ["host"]
+# Supervisor's allocation-estimate view of memory. Distinct name from
+# `unified_memory_used_bytes` (which the node_exporter recording rule now
+# owns — that's actual /proc/meminfo pressure). Two different numbers with
+# distinct meanings: the supervisor sums each model's declared memory_gb
+# budget, node_exporter reports what the kernel is actually holding.
+sparkstation_allocated_memory_bytes = Gauge(
+    "sparkstation_allocated_memory_bytes",
+    "Sum of running-model memory budgets (allocation estimate, not actual pressure)",
+    ["host"],
 )
 
-unified_memory_limit_bytes = Gauge(
-    "unified_memory_limit_bytes", "Unified memory hard limit in bytes", ["host"]
+sparkstation_memory_budget_bytes = Gauge(
+    "sparkstation_memory_budget_bytes",
+    "Configured hard memory budget the supervisor enforces on the primary Spark",
+    ["host"],
 )
 
 # Per-model memory. host label makes "which Spark is this container on?" queryable.

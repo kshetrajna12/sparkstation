@@ -643,8 +643,13 @@ async def get_metrics():
     # exporter would populate host="worker1" etc. for the same metric names.
     if resource_manager:
         status = resource_manager.get_resource_status()
-        metrics.unified_memory_used_bytes.labels(host="primary").set(status["unified_memory_used_gb"] * 1024**3)
-        metrics.unified_memory_limit_bytes.labels(host="primary").set(status["unified_memory_limit_gb"] * 1024**3)
+        # These are the supervisor's ALLOCATION view (sum of declared model
+        # memory budgets) — NOT actual OS memory pressure. node_exporter +
+        # the sparkstation_rules.yml recording rule expose the real /proc/
+        # meminfo value under the name `unified_memory_used_bytes`. Two
+        # distinct metrics with distinct meanings.
+        metrics.sparkstation_allocated_memory_bytes.labels(host="primary").set(status["unified_memory_used_gb"] * 1024**3)
+        metrics.sparkstation_memory_budget_bytes.labels(host="primary").set(status["unified_memory_limit_gb"] * 1024**3)
         metrics.gpu_temperature_celsius.labels(host="primary").set(status["gpu_temperature_c"])
         metrics.gpu_power_draw_watts.labels(host="primary").set(status["gpu_power_draw_w"])
         metrics.resident_models_count.set(status["resident_models_count"])
