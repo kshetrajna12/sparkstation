@@ -1,0 +1,65 @@
+# Recording rules for the Sparkstation cluster.
+#
+# Two groups:
+#  1) cluster_translation — bridge raw exporter names to the schema the
+#     supervisor emits for host="primary", so one dashboard query covers all
+#     hosts (gpu temp/power, unified memory).
+#  2) engine_normalization — translate engine-specific metrics (vllm:*, and
+#     later sglang:*/trtllm:*) into canonical sparkstation:* names. Dashboards
+#     only query canonical names; supporting a new engine means adding an
+#     `or`-branch here, never editing dashboards. Scrape targets come from the
+#     supervisor's /prometheus/targets http_sd (labels: host, alias, engine).
+
+groups:
+  - name: sparkstation_cluster_translation
+    interval: 15s
+    rules:
+      - record: gpu_temperature_celsius
+        expr: nvidia_smi_temperature_gpu
+
+      - record: gpu_power_draw_watts
+        expr: nvidia_smi_power_draw_watts
+
+      # 0-100 scale for dashboards. nvidia_smi_utilization_gpu_ratio is 0-1.
+      - record: gpu_utilization_percent
+        expr: nvidia_smi_utilization_gpu_ratio * 100
+
+      - record: unified_memory_used_bytes
+        expr: node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes
+
+      - record: unified_memory_limit_bytes
+        expr: node_memory_MemTotal_bytes
+
+  - name: sparkstation_engine_normalization
+    interval: 15s
+    rules:
+      # Engine-side request rate (successful completions/sec). The gateway
+      # proxy's sparkstation_gateway_* metrics are the source of truth for
+      # user-facing rate/latency; these engine-side series add scheduler
+      # detail (and cover traffic that bypasses the gateway).
+      - record: sparkstation:engine_requests_per_second
+        expr: sum by (alias, host, engine) (rate(vllm:request_success_total[5m]))
+
+      - record: sparkstation:engine_latency_p50_seconds
+        expr: histogram_quantile(0.50, sum by (alias, host, le) (rate(vllm:e2e_request_latency_seconds_bucket[5m])))
+
+      - record: sparkstation:engine_latency_p95_seconds
+        expr: histogram_quantile(0.95, sum by (alias, host, le) (rate(vllm:e2e_request_latency_seconds_bucket[5m])))
+
+      - record: sparkstation:engine_ttft_p95_seconds
+        expr: histogram_quantile(0.95, sum by (alias, host, le) (rate(vllm:time_to_first_token_seconds_bucket[5m])))
+
+      - record: sparkstation:engine_queue_depth
+        expr: sum by (alias, host, engine) (vllm:num_requests_waiting)
+
+      - record: sparkstation:engine_running_requests
+        expr: sum by (alias, host, engine) (vllm:num_requests_running)
+
+      # KV-cache utilization, 0-1. vLLM renamed gpu_cache_usage_perc ->
+      # kv_cache_usage_perc (~v0.22); keep both via `or` for older engines.
+      - record: sparkstation:engine_kv_cache_usage_ratio
+        expr: sum by (alias, host, engine) (vllm:kv_cache_usage_perc or vllm:gpu_cache_usage_perc)
+
+      # Generation throughput (tokens/sec) per model.
+      - record: sparkstation:engine_generation_tokens_per_second
+        expr: sum by (alias, host, engine) (rate(vllm:generation_tokens_total[5m]))
