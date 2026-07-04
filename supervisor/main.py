@@ -578,8 +578,10 @@ async def get_metrics():
         # distinct metrics with distinct meanings.
         metrics.sparkstation_allocated_memory_bytes.labels(host="primary").set(status["unified_memory_used_gb"] * 1024**3)
         metrics.sparkstation_memory_budget_bytes.labels(host="primary").set(status["unified_memory_limit_gb"] * 1024**3)
-        metrics.gpu_temperature_celsius.labels(host="primary").set(status["gpu_temperature_c"])
-        metrics.gpu_power_draw_watts.labels(host="primary").set(status["gpu_power_draw_w"])
+        # GPU temp/power are intentionally NOT exported here anymore —
+        # nvidia_gpu_exporter runs on every host (incl. primary) and the
+        # sparkstation_rules.yml translation owns gpu_temperature_celsius /
+        # gpu_power_draw_watts. Emitting them here too double-counted primary.
         # NOTE: resident_models_count is set below from the registry, NOT from
         # resource_manager — the latter only tracks primary-host memory, so
         # worker-host models (e.g. chat on worker1) were missing ("4 of 5").

@@ -36,14 +36,9 @@ model_memory_used_bytes = Gauge(
     ["host", "model_name"],
 )
 
-# GPU metrics (per-host — same story as unified memory).
-gpu_temperature_celsius = Gauge(
-    "gpu_temperature_celsius", "GPU temperature in Celsius", ["host"]
-)
-
-gpu_power_draw_watts = Gauge(
-    "gpu_power_draw_watts", "GPU power draw in Watts", ["host"]
-)
+# GPU temp/power gauges were removed (2026-07-02): nvidia_gpu_exporter runs on
+# every host and the Prometheus recording rules own those metric names now.
+# The supervisor emitting host="primary" copies double-counted that host.
 
 # Model status: 0=stopped, 1=starting, 2=running, 3=suspended, 4=failed.
 model_status = Gauge(

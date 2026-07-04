@@ -42,15 +42,17 @@
               },
               {
                 "color": "yellow",
-                "value": 80
+                "value": 0.7
               },
               {
                 "color": "red",
-                "value": 100
+                "value": 0.85
               }
             ]
           },
-          "unit": "bytes"
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
         },
         "overrides": []
       },
@@ -80,13 +82,15 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "unified_memory_used_bytes{host=~\"$host\"}",
+          "expr": "unified_memory_used_bytes{host=~\"$host\", job!=\"sparkstation\"} / unified_memory_limit_bytes{host=~\"$host\", job!=\"sparkstation\"}",
           "legendFormat": "{{host}}",
+          "range": true,
           "refId": "A"
         }
       ],
-      "title": "Unified Memory Used",
-      "type": "gauge"
+      "title": "Unified Memory Used (%)",
+      "type": "gauge",
+      "description": "MemTotal-MemAvailable over MemTotal per host (node_exporter) \u2014 true pressure on unified memory."
     },
     {
       "datasource": {
@@ -147,7 +151,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "gpu_temperature_celsius{host=~\"$host\"}",
+          "expr": "gpu_temperature_celsius{host=~\"$host\", job!=\"sparkstation\"}",
           "legendFormat": "{{host}}",
           "refId": "A"
         }
@@ -235,7 +239,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "gpu_power_draw_watts{host=~\"$host\"}",
+          "expr": "gpu_power_draw_watts{host=~\"$host\", job!=\"sparkstation\"}",
           "legendFormat": "{{host}}",
           "refId": "A"
         }
@@ -533,7 +537,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "gpu_temperature_celsius{host=~\"$host\"}",
+          "expr": "gpu_temperature_celsius{host=~\"$host\", job!=\"sparkstation\"}",
           "legendFormat": "{{host}}",
           "refId": "A"
         }
