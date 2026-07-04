@@ -1765,7 +1765,7 @@
   "timepicker": {},
   "timezone": "",
   "title": "Sparkstation - DGX Spark LLM Gateway",
-  "uid": "sparkstation-main",
+  "uid": "sparkstation",
   "version": 1,
   "weekStart": ""
 }
