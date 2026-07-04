@@ -1132,7 +1132,7 @@
             "axisPlacement": "auto",
             "barAlignment": 0,
             "drawStyle": "line",
-            "fillOpacity": 10,
+            "fillOpacity": 12,
             "gradientMode": "none",
             "hideFrom": {
               "tooltip": false,
@@ -1152,7 +1152,7 @@
               "mode": "none"
             },
             "thresholdsStyle": {
-              "mode": "off"
+              "mode": "line"
             }
           },
           "mappings": [],
@@ -1160,14 +1160,43 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "transparent",
                 "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.9
               }
             ]
           },
-          "unit": "bytes"
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*budgeted.*"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -1179,8 +1208,7 @@
       "options": {
         "legend": {
           "calcs": [
-            "lastNotNull",
-            "mean"
+            "lastNotNull"
           ],
           "displayMode": "table",
           "placement": "right",
@@ -1198,35 +1226,25 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "unified_memory_used_bytes{host=~\"$host\", job!=\"sparkstation\"}",
-          "legendFormat": "{{host}} \u00b7 used",
+          "refId": "A",
           "range": true,
-          "refId": "A"
+          "expr": "unified_memory_used_bytes{host=~\"$host\", job!=\"sparkstation\"} / unified_memory_limit_bytes{host=~\"$host\", job!=\"sparkstation\"}",
+          "legendFormat": "{{host}} \u00b7 used"
         },
         {
           "datasource": {
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "unified_memory_limit_bytes{host=~\"$host\", job!=\"sparkstation\"}",
-          "legendFormat": "{{host}} \u00b7 total",
+          "refId": "B",
           "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "expr": "sparkstation_allocated_memory_bytes{host=~\"$host\"}",
-          "legendFormat": "{{host}} \u00b7 supervisor budgeted",
-          "range": true,
-          "refId": "C"
+          "expr": "sum by (host) (model_memory_used_bytes{host=~\"$host\"}) / on(host) (unified_memory_limit_bytes{job!=\"sparkstation\"})",
+          "legendFormat": "{{host}} \u00b7 budgeted"
         }
       ],
-      "title": "Unified Memory per Host (actual vs budget)",
+      "title": "Unified Memory Pressure per Host",
       "type": "timeseries",
-      "description": "Real unified-memory pressure (MemTotal-MemAvailable via node_exporter \u2014 nvidia-smi is misleading on UMA) vs the supervisor's allocation budget."
+      "description": "Actual usage (MemTotal-MemAvailable) and the supervisor's allocation budget, as % of each host's 122GB unified memory. Dashed = budgeted. Red line = 90% danger zone."
     },
     {
       "datasource": {
