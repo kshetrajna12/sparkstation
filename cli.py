@@ -95,6 +95,57 @@ def _kill_and_wait(name: str, timeout: int = 10):
     (PID_DIR / f"{name}.pid").unlink(missing_ok=True)
 
 
+# LiteLLM listens internally on this port; the public :8000 is owned by the
+# sparkstation metrics/auto-resume proxy (gateway/proxy.py), which stays up
+# across LiteLLM bounces so model swaps no longer drop the public API port.
+# 7999 deliberately sits BELOW the model port range (8001-8100) — 8002 was
+# bge-m3's container port.
+GATEWAY_INTERNAL_PORT = 7999
+
+
+def _start_litellm() -> "subprocess.Popen":
+    """Launch LiteLLM on the internal port; returns the process."""
+    gw_log = LOG_DIR / "gateway.log"
+    gw_env = os.environ.copy()
+    gw_env.pop("SUPERVISOR_DATABASE_URL", None)
+    with open(gw_log, "w") as lf:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "litellm.proxy.proxy_cli",
+             "--config", "gateway/litellm.yaml",
+             "--host", "127.0.0.1", "--port", str(GATEWAY_INTERNAL_PORT)],
+            stdout=lf, stderr=subprocess.STDOUT,
+            env=gw_env, cwd=PROJECT_ROOT,
+            start_new_session=True,
+        )
+    _write_pid("gateway", proc.pid)
+    return proc
+
+
+def _ensure_proxy() -> None:
+    """Start the gateway proxy on :8000 if it isn't already serving.
+
+    Idempotent on purpose: _restart_gateway() calls this every model refresh,
+    but the proxy is config-free and survives LiteLLM bounces — it only ever
+    needs (re)starting after `sparkstation stop` or a crash.
+    """
+    if _is_port_open("127.0.0.1", 8000):
+        return
+    log = LOG_DIR / "gateway-proxy.log"
+    with open(log, "w") as lf:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "uvicorn", "gateway.proxy:app",
+             "--host", "127.0.0.1", "--port", "8000", "--log-level", "warning"],
+            stdout=lf, stderr=subprocess.STDOUT,
+            cwd=PROJECT_ROOT, start_new_session=True,
+        )
+    _write_pid("gateway-proxy", proc.pid)
+    for _ in range(15):
+        if _is_port_open("127.0.0.1", 8000):
+            return
+        time.sleep(1)
+    click.secho("     Warning: gateway proxy did not bind :8000", fg="yellow")
+
+
 def _is_port_open(host: str, port: int) -> bool:
     import socket
     try:
@@ -238,6 +289,7 @@ def start(ctx, detach, profile):
         click.echo(f"  → Reaping {len(strays.stdout.strip().splitlines())} stray supervisor process(es) before start")
         subprocess.run(["pkill", "-9", "-f", "uvicorn supervisor.main:app"], capture_output=True)
     subprocess.run(["pkill", "-9", "-f", "litellm.proxy.proxy_cli"], capture_output=True)
+    subprocess.run(["pkill", "-9", "-f", "uvicorn gateway.proxy:app"], capture_output=True)
     time.sleep(1)  # let the kernel finish reaping before we spawn the replacement
 
     if profile:
@@ -332,23 +384,12 @@ def start(ctx, detach, profile):
     click.echo("  → Writing gateway config...")
     _write_gateway_yaml()
 
-    # 5) Start gateway
+    # 5) Start gateway (LiteLLM on the internal port + metrics proxy on :8000)
     click.echo("  → Starting gateway...")
-    gw_log = LOG_DIR / "gateway.log"
-    gw_env = os.environ.copy()
-    gw_env.pop("SUPERVISOR_DATABASE_URL", None)
-
-    with open(gw_log, "w") as lf:
-        gw_proc = subprocess.Popen(
-            [sys.executable, "-m", "litellm.proxy.proxy_cli",
-             "--config", "gateway/litellm.yaml",
-             "--host", "127.0.0.1", "--port", "8000"],
-            stdout=lf, stderr=subprocess.STDOUT,
-            env=gw_env, cwd=PROJECT_ROOT,
-            start_new_session=True,
-        )
-    _write_pid("gateway", gw_proc.pid)
-    click.echo(f"     PID {gw_proc.pid} — log: {gw_log}")
+    gw_proc = _start_litellm()
+    click.echo(f"     LiteLLM PID {gw_proc.pid} (:{GATEWAY_INTERNAL_PORT}) — log: {LOG_DIR / 'gateway.log'}")
+    _ensure_proxy()
+    click.echo(f"     Proxy PID {_read_pid('gateway-proxy')} (:8000) — log: {LOG_DIR / 'gateway-proxy.log'}")
 
     # 6) Wait for gateway
     for i in range(30):
@@ -386,8 +427,10 @@ def stop():
     _ensure_dirs()
     click.echo("Stopping Sparkstation...")
 
-    # 1) Gateway
+    # 1) Gateway (proxy + LiteLLM)
     click.echo("  → Stopping gateway...")
+    _kill_and_wait("gateway-proxy", timeout=5)
+    subprocess.run(["pkill", "-9", "-f", "uvicorn gateway.proxy:app"], capture_output=True)
     _kill_and_wait("gateway", timeout=5)
     # Also kill by pattern in case PID file was lost
     subprocess.run(["pkill", "-9", "-f", "litellm.proxy.proxy_cli"], capture_output=True)
@@ -547,37 +590,47 @@ def _wait_for_model_ready(model_id: str, supervisor_url: str, timeout_seconds: i
 
 
 def _restart_gateway() -> bool:
-    """Stop the gateway, refresh yaml from supervisor, start a fresh gateway.
+    """Refresh litellm.yaml from supervisor state and bounce ONLY LiteLLM.
 
-    Until LiteLLM grows a hot-reload path, the gateway has no way to pick up
-    model_list changes at runtime. We rewrite litellm.yaml and bounce the
-    process — ~3-5s gateway downtime across ALL aliases. Per-model 503 with
-    Retry-After requires a custom middleware in front of LiteLLM and is
-    deferred to Phase 1.5-4.
+    The public :8000 (metrics/auto-resume proxy) stays up throughout — during
+    the ~3-5s LiteLLM bounce, in-flight requests to the internal port fail
+    over to the proxy's 502/503 handling instead of connection-refused on the
+    public port. Until LiteLLM grows a hot-reload path this bounce is the only
+    way to pick up model_list changes.
     """
     _ensure_dirs()
     _write_gateway_yaml()
     _kill_and_wait("gateway", timeout=5)
     subprocess.run(["pkill", "-9", "-f", "litellm.proxy.proxy_cli"], capture_output=True)
     time.sleep(1)
-    gw_log = LOG_DIR / "gateway.log"
-    gw_env = os.environ.copy()
-    gw_env.pop("SUPERVISOR_DATABASE_URL", None)
-    with open(gw_log, "w") as lf:
-        gw_proc = subprocess.Popen(
-            [sys.executable, "-m", "litellm.proxy.proxy_cli",
-             "--config", "gateway/litellm.yaml",
-             "--host", "127.0.0.1", "--port", "8000"],
-            stdout=lf, stderr=subprocess.STDOUT,
-            env=gw_env, cwd=PROJECT_ROOT,
-            start_new_session=True,
-        )
-    _write_pid("gateway", gw_proc.pid)
+    _start_litellm()
+    _ensure_proxy()
     for _ in range(30):
         time.sleep(1)
         if _gateway_healthy():
             return True
     return False
+
+
+@cli.group()
+def gateway():
+    """Manage the gateway (proxy + LiteLLM)."""
+    pass
+
+
+@gateway.command("restart")
+def gateway_restart():
+    """Refresh gateway config from supervisor state and bounce LiteLLM.
+
+    The public :8000 proxy stays up (started if missing); only the internal
+    LiteLLM process is restarted. Models are untouched.
+    """
+    click.echo("Restarting gateway...")
+    if _restart_gateway():
+        click.secho("✓ Gateway ready", fg="green")
+    else:
+        click.secho("Gateway did not become healthy within 30s — check logs", fg="red")
+        sys.exit(1)
 
 
 @cli.group()

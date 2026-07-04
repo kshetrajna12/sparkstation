@@ -46,3 +46,10 @@ Remove this workaround once LiteLLM releases a version containing commit `55348d
 grep 'optional_params\["encoding_format"\] = None' $(find ~/.local/share/uv/tools/sparkstation -name "main.py" -path "*/litellm/main.py")
 # If no output → bug is fixed upstream, workaround no longer needed
 ```
+
+### ✅ RESOLVED (2026-07-02)
+
+LiteLLM 1.90.3 (current uv tool env) no longer contains the buggy
+`optional_params["encoding_format"] = None` line — the upstream fix shipped.
+The sed workaround is obsolete; verified bge-m3 embeddings work unpatched
+through the gateway. This section is kept for history only.

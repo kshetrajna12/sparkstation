@@ -580,11 +580,16 @@ async def get_metrics():
         metrics.sparkstation_memory_budget_bytes.labels(host="primary").set(status["unified_memory_limit_gb"] * 1024**3)
         metrics.gpu_temperature_celsius.labels(host="primary").set(status["gpu_temperature_c"])
         metrics.gpu_power_draw_watts.labels(host="primary").set(status["gpu_power_draw_w"])
-        metrics.resident_models_count.set(status["resident_models_count"])
+        # NOTE: resident_models_count is set below from the registry, NOT from
+        # resource_manager — the latter only tracks primary-host memory, so
+        # worker-host models (e.g. chat on worker1) were missing ("4 of 5").
 
     if registry:
         suspended = await registry.list_suspended()
         metrics.suspended_models_count.set(len(suspended))
+
+        running = await registry.list_running()
+        metrics.resident_models_count.set(len(running))
 
         # Update per-model metrics. Clear first: generate_id mints a fresh
         # model_id per start, so without this every start/stop/swap cycle
@@ -989,6 +994,41 @@ async def get_model_status(model_id: str):
         auto_suspend_enabled=model.auto_suspend_enabled,
         seconds_until_suspend=seconds_until_suspend,
     )
+
+
+@app.get("/prometheus/targets")
+async def prometheus_targets():
+    """Prometheus http_sd endpoint: scrape targets for running engine backends.
+
+    Point a Prometheus job at this URL (http_sd_configs) and every running
+    vLLM/SGLang backend is scraped automatically — targets follow model
+    swaps/restarts/host moves with no prometheus.yml edits. Only engines
+    that natively expose /metrics are listed; the bespoke CLIP/species/face
+    servers don't, so they're excluded to avoid permanent 'down' targets.
+    """
+    if registry is None:
+        raise HTTPException(status_code=503, detail="Registry not initialized")
+
+    ENGINES_WITH_METRICS = {"vllm", "sglang", "trt-llm"}
+    targets = []
+    for model in await registry.list_running():
+        backend = model.backend.value if hasattr(model.backend, "value") else str(model.backend)
+        if backend not in ENGINES_WITH_METRICS:
+            continue
+        # base_url is routable from the supervisor host (QSFP IP for workers),
+        # which is also where Prometheus runs.
+        hostport = model.base_url.split("://", 1)[-1]
+        targets.append(
+            {
+                "targets": [hostport],
+                "labels": {
+                    "host": model.host or "primary",
+                    "alias": model.model_alias or model.model_name,
+                    "engine": backend,
+                },
+            }
+        )
+    return targets
 
 
 @app.get("/resources", response_model=ResourceStatus)

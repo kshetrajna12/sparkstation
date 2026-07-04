@@ -376,3 +376,21 @@ These panels can be safely ignored. All critical monitoring (memory, temperature
 ---
 
 **Built for NVIDIA DGX Spark (Grace Blackwell)**
+
+## Request metrics & engine discovery (2026-07-02)
+
+Request rate/latency/TTFT panels are fed by the **gateway proxy**
+(`gateway/proxy.py`, scraped at `localhost:8000/metrics`) — measured at the
+OpenAI API boundary, so they work for any engine (vLLM/SGLang/TRT-LLM).
+
+Engine-internal metrics (queue depth, KV cache, engine tok/s) come from the
+`sparkstation-backends` Prometheus job, which discovers running backends via
+the supervisor's `http://localhost:9001/prometheus/targets` (http_sd). Raw
+`vllm:*` names are normalized to canonical `sparkstation:*` series by
+recording rules in `sparkstation_rules.yml` — to support a new engine, add an
+`or`-branch to those rules; dashboards never change.
+
+GPU utilization is per host (one GB10 per Spark) via `nvidia_gpu_exporter` on
+BOTH nodes (`primary-gpu` + `worker1-gpu` jobs). Memory panels use
+node_exporter (`MemTotal - MemAvailable`) — on unified memory, nvidia-smi's
+`memory.used` is misleading.
