@@ -1198,7 +1198,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "unified_memory_used_bytes{host=~\"$host\"}",
+          "expr": "unified_memory_used_bytes{host=~\"$host\", job!=\"sparkstation\"}",
           "legendFormat": "{{host}} \u00b7 used",
           "range": true,
           "refId": "A"
@@ -1208,7 +1208,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "unified_memory_limit_bytes{host=~\"$host\"}",
+          "expr": "unified_memory_limit_bytes{host=~\"$host\", job!=\"sparkstation\"}",
           "legendFormat": "{{host}} \u00b7 total",
           "range": true,
           "refId": "B"
