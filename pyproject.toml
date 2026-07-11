@@ -1,11 +1,11 @@
 [project]
 name = "sparkstation"
-version = "0.2.0"
-description = "Unified LLM orchestration and gateway service for DGX Spark"
+version = "0.4.0"
+description = "Profile-driven model fleet management for NVIDIA DGX Spark"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    { name = "Sparkstation Team" }
+    { name = "SparkStation Team" }
 ]
 
 dependencies = [

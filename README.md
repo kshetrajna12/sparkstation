@@ -1,87 +1,392 @@
-# Sparkstation
+# SparkStation
 
-LLM orchestration and gateway service for DGX Spark — manages vLLM and SGLang backends with Docker for seamless model serving under an OpenAI-compatible API.
+**Model fleet management for NVIDIA DGX Spark.**
 
-**Version**: 0.3.0
-**Platform**: NVIDIA DGX Spark (Grace Blackwell)
-**Purpose**: Production-ready LLM gateway for Kavi and image_metadata_indexing projects
+SparkStation is a headless control plane for running and managing multiple AI models across one or more NVIDIA DGX Spark systems.
 
----
+Define models once, group them into workload profiles, place them on logical Spark hosts, and expose them through a stable OpenAI-compatible endpoint. SparkStation manages model lifecycle, resource admission, health checks, restarts, routing synchronization, and DGX Spark-specific unified-memory constraints.
 
-## Features
+SparkStation coordinates existing infrastructure:
 
-- **vLLM & SGLang backends**: NVIDIA-optimized backends with official Blackwell support via Docker
-- **OpenAI-compatible API**: Drop-in replacement via LiteLLM gateway (chat, embeddings, image generation)
-- **Embeddings support**: Text (bge-large) and image (CLIP) embeddings for RAG and search
-- **Image generation**: FLUX.1-dev for high-quality image synthesis via OpenAI-compatible API
-- **Auto-suspend/resume**: Idle models auto-suspend to free GPU resources (~15s resume time)
-- **Health monitoring**: Periodic 1-token probes detect unresponsive models
-- **Auto-restart**: Failed models automatically restart with exponential backoff
-- **DGX Spark optimized**: Unified memory tracking, thermal management, quantization
-- **Dynamic model management**: Start/stop/suspend/resume models on-demand
-- **Resource-aware**: Prevents OOM with hard limits and conservative allocation
-- **Thermal protection**: Auto-suspend on sustained high temps with hysteresis
-- **API key authentication**: Secure model management endpoints with X-API-Key headers
-- **Prometheus metrics**: Track memory, temperature, power, and request metrics
-- **File + stdout logging**: Rotating log files with configurable retention
+- vLLM and SGLang run language and embedding models
+- LiteLLM provides the stable OpenAI-compatible gateway
+- Docker isolates model services
+- SparkStation coordinates configuration, placement, lifecycle, and health
 
----
+Example workloads include local assistants, embedding services, image indexing, vision models, detection pipelines, image generation, and other persistent local AI applications.
+
+**Version:** `0.4.0`
+
+## Why SparkStation?
+
+Running one model on a DGX Spark is straightforward. Running several model services reliably becomes operationally messy.
+
+Without SparkStation, users often accumulate:
+
+- separate Docker commands and shell scripts
+- manually assigned ports
+- model-specific backend flags
+- duplicated health and restart logic
+- inconsistent endpoint URLs
+- no unified resource view
+- manual placement across multiple Sparks
+- fragile startup ordering
+- application configuration tied directly to backend details
+
+SparkStation turns that collection of scripts and services into a declared model fleet. The goal is not to hide the inference engines. The goal is to make a collection of DGX Spark model services behave like one manageable appliance.
+
+SparkStation is profile-driven. A profile describes the set of model services required for a workload, where they should run, and any workload-specific overrides.
+
+## Who It Is For
+
+SparkStation is for someone who:
+
+- owns one or more DGX Spark systems
+- runs several models or inference backends
+- integrates models into applications or pipelines
+- wants deterministic aliases, placement, startup, and recovery
+- wants a stable API surface across backend changes
+- does not want to operate a full Kubernetes-based inference platform
+
+### Who Probably Does Not Need It
+
+SparkStation is probably unnecessary for:
+
+- someone running only one model manually
+- someone primarily looking for a graphical chat interface
+- someone only experimenting occasionally with models
+- someone already operating a mature cluster orchestration platform
+
+## Key Features
+
+1. **Profile-driven model fleets**: define workload-specific desired state in `models.yaml`.
+2. **Multi-Spark logical host placement**: place model services on roles such as `primary` and `worker1`.
+3. **Stable model aliases**: keep client configuration stable while changing model IDs, images, quantization, or runtime flags.
+4. **LiteLLM gateway synchronization**: register running models with the OpenAI-compatible gateway.
+5. **Multi-backend and multi-model-type support**: run chat, embeddings, image, detection, recognition, and custom services behind the same management plane.
+6. **DGX Spark unified-memory admission control**: reserve configured memory before launching local services.
+7. **Ordered model startup**: launch profile models in configuration order, with extra handling for large and image-generation services.
+8. **Health monitoring**: periodic probes detect unresponsive services.
+9. **Automatic restart**: failed services can restart with configured backoff and attempt limits.
+10. **State reconciliation after supervisor restart**: persisted model state is compared with actual Docker containers.
+11. **Suspend and resume support**: models can be manually or automatically suspended and resumed.
+12. **Prometheus metrics**: expose supervisor, model, resource, and gateway proxy metrics.
+13. **API-key-protected management endpoints**: protect lifecycle mutation endpoints with `API_KEY`.
+14. **Docker-based backend isolation**: run model services in backend-specific containers.
 
 ## Architecture
 
+```text
+Applications
+assistants | indexing pipelines | agents | automation | local tools
+                         |
+                         v
+              Stable OpenAI-compatible API
+                    LiteLLM Gateway
+                         |
+                         v
+              SparkStation Supervisor
+     profiles | placement | lifecycle | health | resources
+                         |
+             +-----------+-----------+
+             v                       v
+       DGX Spark primary        DGX Spark worker(s)
+       vLLM / SGLang            vLLM / SGLang
+       embeddings               large chat models
+       vision backends          additional services
 ```
-Client Apps (Kavi, image_metadata_indexing)
-           ↓
-LiteLLM Gateway (Port 8000) ← OpenAI-compatible API
-           ↓
-Supervisor (Port 9001) ← Model lifecycle management
-           ↓
-Model Backends (vLLM, SGLang, TRT-LLM)
-```
+
+Clients call stable aliases through the gateway. They do not need to know which host runs the model, which backend serves it, which Docker image is used, which port it currently occupies, or whether the model has restarted.
 
 ### Components
 
-1. **Supervisor** (Port 9001): FastAPI service managing model lifecycle
-2. **LiteLLM Gateway** (Port 8000): OpenAI-compatible routing layer
-3. **Model Backends**: vLLM/SGLang/FLUX servers on ports 8001-8100
+| Component     | Responsibility                                                                       |
+| ------------- | ------------------------------------------------------------------------------------ |
+| vLLM / SGLang | Model inference                                                                      |
+| LiteLLM       | OpenAI-compatible gateway and routing                                                |
+| Docker        | Process and dependency isolation                                                     |
+| Prometheus    | Metrics collection and querying                                                      |
+| SparkStation  | Model definitions, profiles, placement, lifecycle, health, and resource coordination |
 
----
+## Core Concepts
 
-## Cluster mode (multi-Spark)
+### Model
 
-Sparkstation supports a multi-node cluster where each model pins to a logical
-`host:` role (e.g. `primary`, `worker1`) and the supervisor drives Docker on
-each role's daemon over SSH. No interactive SSH ever leaves the control node —
-`docker run`, `docker stop`, `docker logs`, and image loads are all issued
-non-interactively by setting `DOCKER_HOST=ssh://<ssh-user>@<worker-ip>` per
-command.
+A model is a canonical model or backend service definition. It can include:
 
-### How it works
+- backend
+- model identifier
+- model type
+- memory budget
+- Docker image
+- runtime arguments
+- environment variables
+- lifecycle policy
+- default placement
 
-- Cluster roles (`primary`, `worker1`, ...) are logical labels — not
-  hostnames. `primary` always resolves to the machine running the supervisor.
-- For any model with `host: worker1`, the launcher sets
-  `DOCKER_HOST=ssh://<ssh-user>@<worker-ip>` on the `docker run` invocation.
-  Everything else (image name, args, GPU flags) is identical to single-host.
-- Inter-role traffic (gateway → backend, NCCL between workers, HF cache pulls)
-  flows over whatever network your `cluster.hosts.*` IPs resolve to. If you
-  have a direct QSFP link between two Sparks, put the QSFP-side IP in the
-  config; if you're on 10 GbE, use that address. Sparkstation does not care.
+SparkStation supports more than chat models:
 
-### Public/private config split
+- chat and completion models
+- text embeddings
+- image embeddings
+- image generation
+- detection and recognition services
+- custom model backends
 
-The cluster config is split into two files so you can commit the model
-topology without leaking network layout:
+Each model type uses the backend appropriate for that service. SparkStation does not imply that every model type runs through the same inference engine.
 
-- **`models.yaml`** (public, committed): defines `cluster.hosts.primary`,
-  every `models.<alias>` block, `profiles.<name>`, and `default_profile`.
-  The `primary` entry is always the local machine, so its IP is `127.0.0.1`
-  (or omitted) and reveals nothing.
-- **`.sparkstation.local.yaml`** (gitignored, per-machine): defines the real
-  IPs, SSH users, and hostnames for any `cluster.hosts.*` entry other than
-  `primary`. Loaded and merged on top of `models.yaml` at supervisor startup.
+### Alias
 
-Minimal `.sparkstation.local.yaml`:
+An alias is a stable client-facing name.
+
+The underlying Hugging Face model, quantization, engine version, Docker image, or runtime configuration may change without forcing clients to change their configuration.
+
+### Profile
+
+A profile is a named desired-state collection of models for a workload. Examples include:
+
+- `dev`
+- `openclaw`
+- `image-indexing`
+- `inference`
+
+Profiles may override host placement, memory allocation, concurrency, context length, runtime arguments, environment variables, and lifecycle behavior.
+
+Example:
+
+```yaml
+profiles:
+  openclaw:
+    qwen3.5-35b:
+      extra_args:
+        max_concurrent_requests: 8
+    bge-m3: {}
+
+  image-indexing:
+    qwen3.5-35b:
+      host: worker1
+      memory_gb: 100
+    bge-m3: {}
+    clip-vit: {}
+    species-detect: {}
+    face-detect: {}
+```
+
+In this topology, `image-indexing` dedicates one Spark to the large chat model while auxiliary embedding and vision services remain on the primary Spark.
+
+### Host Role
+
+A host role is a logical machine name such as `primary` or `worker1`.
+
+Public configuration contains the model topology. Private machine-specific configuration contains IP addresses, SSH users, and hostnames.
+
+### Supervisor
+
+The supervisor is the long-running service that reconciles configuration with running containers and coordinates:
+
+- model startup
+- model shutdown
+- resource reservations
+- health checks
+- automatic restart
+- state reconciliation
+- gateway synchronization
+
+## Quick Start
+
+This is the smallest useful single-node flow. Multi-Spark configuration is shown after the local path.
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/kshetrajna12/sparkstation.git
+cd sparkstation
+uv sync
+```
+
+Optional backend setup helpers:
+
+```bash
+./scripts/setup_backends.sh
+./scripts/verify_backends.sh
+```
+
+### 2. Configure `.env`
+
+```bash
+cp .env.example .env
+```
+
+Set values that apply to your machine:
+
+```env
+USE_DOCKER=true
+HF_TOKEN=hf_...
+API_KEY=change-me
+TOTAL_UNIFIED_MEMORY_GB=128
+MEMORY_HARD_LIMIT_GB=110
+```
+
+`API_KEY` is optional, but if set it is required for model lifecycle mutation endpoints.
+
+### 3. Define Host Roles
+
+For one Spark, `primary` is enough:
+
+```yaml
+cluster:
+  hosts:
+    primary: {}
+```
+
+### 4. Define Canonical Models
+
+Add model definitions to `models.yaml`:
+
+```yaml
+default_profile: dev
+
+cluster:
+  hosts:
+    primary: {}
+
+models:
+  chat:
+    name: Qwen/Qwen3-8B
+    backend: vllm
+    model_type: chat
+    memory_gb: 40
+
+  embeddings:
+    name: BAAI/bge-m3
+    backend: vllm
+    model_type: embedding
+    memory_gb: 3
+
+profiles:
+  dev:
+    chat: {}
+    embeddings: {}
+```
+
+Starting the `dev` profile launches both services and registers them with the gateway.
+
+### 5. Start the Supervisor and Gateway
+
+```bash
+sparkstation start -d --profile dev
+```
+
+The detached start flow launches the supervisor, waits for configured models, writes `gateway/litellm.yaml`, starts LiteLLM, and starts the gateway proxy on `127.0.0.1:8000`.
+
+### 6. Check Health and Model Status
+
+```bash
+sparkstation status
+sparkstation models list
+curl http://127.0.0.1:9001/health
+curl http://127.0.0.1:9001/models/detailed
+```
+
+### 7. Call a Model Through the Stable Gateway Endpoint
+
+```bash
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Authorization: Bearer dummy-key' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "chat",
+    "messages": [{"role": "user", "content": "Say hello in one sentence."}]
+  }'
+```
+
+For embeddings:
+
+```bash
+curl http://127.0.0.1:8000/v1/embeddings \
+  -H 'Authorization: Bearer dummy-key' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "embeddings",
+    "input": "DGX Spark local model fleet"
+  }'
+```
+
+## Model Configuration
+
+`models.yaml` contains the public desired state:
+
+- `cluster.hosts`: logical host roles
+- `default_profile`: the profile used when no startup profile is provided
+- `models`: canonical model definitions keyed by alias
+- `profiles`: workload profiles keyed by profile name
+
+Common model fields:
+
+```yaml
+models:
+  qwen3.5-35b:
+    name: nvidia/Qwen3.6-35B-A3B-NVFP4
+    backend: vllm
+    model_type: chat
+    host: primary
+    memory_gb: 40
+    docker_image: vllm/vllm-openai:nightly-20260611-goodgb10
+    env_vars:
+      VLLM_FP8_MOE_BACKEND: flashinfer_cutlass
+    extra_args:
+      max_model_len: 65536
+      max_concurrent_requests: 4
+```
+
+Supported fields are parsed by `supervisor.models_config.ModelDefinition` and include `name`, `backend`, `model_type`, `host`, `quantization`, `memory_gb`, `idle_timeout_minutes`, `auto_suspend_enabled`, speculative decoding fields, `default`, `extra_args`, `docker_image`, `env_vars`, and `volumes`.
+
+## Profiles
+
+Profiles describe desired state for a workload. A profile entry enables an alias and may override the canonical model definition:
+
+```yaml
+profiles:
+  inference:
+    qwen3.5-35b: {}
+
+  openclaw:
+    qwen3.5-35b:
+      extra_args:
+        max_concurrent_requests: 8
+    bge-m3: {}
+```
+
+Profile overrides deep-merge dictionary fields such as `extra_args`, `env_vars`, and `speculative_extra`. Scalar fields replace the base value.
+
+Useful commands:
+
+```bash
+sparkstation start -d --profile openclaw
+sparkstation models start bge-m3 --profile openclaw
+sparkstation models stop bge-m3
+sparkstation models swap qwen3.5-35b --profile image-indexing
+sparkstation gateway restart
+```
+
+## Multi-Spark Operation
+
+SparkStation treats multiple DGX Sparks as one administratively managed fleet, not as one shared GPU pool. Each model service is assigned to a logical host, and SparkStation manages that service on the selected machine.
+
+The supervisor runs on the primary Spark. For remote roles, it drives Docker over SSH by setting `DOCKER_HOST=ssh://<ssh-user>@<worker-ip>` for Docker commands. The gateway uses the configured host IP when routing to containers on workers.
+
+### Public and Private Configuration
+
+Keep role names and model placement in committed `models.yaml`:
+
+```yaml
+cluster:
+  hosts:
+    primary: {}
+    worker1: {}
+```
+
+Keep real IPs and SSH users in gitignored `.sparkstation.local.yaml`:
 
 ```yaml
 cluster:
@@ -89,1027 +394,180 @@ cluster:
     worker1:
       ip: <worker-ip>
       ssh_user: <ssh-user>
-      hostname: <hostname>
-      docker_host: ssh://<ssh-user>@<worker-ip>
+      label: lab-worker-1
 ```
 
-Rationale: even a single worker IP tells a reader which subnet the cluster
-lives on, whether it's cabled directly or routed, and often which building.
-Keep it out of git.
+Before assigning a model to a worker, configure passwordless SSH from `primary` to the worker, ensure the SSH user can run Docker without `sudo`, and make sure required Docker images and Hugging Face cache entries are available on the target host.
 
-### One-time worker setup
-
-Before adding a worker to a profile, run these once on the primary:
-
-1. **Passwordless SSH from primary → worker.** Either:
-   ```bash
-   ssh-copy-id <ssh-user>@<worker-ip>
-   ```
-   or use NVIDIA's `discover-sparks` script if you're on a fresh DGX pair.
-   Verify: `ssh <ssh-user>@<worker-ip> true` must succeed with no prompt.
-
-2. **Docker installed on the worker, and the SSH user in the `docker`
-   group** (so no sudo is needed for `docker run`):
-   ```bash
-   ssh -t <ssh-user>@<worker-ip> sudo usermod -aG docker '$USER'
-   ```
-   Log out and back in on the worker for group membership to take effect.
-
-3. **HuggingFace cache path exists** at `~/.cache/huggingface/hub` on the
-   worker. The first `sparkstation cluster sync-cache` run creates it; you
-   can also `mkdir -p` it by hand.
-
-4. **Same Docker major version on both nodes** is recommended (not strictly
-   required — the SSH transport speaks the daemon's HTTP API, so patch
-   mismatches are usually fine).
-
-### `sparkstation cluster` subcommand reference
+Useful cluster commands:
 
 ```bash
-# Reachability, docker version per role, models grouped by host
 sparkstation cluster status
-
-# Rsync a HuggingFace cache subdir to a worker over SSH
-sparkstation cluster sync-cache worker1 --only Qwen--Qwen3.6-35B-A3B-NVFP4
+sparkstation cluster sync-cache worker1 --only models--nvidia--Qwen3.6-35B-A3B-NVFP4
 sparkstation cluster sync-cache worker1 --dry-run
-
-# Run the 2-node NCCL all_gather bench (delegates to sibling repo)
 sparkstation cluster ncclbench
-sparkstation cluster ncclbench --script /path/to/nccl-bench.sh
 ```
 
-Notes:
-
-- `sync-cache` is resumable — it's rsync under the hood, so re-running after
-  an interrupted transfer picks up where it left off.
-- `--only <subdir>` limits the sync to a single `models--*` subdirectory,
-  which is much faster than syncing the whole hub cache when you're only
-  adding one model.
-- If your local HF cache is root-owned (a common footgun after running
-  `huggingface-cli download` under sudo), rsync will fail on the worker
-  side. Fix with `sudo chown -R $USER:$USER ~/.cache/huggingface` on the
-  primary before retrying.
-- `ncclbench` shells out to `homecloud-infra/qsfp/nccl-bench.sh` in a
-  sibling checkout by default; use `--script` to point at a custom path.
-
-### Image sync between nodes
-
-For custom images not on `nvcr.io` (e.g. `clip-server`, `face-server`,
-`species-server`, `flux-server`, `vllm-qwen35-mxfp4:cu130`), you need to
-copy the image to the worker's local Docker daemon:
+Custom local Docker images must be copied to the worker's Docker daemon before placement there, for example:
 
 ```bash
 docker save vllm-qwen35-mxfp4:cu130 | ssh <ssh-user>@<worker-ip> 'docker load'
 ```
 
-Public registry images (anything under `nvcr.io`, `docker.io`, `ghcr.io`)
-don't need this — just `docker pull` on the worker (or let the first
-`docker run` pull implicitly), assuming the worker has the same registry
-credentials configured.
+### Independent Model Placement
 
-### Example: dedicated-chat mode
+SparkStation supports independent placement of model services:
 
-A common cluster layout puts the chat model on a dedicated worker with more
-memory headroom, while the auxiliary backends (embeddings, CLIP, detectors)
-stay on the primary alongside the gateway. Profile-scoped overrides let you
-change `host`, `memory_gb`, and `max_num_seqs` without duplicating the
-whole model entry:
+- chat model on `worker1`
+- embeddings and vision services on `primary`
+- each service runs independently
+- SparkStation manages placement and lifecycle
 
-```yaml
-# models.yaml (excerpt)
-models:
-  qwen3.5-35b:
-    backend: vllm
-    image: vllm-qwen35-mxfp4:cu130
-    memory_gb: 48
-    max_num_seqs: 8
-    # host omitted -> defaults to primary
+### Distributed Execution of One Model
 
-profiles:
-  dedicated-chat:
-    models:
-      # Chat model relocated to worker1 with expanded memory + concurrency
-      qwen3.5-35b:
-        host: worker1
-        memory_gb: 96
-        max_num_seqs: 32
-      # Auxiliaries stay on primary (host defaults to primary)
-      bge-m3: {}
-      clip-vit: {}
-      species-detect: {}
-      face-detect: {}
+Distributed execution means one model is served by a distributed runtime, for example:
+
+- tensor parallel inference
+- multi-node inference
+- distributed runtime execution
+
+SparkStation does not implement distributed inference itself. If a backend supports distributed execution, that behavior belongs to the underlying inference runtime or external tooling. SparkStation can still manage the resulting service as a configured model backend.
+
+## Lifecycle and Recovery
+
+SparkStation's operational model is:
+
+- configured models are loaded from the active profile
+- resource reservations are created before launch
+- models are started in profile order
+- health checks move models into healthy or failed states
+- failed services may be restarted with configured backoff
+- the supervisor reconciles persisted state with actual containers after restart
+- gateway routes are updated as services become available or disappear
+
+The supervisor exposes lifecycle operations through API endpoints and the CLI. The gateway proxy also handles requests to suspended or starting models by asking the supervisor for current model state.
+
+## Metrics and Operations
+
+Supervisor endpoints:
+
+```text
+GET  /health
+GET  /metrics
+GET  /models
+GET  /models/detailed
+GET  /models/{model_id}/status
+GET  /prometheus/targets
+GET  /resources
+POST /models/start
+POST /models/{model_id}/stop
+POST /models/{model_id}/suspend
+POST /models/{model_id}/resume
 ```
 
-Diff from a single-host `image-indexing` profile: just the three overridden
-fields on the chat entry. Everything else — image, args, quantization —
-inherits from the top-level `models.qwen3.5-35b` block.
+Lifecycle mutation endpoints require `X-API-Key: <API_KEY>` when `API_KEY` is set.
 
-Start it the usual way:
+Gateway endpoints:
 
-```bash
-sparkstation start -d --profile dedicated-chat
+```text
+GET  http://127.0.0.1:8000/proxy/health
+GET  http://127.0.0.1:8000/metrics
+POST http://127.0.0.1:8000/v1/chat/completions
+POST http://127.0.0.1:8000/v1/embeddings
+POST http://127.0.0.1:8000/v1/images/generations
 ```
 
-### What's cluster-aware and what isn't
+Logs in detached mode are written under `~/.sparkstation/logs/`:
 
-| Component | Cluster-aware? |
-|---|---|
-| Model launcher (per-host `DOCKER_HOST`) | Yes |
-| Reconciler (drift detection per host) | Yes |
-| Gateway backend URLs (per-host IP) | Yes |
-| Per-host resource allocation (memory/GPU) | Yes |
-| `models.yaml` resolver + profile overrides | Yes |
-| Prometheus metrics `host` label | **Not yet** — all metrics report as if from `primary`; planned follow-up |
-| Grafana dashboards | **Not yet** — silently aggregates across hosts because of the missing label |
-
-If you're running a two-Spark cluster and rely on Grafana for per-host
-memory/temperature views, wait for the metrics-labeling patch before
-splitting a heavy model onto a worker.
-
----
-
-## Quick Start
-
-### For New Users (Automated Setup)
-
-**One-command setup:**
-
-```bash
-# Clone repository
-git clone https://github.com/kshetrajna12/sparkstation.git
-cd sparkstation
-
-# 1. Install Sparkstation dependencies
-uv sync
-
-# 2. Set up backend Docker images (SGLang)
-./scripts/setup_backends.sh
-
-# 3. Verify installation
-./scripts/verify_backends.sh
+```text
+supervisor.log
+gateway.log
+gateway-proxy.log
 ```
 
-**What this does:**
-- Installs Sparkstation with uv (lightweight)
-- Pulls vLLM and SGLang Docker images with full CUDA and Blackwell support
-- Auto-detects ARM64 (DGX Spark) vs x86_64 architecture
-- Configures `.env` for Docker mode
-- Verifies CUDA is working in Docker containers
+Prometheus can scrape `/metrics` from the supervisor and gateway proxy. The supervisor also exposes `/prometheus/targets` for model backends that provide native metrics endpoints.
 
-### Prerequisites
+## Example Deployment
 
-- Python 3.11+
-- NVIDIA GPU with CUDA 12.0+ driver
-- [Docker](https://docs.docker.com/engine/install/) with [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-- [uv](https://github.com/astral-sh/uv) package manager
+The current repository configuration is one possible topology:
 
-**Install uv:**
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+- `worker1` runs the large Qwen chat model
+- `primary` runs text embeddings, CLIP embeddings, species detection, and face detection
+- applications use stable model aliases
+- SparkStation handles startup order, placement, health, restart, and gateway registration
 
-**Install Docker & NVIDIA Container Toolkit:**
-```bash
-# Docker (Ubuntu/Debian)
-curl -fsSL https://get.docker.com | sh
+The active checked-in default profile is `image-indexing`. Users can define their own profiles and host roles for different local applications, pipelines, and services.
 
-# NVIDIA Container Toolkit
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-sudo apt-get update
-sudo apt-get install -y nvidia-container-toolkit
-sudo nvidia-ctk runtime configure --runtime=docker
-sudo systemctl restart docker
-```
+## API and CLI Reference
 
-### Advanced: Subprocess Mode (Conda/Micromamba)
-
-If you prefer isolated conda/micromamba environment instead of Docker:
+Common CLI commands:
 
 ```bash
-# 1. Install Sparkstation
-uv sync
-cp .env.example .env
-mkdir -p data
-
-# 2. Set up vLLM backend (separate conda environment)
-./scripts/setup_vllm_env.sh ./backends/vllm
-
-# 3. Update .env for subprocess mode
-echo "USE_DOCKER=false" >> .env
-echo "VLLM_PYTHON_PATH=./backends/vllm/bin/python" >> .env
-
-# 4. Verify
-./scripts/verify_backends.sh
-```
-
-**Note**: Docker mode is strongly recommended for production, especially on Blackwell GPUs. Subprocess mode is only for specific use cases where Docker is not available.
-
-### Start Services
-
-```bash
-# Terminal 1: Start Sparkstation supervisor
-./scripts/start_supervisor.sh
-
-# Terminal 2: Start LiteLLM gateway
-./scripts/start_gateway.sh
-```
-
-Or directly with uv:
-```bash
-# Supervisor
-uv run uvicorn supervisor.main:app --host 127.0.0.1 --port 9001
-
-# Gateway
-uv run litellm --config gateway/litellm.yaml --host 127.0.0.1 --port 8000
-```
-
----
-
-## CLI Usage
-
-Sparkstation includes a unified CLI for easier management:
-
-### Start/Stop Sparkstation
-
-```bash
-# Start with default models (general purpose)
-sparkstation start -d
-
-# Start with a named profile
-sparkstation start -d --profile openclaw
-
-# Check status
+sparkstation start -d --profile <profile>
+sparkstation stop
+sparkstation restart --profile <profile>
 sparkstation status
 
-# Stop all services and containers
-sparkstation stop
-
-# Restart
-sparkstation restart
-```
-
-### Model Profiles
-
-Sparkstation supports named profiles for different model configurations. Profiles are defined in `models.yaml` under the `profiles:` section.
-
-| Profile | Models | Memory | Use Case |
-|---------|--------|--------|----------|
-| *(default)* | gpt-oss-20b, bge-large, clip-vit, qwen3-vl-4b, flux-dev | ~100 GiB | General purpose: reasoning, embeddings, vision, image gen |
-| `openclaw` | nemotron3-nano (30B), bge-large, qwen3-vl-4b | ~53 GiB | OpenClaw: tool calling, reasoning, vision, embeddings |
-| `image-indexing` | qwen3-vl-30b (30B-A3B), bge-large, clip-vit | ~42.5 GiB | Image indexing: vision chat, text + image embeddings |
-| `dev` | qwen3-vl-4b | ~14 GiB | Lightweight development |
-| `prod` | qwen3-vl-4b, gpt-oss-20b | ~58 GiB | Production chat + reasoning |
-
-```bash
-# Start with openclaw profile
-sparkstation start -d --profile openclaw
-
-# Load a profile's models into a running supervisor
-sparkstation models start --profile openclaw
-```
-
-### Manage Models
-
-```bash
-# List all models
 sparkstation models list
+sparkstation models start <alias> --profile <profile>
+sparkstation models stop <alias>
+sparkstation models swap <alias> --profile <profile>
+sparkstation models logs <model_id> --tail 100
 
-# Stop a model
-sparkstation models stop <model-id>
+sparkstation gateway restart
 
-# View model logs (streaming)
-sparkstation models logs -f <model-id>
+sparkstation cluster status
+sparkstation cluster sync-cache <host-role>
+sparkstation cluster ncclbench
 ```
 
-### Cleanup Database Issues
-
-If you encounter database inconsistencies (stale entries, orphaned containers):
+Example authenticated lifecycle call:
 
 ```bash
-# Clean database and containers
-uv run python cli.py cleanup --force
+curl -X POST http://127.0.0.1:9001/models/<model_id>/suspend \
+  -H "X-API-Key: $API_KEY"
 ```
 
-This will:
-- Stop the supervisor
-- Remove all stopped containers
-- Delete the database (fresh start)
-- Clean up orphaned entries
-
-**Note**: Sparkstation now auto-reconciles database state on startup, so manual cleanup should rarely be needed.
-
----
-
-## API Usage
-
-### Start a Model
-
-```bash
-curl -X POST http://localhost:9001/models/start \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-api-key-here" \
-  -d '{
-    "model_name": "Qwen/Qwen3-VL-4B-Instruct-FP8",
-    "backend": "vllm",
-    "model_alias": "qwen3-vl-4b",
-    "quantization": "none",
-    "idle_timeout_minutes": 30,
-    "auto_suspend_enabled": true
-  }'
-```
-
-**Note**: If `API_KEY` is set in `.env`, you must include the `X-API-Key` header. If not set, authentication is disabled (backwards compatible).
-
-### List Running Models
-
-```bash
-# Simple format (for LiteLLM)
-curl http://localhost:9001/models
-
-# Detailed format (for monitoring)
-curl http://localhost:9001/models/detailed
-```
-
-### Chat Completion via Gateway
-
-#### curl Examples
-
-```bash
-# Using qwen3-vl-4b model
-curl -X POST http://localhost:8000/v1/chat/completions \
-  -H "Authorization: Bearer sk-1234" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "qwen3-vl-4b",
-    "messages": [
-      {"role": "user", "content": "Hello, how are you?"}
-    ],
-    "max_tokens": 100
-  }'
-
-# Using gpt-oss-20b model (reasoning model)
-curl -X POST http://localhost:8000/v1/chat/completions \
-  -H "Authorization: Bearer sk-1234" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-oss-20b",
-    "messages": [
-      {"role": "user", "content": "Explain why the sky is blue"}
-    ],
-    "max_tokens": 200
-  }'
-```
-
-#### Python Examples
-
-```python
-import openai
-
-# Configure client for Sparkstation gateway
-client = openai.OpenAI(
-    api_key="sk-1234",  # Any token works for local dev
-    base_url="http://localhost:8000/v1"
-)
-
-# Chat completion
-response = client.chat.completions.create(
-    model="qwen3-vl-4b",
-    messages=[
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "What is the capital of France?"}
-    ],
-    max_tokens=100,
-    temperature=0.7
-)
-
-print(response.choices[0].message.content)
-
-# Streaming response
-for chunk in client.chat.completions.create(
-    model="gpt-oss-20b",
-    messages=[{"role": "user", "content": "Write a haiku about coding"}],
-    stream=True
-):
-    if chunk.choices[0].delta.content:
-        print(chunk.choices[0].delta.content, end="")
-```
-
-**Note**: The gateway requires an Authorization header. Use any dummy bearer token (e.g., `sk-1234`) for local development. For production, configure proper API keys in `gateway/litellm.yaml`.
-
-### Embeddings
-
-Sparkstation supports both text and image embeddings via OpenAI-compatible `/v1/embeddings` endpoint:
-
-#### curl Examples
-
-```bash
-# Text embeddings (bge-large)
-curl -X POST http://localhost:8000/v1/embeddings \
-  -H "Authorization: Bearer sk-1234" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "bge-large",
-    "input": "The quick brown fox jumps over the lazy dog"
-  }'
-
-# Image embeddings (CLIP) - with URL
-curl -X POST http://localhost:8000/v1/embeddings \
-  -H "Authorization: Bearer sk-1234" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "clip-vit",
-    "input": "https://example.com/image.jpg"
-  }'
-
-# Batch embeddings
-curl -X POST http://localhost:8000/v1/embeddings \
-  -H "Authorization: Bearer sk-1234" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "bge-large",
-    "input": ["First document", "Second document", "Third document"]
-  }'
-```
-
-#### Python Examples
-
-```python
-import openai
-import numpy as np
-
-# Configure client for Sparkstation gateway
-client = openai.OpenAI(
-    api_key="sk-1234",  # Any token works for local dev
-    base_url="http://localhost:8000/v1"
-)
-
-# Text embeddings
-response = client.embeddings.create(
-    model="bge-large",
-    input="The quick brown fox jumps over the lazy dog"
-)
-embedding = response.data[0].embedding
-print(f"Text embedding dimension: {len(embedding)}")  # 1024
-
-# Batch text embeddings
-texts = ["First document", "Second document", "Third document"]
-response = client.embeddings.create(
-    model="bge-large",
-    input=texts
-)
-embeddings = [d.embedding for d in response.data]
-print(f"Generated {len(embeddings)} embeddings")
-
-# Image embeddings (CLIP)
-response = client.embeddings.create(
-    model="clip-vit",
-    input="https://example.com/image.jpg"
-)
-image_embedding = response.data[0].embedding
-print(f"Image embedding dimension: {len(image_embedding)}")  # 768
-
-# Compute similarity between embeddings
-def cosine_similarity(a, b):
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-similarity = cosine_similarity(embeddings[0], embeddings[1])
-print(f"Similarity: {similarity:.4f}")
-```
-
-**Supported embedding models:**
-- `bge-large`: Text embeddings (1024 dimensions, vLLM) - for semantic search, RAG
-- `clip-vit`: Image embeddings (768 dimensions, CLIP backend) - for image search, cross-modal retrieval
-
-**Use cases:**
-- Semantic search and similarity matching
-- RAG (Retrieval Augmented Generation)
-- Image search by text description
-- Document classification
-
-### Image Generation
-
-Sparkstation supports FLUX.1-dev image generation via the OpenAI-compatible `/v1/images/generations` endpoint:
-
-#### curl Examples
-
-```bash
-# Basic image generation
-curl -X POST http://localhost:8000/v1/images/generations \
-  -H "Authorization: Bearer sk-1234" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "flux-dev",
-    "prompt": "A photorealistic image of a red robot in a garden",
-    "n": 1,
-    "size": "512x512"
-  }'
-
-# With custom parameters
-curl -X POST http://localhost:8000/v1/images/generations \
-  -H "Authorization: Bearer sk-1234" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "flux-dev",
-    "prompt": "A watercolor painting of a mountain landscape at sunset",
-    "n": 1,
-    "size": "1024x1024",
-    "response_format": "b64_json"
-  }'
-```
-
-#### Python Examples
-
-```python
-import openai
-import base64
-
-# Configure client for Sparkstation gateway
-client = openai.OpenAI(
-    api_key="sk-1234",  # Any token works for local dev
-    base_url="http://localhost:8000/v1"
-)
-
-# Generate an image
-response = client.images.generate(
-    model="flux-dev",
-    prompt="A cyberpunk city at night with neon lights",
-    n=1,
-    size="512x512",
-    response_format="b64_json"
-)
-
-# Save the generated image
-image_data = base64.b64decode(response.data[0].b64_json)
-with open("generated_image.png", "wb") as f:
-    f.write(image_data)
-print("Image saved to generated_image.png")
-
-# Or using requests directly
-import requests
-
-response = requests.post(
-    "http://localhost:8000/v1/images/generations",
-    headers={
-        "Authorization": "Bearer sk-1234",
-        "Content-Type": "application/json"
-    },
-    json={
-        "model": "flux-dev",
-        "prompt": "A serene Japanese garden with cherry blossoms",
-        "n": 1,
-        "size": "512x512"
-    }
-)
-
-if response.ok:
-    data = response.json()
-    image_b64 = data["data"][0]["b64_json"]
-    with open("output.png", "wb") as f:
-        f.write(base64.b64decode(image_b64))
-```
-
-**Supported parameters:**
-- `model`: `flux-dev` (FLUX.1-dev)
-- `prompt`: Text description of the image to generate
-- `n`: Number of images (default: 1)
-- `size`: Image dimensions (`512x512`, `1024x1024`, etc.)
-- `response_format`: `b64_json` (default) or `url`
-
-**Notes:**
-- Image generation takes 20-60 seconds depending on size and complexity
-- FLUX.1-dev requires ~35GB GPU memory
-- Requires `HF_TOKEN` in `.env` for HuggingFace gated model access
-
-### Suspend/Resume Model
-
-```bash
-# Suspend (manual or automatic after idle timeout)
-curl -X POST http://localhost:9001/models/{model_id}/suspend \
-  -H "X-API-Key: your-api-key-here"
-
-# Resume (automatic on incoming request or manual)
-curl -X POST http://localhost:9001/models/{model_id}/resume \
-  -H "X-API-Key: your-api-key-here"
-```
-
-### Monitor Resources
-
-```bash
-# Resource status
-curl http://localhost:9001/resources
-
-# Prometheus metrics
-curl http://localhost:9001/metrics
-```
-
----
-
-## Configuration
-
-### Environment Variables
-
-Key settings in `.env`:
-
-```bash
-# Server
-HOST=127.0.0.1  # Localhost only for security
-PORT=9001
-
-# DGX Spark Constraints
-TOTAL_UNIFIED_MEMORY_GB=128
-MEMORY_HARD_LIMIT_GB=110  # 85% of total
-MAX_RESIDENT_MODELS=5
-
-# Auto-suspend
-AUTO_SUSPEND_ENABLED=true
-DEFAULT_IDLE_TIMEOUT_MINUTES=30
-
-# Health Checks (NEW)
-HEALTH_CHECK_ENABLED=true
-HEALTH_CHECK_INTERVAL_SECONDS=300  # 5 minutes
-HEALTH_CHECK_MAX_FAILURES=3
-
-# Auto-restart (NEW)
-AUTO_RESTART_ENABLED=true
-AUTO_RESTART_MAX_ATTEMPTS=3
-AUTO_RESTART_BACKOFF_MINUTES=1,5,15  # Exponential backoff
-
-# Thermal Management
-THERMAL_SUSPEND_THRESHOLD_C=80  # Sustained high temp
-THERMAL_RESUME_THRESHOLD_C=75   # Cooldown threshold
-
-# Security (NEW)
-API_KEY=your-secret-key-here  # Optional: Enable API key auth
-
-# Logging (NEW)
-LOG_TO_FILE=true
-LOG_FILE_PATH=./data/sparkstation.log
-
-# LiteLLM Gateway
-LITELLM_ADMIN_URL=http://127.0.0.1:8000
-LITELLM_MASTER_KEY=sk-sparkstation-admin  # Change in production!
-
-# Database (uses SUPERVISOR_DATABASE_URL to avoid conflict with LiteLLM)
-SUPERVISOR_DATABASE_URL=sqlite+aiosqlite:///./data/sparkstation.db
-```
-
-See `.env.example` for all options.
-
----
-
-## DGX Spark Optimizations
-
-### Unified Memory Tracking
-
-DGX Spark has 128 GB unified CPU+GPU memory (not discrete VRAM). Sparkstation tracks **both** GPU and system memory to prevent OOM.
-
-### Mandatory Quantization
-
-All models must use fp8 or INT4 quantization to reduce memory footprint 2-4×.
-
-### Health Monitoring & Auto-Restart
-
-- **Periodic health checks**: 1-token chat completion probes every 5 minutes
-- **Failure detection**: Marks models as FAILED after 3 consecutive failures
-- **Auto-restart**: Failed models restart with exponential backoff (1 min → 5 min → 15 min)
-- **Max 3 restart attempts** per model before permanent failure
-- **Transparent recovery**: Models resume serving after successful restart
-
-### Thermal Management
-
-- Monitors GPU temperature every 60 seconds
-- Auto-suspends least-used model if temp >80°C for 60s (sustained)
-- Hysteresis prevents suspend/resume thrashing
-
-### Resident Model Limits
-
-- **Max 3 concurrent models** to prevent memory saturation
-- Auto-suspend after 30 minutes idle (configurable)
-- Models auto-resume on incoming requests (~15s startup)
-
----
-
-## API Reference
-
-### Supervisor Endpoints
-
-#### `GET /health`
-Health check
-
-#### `GET /metrics`
-Prometheus metrics
-
-#### `GET /models`
-List running models (LiteLLM format)
-
-#### `GET /models/detailed`
-Detailed model information
-
-#### `POST /models/start` 🔒
-Start new model server (requires API key if configured)
-
-**Request**:
-```json
-{
-  "model_name": "Qwen/Qwen3-VL-4B-Instruct-FP8",
-  "backend": "vllm",
-  "model_alias": "qwen3-vl-4b",
-  "quantization": "none",
-  "idle_timeout_minutes": 30,
-  "auto_suspend_enabled": true
-}
-```
-
-**Headers**: `X-API-Key: your-api-key` (if API_KEY set in .env)
-
-#### `POST /models/{model_id}/stop` 🔒
-Stop model server (requires API key if configured)
-
-#### `POST /models/{model_id}/suspend` 🔒
-Suspend model manually (requires API key if configured)
-
-#### `POST /models/{model_id}/resume` 🔒
-Resume suspended model (requires API key if configured)
-
-#### `GET /models/{model_id}/status`
-Detailed model status
-
-#### `GET /resources`
-System resource status
-
----
-
-## Deployment
-
-### Development (Subprocess)
-
-Use the startup scripts for quick iteration:
-
-```bash
-./scripts/start_supervisor.sh
-./scripts/start_gateway.sh
-```
-
-### Production (Systemd)
-
-```bash
-# Install systemd services
-sudo cp scripts/systemd/sparkstation-supervisor.service /etc/systemd/system/
-sudo cp scripts/systemd/sparkstation-gateway.service /etc/systemd/system/
-sudo cp scripts/systemd/sparkstation-maintenance.service /etc/systemd/system/
-sudo cp scripts/systemd/sparkstation-maintenance.timer /etc/systemd/system/
-
-sudo systemctl daemon-reload
-
-# Enable and start services
-sudo systemctl enable sparkstation-supervisor
-sudo systemctl start sparkstation-supervisor
-
-sudo systemctl enable sparkstation-gateway
-sudo systemctl start sparkstation-gateway
-
-# Enable daily maintenance (runs at 3 AM)
-sudo systemctl enable sparkstation-maintenance.timer
-sudo systemctl start sparkstation-maintenance.timer
-
-# Check status
-sudo systemctl status sparkstation-supervisor
-sudo systemctl status sparkstation-gateway
-sudo systemctl list-timers sparkstation-maintenance.timer
-sudo journalctl -u sparkstation-supervisor -f
-```
-
-### Maintenance
-
-Automated daily maintenance runs at 3 AM via systemd timer:
-
-```bash
-# Manual run
-python scripts/maintenance.py
-
-# Dry run (show what would be done)
-python scripts/maintenance.py --dry-run
-
-# Verbose output
-python scripts/maintenance.py --verbose
-
-# Check last maintenance run
-sudo journalctl -u sparkstation-maintenance -n 50
-```
-
-**Maintenance tasks**:
-- Cleanup log files older than 30 days
-- Vacuum SQLite database
-- Detect stale/zombie models (STARTING >10 min)
-- Check for port leaks
-- Generate resource usage snapshot
-
----
-
-## Logs and Debugging
-
-### Log Files
-
-Sparkstation saves logs to `~/.sparkstation/logs/` when running in detached mode:
-
-```bash
-# View supervisor logs (startup, model loading, errors)
-tail -f ~/.sparkstation/logs/supervisor.log
-
-# View gateway logs (LiteLLM routing, requests)
-tail -f ~/.sparkstation/logs/gateway.log
-
-# View both logs simultaneously
-tail -f ~/.sparkstation/logs/*.log
-```
-
-**Log locations are displayed during startup:**
-```
-Starting Sparkstation...
-  → Starting supervisor...
-     Logs: /home/user/.sparkstation/logs/supervisor.log
-  → Starting gateway...
-     Logs: /home/user/.sparkstation/logs/gateway.log
-```
-
-### Debugging Startup Issues
-
-If `sparkstation start -d` fails, check the logs:
-
-```bash
-# Check supervisor startup
-cat ~/.sparkstation/logs/supervisor.log | grep -i error
-
-# Check gateway startup
-cat ~/.sparkstation/logs/gateway.log | grep -i error
-
-# Or run in foreground to see live output
-sparkstation start  # without -d
-```
-
----
-
-## Monitoring
-
-### Prometheus Metrics
-
-Add to `prometheus.yml`:
-
-```yaml
-scrape_configs:
-  - job_name: 'sparkstation'
-    static_configs:
-      - targets: ['localhost:9001']
-```
-
-### Key Metrics
-
-- `unified_memory_used_bytes` - Total memory usage
-- `gpu_temperature_celsius` - GPU temperature
-- `gpu_power_draw_watts` - Power consumption
-- `model_status` - Model status (0-4)
-- `resident_models_count` - Active models
-- `model_requests_total` - Request counter
-
-### Grafana Dashboard
-
-Import the pre-built dashboard: `monitoring/grafana-dashboard.json`
-
-**Includes**:
-- Real-time memory, temperature, and power monitoring
-- Model status distribution and per-model memory
-- Request rate and latency metrics (p50, p95)
-- Running vs suspended model counts
-- Auto-refresh every 10 seconds
-
-**Quick Import**:
-1. Open Grafana → Dashboards → Import
-2. Upload `monitoring/grafana-dashboard.json`
-3. Select your Prometheus datasource
-
-See [monitoring/README.md](monitoring/README.md) for detailed setup and alert configuration.
-
----
-
-## Troubleshooting
-
-### Model fails to start
-
-Check logs:
-```bash
-# Systemd logs
-journalctl -u sparkstation-supervisor -f
-
-# Or file logs (if LOG_TO_FILE=true)
-tail -f data/sparkstation.log
-```
-
-Common issues:
-- **401 Unauthorized**: API key required - add `X-API-Key` header
-- **Insufficient memory**: Check `/resources` endpoint
-- **Missing quantized weights**: Use `quantization='fp16'` as fallback
-- **Port already in use**: Check allocated ports in `/resources`
-
-### Health checks failing
-
-- Check model is actually responding: `curl http://localhost:8001/v1/models`
-- Review health check logs for specific errors
-- Verify `HEALTH_CHECK_TIMEOUT_SECONDS` is sufficient (default 5s)
-- Check if model is overloaded with requests
-
-### Model keeps restarting
-
-- Review restart history in `/models/detailed` (check `restart_count`)
-- Check logs for underlying failure cause
-- Verify sufficient memory/resources available
-- After 3 restart attempts, model marked permanently FAILED
-- Manual restart: Stop model, fix issue, start fresh
-
-### Auto-suspend not working
-
-- Verify `AUTO_SUSPEND_ENABLED=true` in `.env`
-- Check `idle_timeout_minutes` > 0 for model
-- Review logs for auto-suspend manager activity
-- Confirm no active requests keeping model busy
-
-### Gateway returns 404
-
-- Model may be suspended - first request triggers auto-resume (~15s)
-- Check model status: `curl http://localhost:9001/models/detailed`
-- Verify gateway sync is running
-- Ensure LiteLLM gateway is started
-
----
-
-## Development
-
-### Run Tests
-
-```bash
-uv run pytest
-```
-
-### Code Formatting
-
-```bash
-uv run black .
-uv run ruff check .
-```
-
-### Type Checking
-
-```bash
-uv run mypy supervisor/
-```
-
----
-
-## Known Issues & Technical Debt
-
-### Gateway Database Features (Future Enhancement)
-
-**Status**: Gateway is fully operational for model routing but lacks advanced features that require database support.
-
-**Current State**:
-- ✅ Gateway successfully routes requests to model backends
-- ✅ OpenAI-compatible API working without database
-- ✅ Model discovery and failover working
-- ✅ Uses `SUPERVISOR_DATABASE_URL` to avoid conflicts with LiteLLM
-
-**Missing Features** (optional future enhancements):
-- Usage tracking and analytics
-- API key management and authentication
-- Rate limiting per user/key
-- Request logging and audit trails
-- Cost tracking per API key
-
-**Future Options**:
-1. Set up separate PostgreSQL database for gateway with full Prisma support
-2. Use LiteLLM's built-in database features for advanced functionality
-3. Alternative: Implement custom middleware for tracking/auth without database
-
----
+## What SparkStation Manages
+
+SparkStation manages:
+
+- canonical model definitions
+- workload profiles
+- logical host placement
+- lifecycle operations
+- startup ordering
+- unified-memory admission control
+- model health monitoring
+- automatic restart
+- state reconciliation
+- stable model aliases
+- LiteLLM gateway synchronization
+- operational metrics and status
+- local and multi-Spark orchestration
+
+## What SparkStation Does Not Do
+
+SparkStation is not:
+
+- an inference engine
+- a chat application
+- a model marketplace
+- a training or fine-tuning system
+- a replacement for LiteLLM
+- Kubernetes
+- intended to become a generic cloud inference platform
+
+## Project Status
+
+SparkStation is designed for persistent local services on DGX Spark systems. The implementation includes Docker launchers, profile resolution, local and Docker-over-SSH placement, LiteLLM route generation, health checks, restart handling, suspend/resume, Prometheus metrics, and a CLI.
+
+Known boundaries:
+
+- remote worker memory is configured through profile placement, but primary-side unified-memory admission control is the implemented local admission path
+- distributed inference is delegated to the selected backend runtime
+- some helper commands assume local repo layout or local infrastructure scripts and should be checked before automation
 
 ## License
 
-[Your License]
-
----
-
-## Contributing
-
-Contributions welcome! Please open an issue or PR.
-
----
-
-## Support
-
-- **Issues**: https://github.com/kshetrajna12/sparkstation/issues
-- **Docs**: See `TECH_PLAN.md` for detailed architecture
-
----
-
-**Built for NVIDIA DGX Spark (Grace Blackwell)**
+No license file is currently present in this repository.
