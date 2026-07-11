@@ -570,4 +570,4 @@ Known boundaries:
 
 ## License
 
-No license file is currently present in this repository.
+SparkStation is licensed under the [MIT License](LICENSE).
