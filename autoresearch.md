@@ -289,3 +289,70 @@ iter-5 config and +29% over the old MXFP4 baseline.
 - MTP with attention_backend=flash_attn or triton (avoids the FlashInfer
   cudagraph downgrade) — untested; may finally let MTP pay off.
 - vLLM PR #40082 `flashinfer_cutedsl_sm12x` MoE backend (+2-6% claim).
+
+### Iteration 8 — Atlas inference engine trial (2026-07-10) — NOT ADOPTED (for now)
+Tried Avarok's Atlas (avarok/atlas-gb10:latest, pure Rust + CUDA, AGPL-3.0),
+hand-tuned for GB10/sm_121. Ran on worker1 only; primary aux backends stayed
+up. It loaded our exact `nvidia/Qwen3.6-35B-A3B-NVFP4` checkpoint from the HF
+cache directly (kernel target `sm_121/qwen3.6-35b-a3b/nvfp4`, 140 PTX
+modules). Cold start ~90 s (vs ~5-8 min vLLM) — their <2 min claim holds.
+Gotcha: binds 127.0.0.1 by default; needs `--bind 0.0.0.0` for cluster use.
+
+Flags: `--max-seq-len 16384 --kv-cache-dtype nvfp4 --gpu-memory-utilization
+0.88 --tool-call-parser qwen3_coder` ± `--speculative --mtp-quantization
+nvfp4`, scheduling fifo/slai (no difference observed).
+
+| config                  | c=1   | c=4  | c=8  |
+|-------------------------|-------|------|------|
+| Atlas MTP (K=2)         | 104.8–118.7 | 74–76 | 64.2 |
+| Atlas no-spec           | 66.8  | 74.0 | 64.0 |
+| vLLM iter-6 (keeper)    | 73.3  | 120.7 | 188.7 |
+
+(Atlas c=1 118.7 = same 10-prompt sequence as the vLLM baseline; 104.8 =
+bench_concurrent single prompt.)
+
+**Findings:**
+- Single-stream: Atlas MTP is a real +62% over our vLLM config (118.7 vs
+  73.3). Their MTP works on GB10 where vLLM's cudagraph-downgrades.
+- Concurrency: aggregate throughput is FLAT-to-DECLINING (~64-76 tok/s at
+  c=4/8, worse than c=1!) in both spec and no-spec configs. vLLM wins 1.6×
+  at c=4 and 2.9× at c=8. Our deployment target is multi-agent throughput,
+  so Atlas loses where it matters.
+- Quality: output content sane (math, prose, lists all correct), tool
+  calling emitted valid JSON via XGrammar-constrained qwen3_coder parser —
+  better than the NVIDIA-forum reports of tool-call breakage.
+- Has a content-loop watchdog (period-2..64 repetition detector w/ rollback)
+  — nice touch given our sm_121 garbage-output history.
+
+**Re-test trigger:** Atlas fixes batched decode scaling (their scheduler
+logs max_batch=8 — batching appears immature). Single-stream latency-bound
+use cases (interactive chat) would already benefit today.
+
+### Iteration 9 — Nemotron-3-Nano-Omni-30B-A3B trial (2026-07-10) — CAPABLE BUT SLOWER
+Trialed `nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4` (~21 GB, MoE
+A3B like qwen; vision/audio towers kept BF16) on worker1 via the pinned
+vLLM image. Flags per model card + forum: marlin NVFP4 env trio,
+`--mamba-ssm-cache-dtype float32 --trust-remote-code --kv-cache-dtype fp8
+--enable-auto-tool-choice --tool-call-parser qwen3_coder
+--reasoning-parser nemotron_v3` (nemotron_v3 parser exists in our pinned
+nightly; repo's nano_v3_reasoning_parser.py not needed).
+
+| model (same image, worker1)   | c=1  | c=4  | c=8   |
+|-------------------------------|------|------|-------|
+| Nemotron-Omni-30B NVFP4       | 52-53 | 85.7 | 124-131 |
+| Qwen3.6-35B NVFP4 (keeper)    | 73.3 | 120.7 | 188.7 |
+
+**Findings:**
+- ~30% slower than qwen at every concurrency (53/86/130 vs 73/121/189).
+  External tuned reports reach ~75 single — still ≤ qwen.
+- Quality: text answers clean; **vision works and is accurate** (exact
+  red-top/blue-bottom answer on synthetic test); tool calls valid JSON via
+  qwen3_coder parser. No sign of the reported Marlin/SM121 truncation on
+  our pinned image.
+- True omni: image + video + audio in, with word-level transcript
+  timestamps — capabilities qwen3.5-35b alias doesn't serve today.
+
+**Verdict:** not a qwen replacement for the multi-agent chat slot (30%
+throughput tax). It IS the best candidate if we ever need audio/video
+understanding or want to consolidate a multimodal pipeline stage onto one
+backend. Weights stay cached on worker1 (~21 GB, disk is 5% used).
