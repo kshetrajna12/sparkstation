@@ -51,7 +51,7 @@ class FaceLauncher(ModelLauncher):
                 # Gallery path — check extra_args first, then default location
                 gallery_host_path = config.extra_args.get("gallery_path", "")
                 if not gallery_host_path or not Path(gallery_host_path).exists():
-                    default_gallery = Path.home() / ".openclaw" / "workspace-whatsapp-schoolfriends-group" / "gallery.json"
+                    default_gallery = Path.home() / ".openclaw" / "workspace" / "agents" / "whatsapp-schoolfriends-group" / "gallery.json"
                     if default_gallery.exists():
                         gallery_host_path = str(default_gallery)
                     else:

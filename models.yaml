@@ -131,6 +131,12 @@ models:
     memory_gb: 1
     idle_timeout_minutes: 60
     auto_suspend_enabled: false
+    extra_args:
+      # Explicit gallery path: the launcher's fallback default pointed at the
+      # pre-reorg workspace layout, so the 2026-07-02 supervisor relaunch came
+      # up with no /gallery mount and recognition silently returned
+      # num_recognized=0 until 2026-08-09.
+      gallery_path: "/home/kshetrajna/.openclaw/workspace/agents/whatsapp-schoolfriends-group/gallery.json"
 
   flux-dev:
     name: "black-forest-labs/FLUX.1-dev"
@@ -171,7 +177,7 @@ profiles:
   image-indexing:
     qwen3.5-35b:
       host: worker1
-      memory_gb: 100  # ~19 GB headroom on the 119 GB Spark
+      memory_gb: 85  # leave ~34 GB headroom on the 119 GB Spark for GB10 UMA stability
       # MTP disabled (iter-6/7, 2026-07-02): spec-decode forces cudagraph_mode
       # down to PIECEWISE with FlashInfer attention on BOTH v0.22 and v0.23
       # nightlies, and benches far below MTP-off (41 vs 72.8 tok/s c=1 for
