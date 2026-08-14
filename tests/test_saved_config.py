@@ -12,7 +12,7 @@ def _full_config() -> ModelConfig:
         model_name="nvidia/Qwen3.6-35B-A3B-NVFP4",
         backend=Backend.VLLM,
         model_type=ModelType.CHAT,
-        model_alias="qwen3.5-35b",
+        model_alias="qwen3.8-27b",
         host="worker1",
         num_gpus=1,
         quantization="modelopt",

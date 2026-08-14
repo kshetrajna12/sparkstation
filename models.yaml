@@ -30,62 +30,34 @@ default_profile: image-indexing
 # ─── Canonical model specs (one entry per alias) ────────────────────────────
 
 models:
-  qwen3.5-35b:
-    # Alias intentionally preserved for client backward compat — downstream
-    # clients (Wildlife Indexer, Caddy routes, saved Cloudflare Access
-    # policies) pin this string. Renaming needs a coordinated client sweep.
-    #
-    # Underlying model has drifted freely under the same alias:
-    #   3.5-35B-A3B MXFP4 → 3.6-35B-A3B MXFP4 → nvidia/*-NVFP4 + MTP.
-    name: "nvidia/Qwen3.6-35B-A3B-NVFP4"
+  qwen3.8-27b:
+    # Renamed from qwen3.5-35b 2026-08-14 (alias had drifted 3 models deep).
+    # Clients updated in the same sweep: image_metadata_indexing .env, RealtorZero,
+    # sparkstation scripts. Qwen3.8-27B: dense 27B hybrid (Gated DeltaNet + Gated
+    # Attention), native vision+video, 262K native ctx, MTP-trained.
+    # Config = trial-proven 2026-08-14 (23.6 tok/s c=1, 135.5 agg c=8 on primary;
+    # see patches/qwen38-trial.sh + memory: muse-glimmer-trial).
+    name: "RadixArk/Qwen3.8-27B-NVFP4"
     backend: "vllm"
     model_type: "chat"
     quantization: "modelopt"
     default: true
-    memory_gb: 40  # single-host default; image-indexing overrides to 100
+    memory_gb: 40  # single-host default; image-indexing overrides to 85
     idle_timeout_minutes: 60
     auto_suspend_enabled: false
-    # PINNED (2026-07-02): the rolling :nightly (v0.23.1rc1.dev714) generates
-    # garbage on GB10 — "!!!!!" with thinking off, never-terminating reasoning
-    # with it on (sm_121 FP4 kernel corruption). This tag = image f6353499db8e
-    # (v0.22.1rc1.dev195, 2026-06 build), retagged on BOTH hosts. Re-test the
-    # rolling nightly before ever unpinning; verify output sanity, not just
-    # tok/s — the broken build benches 2× faster while emitting garbage.
-    docker_image: "vllm/vllm-openai:nightly-20260611-goodgb10"
+    # vLLM main build 2026-08-11 (has Qwen3_5 arch + working MTP; the June
+    # MTP-cudagraph problem does NOT apply to this image — full A/B 2026-08-14).
+    docker_image: "vllm/vllm-openai:muse-glimmer-arm64-cu130"
     speculative_method: "mtp"
-    num_speculative_tokens: 1
-    speculative_extra:
-      moe_backend: "triton"
-    env_vars:
-      VLLM_USE_FLASHINFER_MOE_FP4: "0"
-      VLLM_FP8_MOE_BACKEND: "flashinfer_cutlass"
-      FLASHINFER_DISABLE_VERSION_CHECK: "1"
-      CUTE_DSL_ARCH: "sm_121a"
+    num_speculative_tokens: 2
     extra_args:
       max_model_len: 65536
       max_num_batched_tokens: 8192
-      max_concurrent_requests: 4
+      max_concurrent_requests: 8
       tool_call_parser: "qwen3_coder"
       reasoning_parser: "qwen3"
-      kv_cache_dtype: "fp8"
       enable_prefix_caching: true
       enable_chunked_prefill: true
-      # marlin — the only backend the NvFP4 oracle accepts for this
-      # deployment shape (this quant scheme + our env vars). Tried the
-      # alternatives on 2026-07-02:
-      #   - triton: rejected — "not supported for NvFP4 MoE"
-      #   - cutlass: rejected — "does not support the deployment
-      #     configuration since kernel does not support quantization
-      #     scheme QuantKey(u8, scale(f8e4...))"
-      # marlin runs fine but has an intermittent CUDA cudaErrorUnknown
-      # in fused_marlin_moe → moe_sum on sm_121 (Blackwell) — hit it
-      # ~5h into steady load. Recovery relies on the supervisor's
-      # auto-restart machinery, which is being repaired in parallel
-      # (Bug A: FAILED transitions weren't triggering restart).
-      moe_backend: "marlin"
-      attention_backend: "flashinfer"
-      async_scheduling: true
-      dtype: "auto"
 
   bge-large:
     name: "BAAI/bge-large-en-v1.5"
@@ -156,17 +128,17 @@ profiles:
   # Single-node development / production / inference — chat only on primary,
   # matches pre-cluster defaults.
   dev:
-    qwen3.5-35b: {}
+    qwen3.8-27b: {}
 
   prod:
-    qwen3.5-35b: {}
+    qwen3.8-27b: {}
 
   inference:
-    qwen3.5-35b: {}
+    qwen3.8-27b: {}
 
   # OpenClaw uses chat + text embeddings on a single node.
   openclaw:
-    qwen3.5-35b:
+    qwen3.8-27b:
       extra_args:
         max_concurrent_requests: 8
     bge-m3: {}
@@ -175,20 +147,11 @@ profiles:
   # worker1's 119 GB — massive KV cache, 262K native context, 8 concurrent
   # seqs. Aux backends stay on primary.
   image-indexing:
-    qwen3.5-35b:
+    qwen3.8-27b:
       host: worker1
       memory_gb: 85  # leave ~34 GB headroom on the 119 GB Spark for GB10 UMA stability
-      # MTP disabled (iter-6/7, 2026-07-02): spec-decode forces cudagraph_mode
-      # down to PIECEWISE with FlashInfer attention on BOTH v0.22 and v0.23
-      # nightlies, and benches far below MTP-off (41 vs 72.8 tok/s c=1 for
-      # MTP-3 on v0.23; also lost at c=4/8). Full A/B in autoresearch.md.
-      speculative_method: null
-      env_vars:
-        # Engine-suggested Marlin tweak for small-N GEMMs (sm_121).
-        VLLM_MARLIN_USE_ATOMIC_ADD: "1"
       extra_args:
-        max_model_len: 262144   # native max per NVFP4 model card
-        max_num_batched_tokens: 16384
+        max_model_len: 262144  # native max; hybrid arch keeps KV cheap (DeltaNet layers = constant state)
         max_concurrent_requests: 8
     bge-m3: {}
     clip-vit: {}

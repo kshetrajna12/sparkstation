@@ -10,7 +10,7 @@ Wall clock is the *gating* metric — captures both per-stream throughput and
 how well the server batches across concurrent requests.
 
 Usage:
-    .venv/bin/python scripts/bench_concurrent.py [--model qwen3.5-35b] \\
+    .venv/bin/python scripts/bench_concurrent.py [--model qwen3.8-27b] \\
         [--concurrencies 1,4,8,16,32] [--rounds 3] [--max-tokens 256]
 """
 import argparse
@@ -147,7 +147,7 @@ async def bench_at(client, base_url, model, concurrency, rounds, warmup, max_tok
 async def main():
     p = argparse.ArgumentParser()
     p.add_argument("--base-url", default="http://localhost:8000/v1")
-    p.add_argument("--model", default="qwen3.5-35b")
+    p.add_argument("--model", default="qwen3.8-27b")
     p.add_argument("--concurrencies", default="1,4,8,16,32",
                    help="comma-separated list")
     p.add_argument("--rounds", type=int, default=2)

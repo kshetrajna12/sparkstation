@@ -2,13 +2,13 @@
 set -euo pipefail
 
 # Autoresearch benchmark for Qwen3.6 evaluation
-# Usage: BENCH_MODEL=qwen3.5-35b ./autoresearch.sh
+# Usage: BENCH_MODEL=qwen3.8-27b ./autoresearch.sh
 
 # Active model read from autoresearch.model file (or default to current deployment)
 if [ -f autoresearch.model ]; then
     MODEL="$(cat autoresearch.model | tr -d '[:space:]')"
 else
-    MODEL="qwen3.5-35b"
+    MODEL="qwen3.8-27b"
 fi
 MODE="${BENCH_MODE:-${2:-chat}}"
 REQUESTS="${BENCH_REQUESTS:-10}"

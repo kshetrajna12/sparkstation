@@ -7,7 +7,7 @@ This project has access to local LLM models through Sparkstation gateway.
 
 ## Available Models
 
-- `qwen3.5-35b` - nvidia/Qwen3.6-35B-A3B-NVFP4
+- `qwen3.8-27b` - RadixArk/Qwen3.8-27B-NVFP4 (dense 27B, vision+video, 262K ctx, MTP)
 - `bge-m3` - BAAI/bge-m3
 - `clip-vit` - openai/clip-vit-large-patch14
 - `species-detect` - species-ensemble
@@ -17,11 +17,11 @@ This project has access to local LLM models through Sparkstation gateway.
 
 Switch profiles with `sparkstation start -d --profile <name>`:
 
-- **dev**: qwen3.5-35b
-- **prod**: qwen3.5-35b
-- **inference**: qwen3.5-35b
-- **openclaw**: qwen3.5-35b, bge-m3
-- **image-indexing**: qwen3.5-35b, bge-m3, clip-vit, species-detect, face-detect
+- **dev**: qwen3.8-27b
+- **prod**: qwen3.8-27b
+- **inference**: qwen3.8-27b
+- **openclaw**: qwen3.8-27b, bge-m3
+- **image-indexing**: qwen3.8-27b, bge-m3, clip-vit, species-detect, face-detect
 
 ## API Endpoint
 
@@ -228,7 +228,7 @@ print(f"Similarity: {similarity}")
 - Models are already running and ready to use
 - Use the gateway endpoint (`http://localhost:8000/v1`) for all requests
 - All models support standard OpenAI APIs:
-  - Chat: `/v1/chat/completions` (qwen3.5-35b, bge-m3, species-detect, face-detect)
+  - Chat: `/v1/chat/completions` (qwen3.8-27b, bge-m3, species-detect, face-detect)
   - Embeddings: `/v1/embeddings` (clip-vit)
 
 ### Model-Specific Details

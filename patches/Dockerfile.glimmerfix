@@ -1,0 +1,63 @@
+FROM vllm/vllm-openai:muse-glimmer-arm64-cu130
+# Day-0 fix: SpeculativeConfig wraps the DFlash drafter config in EAGLEConfig,
+# which prefixes the arch to "DFlashMuseGlimmerAssistantModel" — a name the
+# registry doesn't know (it maps the unprefixed "MuseGlimmerAssistantModel").
+# Register the prefixed alias to the same class.
+RUN sed -i 's|"MuseGlimmerAssistantModel": ("qwen3_dflash", "DFlashQwen3ForCausalLM"),|"MuseGlimmerAssistantModel": ("qwen3_dflash", "DFlashQwen3ForCausalLM"),\n    "DFlashMuseGlimmerAssistantModel": ("qwen3_dflash", "DFlashQwen3ForCausalLM"),|' /usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/registry.py \
+ && python3 -c "import ast; ast.parse(open('/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/registry.py').read())" \
+ && grep -c "DFlashMuseGlimmerAssistantModel" /usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/registry.py
+
+# Day-0 fix 2: SupportsEagle3.set_aux_hidden_state_layers resolves
+# get_language_model() to MuseGlimmerModel, which IS the EagleModelMixin —
+# there is no further `.model` beneath it, so the hasattr(parent_ref, "model")
+# assert fires. Call the mixin directly when the resolved ref already is one.
+RUN python3 - <<'PY'
+path = "/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/interfaces.py"
+src = open(path).read()
+old = '''        assert hasattr(parent_ref, "model"), (
+            "Model instance must have 'model' attribute to set number of layers"
+        )'''
+new = '''        if isinstance(parent_ref, EagleModelMixin):
+            parent_ref._set_aux_hidden_state_layers(layers)
+            return
+        assert hasattr(parent_ref, "model"), (
+            "Model instance must have 'model' attribute to set number of layers"
+        )'''
+assert src.count(old) == 1, f"expected 1 match, got {src.count(old)}"
+open(path, "w").write(src.replace(old, new))
+import ast; ast.parse(open(path).read())
+print("interfaces.py patched")
+PY
+
+# Day-0 fix 3: the Muse-Glimmer-30B-assistant checkpoint names the DFlash
+# encoder weights "encoder.fc.weight" / "encoder.output_norm_enc.weight";
+# DFlashQwen3Model expects "fc.weight" / "hidden_norm.weight". Extend the
+# hf_to_vllm_mapper substr table.
+RUN python3 - <<'PY'
+path = "/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/qwen3_dflash.py"
+src = open(path).read()
+old = '        orig_to_new_substr={"midlayer.": "layers.0."},'
+new = '''        orig_to_new_substr={
+            "midlayer.": "layers.0.",
+            "encoder.fc.": "fc.",
+            "encoder.output_norm_enc.": "hidden_norm.",
+        },'''
+assert src.count(old) == 1, f"expected 1 match, got {src.count(old)}"
+open(path, "w").write(src.replace(old, new))
+import ast; ast.parse(open(path).read())
+print("qwen3_dflash.py patched")
+PY
+
+# Day-0 fix 4: same wrapper-depth assumption in the DFlash weight-sharing
+# path — get_language_model() on MuseGlimmer returns the inner model itself,
+# so there is no further ".model" attribute.
+RUN python3 - <<'PY'
+path = "/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/spec_decode/dflash/utils.py"
+src = open(path).read()
+old = "    target_inner = target_language_model.model"
+new = '    target_inner = getattr(target_language_model, "model", target_language_model)'
+assert src.count(old) == 1, f"expected 1 match, got {src.count(old)}"
+open(path, "w").write(src.replace(old, new))
+import ast; ast.parse(open(path).read())
+print("dflash/utils.py patched")
+PY
