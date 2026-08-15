@@ -26,6 +26,33 @@ logger = logging.getLogger(__name__)
 
 
 LOCAL_CONFIG_FILENAME = ".sparkstation.local.yaml"
+ROOT_BREADCRUMB = Path.home() / ".sparkstation" / "root"
+
+
+def find_sparkstation_root() -> Path:
+    """Locate the sparkstation repo root from ANY working directory.
+
+    Order: walk up from cwd looking for models.yaml (works inside the repo);
+    $SPARKSTATION_HOME; the ~/.sparkstation/root breadcrumb (written by the
+    CLI whenever it runs from the real repo). Falls back to cwd. Without
+    this, `sparkstation init` in another project silently loaded an EMPTY
+    config and generated a CLAUDE.md with no models (2026-08-15).
+    """
+    import os
+    cwd = Path.cwd()
+    for candidate in [cwd, *cwd.parents]:
+        if (candidate / "models.yaml").exists():
+            return candidate
+    env = os.environ.get("SPARKSTATION_HOME")
+    if env and (Path(env) / "models.yaml").exists():
+        return Path(env)
+    try:
+        crumb = Path(ROOT_BREADCRUMB.read_text().strip())
+        if (crumb / "models.yaml").exists():
+            return crumb
+    except OSError:
+        pass
+    return cwd
 
 
 def _deep_merge(base: dict, over: dict) -> dict:
@@ -175,7 +202,7 @@ def load_models_config(config_path: Optional[Path] = None) -> ModelsConfiguratio
     on a per-machine basis if the user chooses.
     """
     if config_path is None:
-        config_path = Path("models.yaml")
+        config_path = find_sparkstation_root() / "models.yaml"
 
     base = _load_raw(config_path)
     local = _load_raw(config_path.parent / LOCAL_CONFIG_FILENAME)

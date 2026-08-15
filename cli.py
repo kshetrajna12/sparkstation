@@ -20,7 +20,11 @@ DEFAULT_GATEWAY_URL = "http://127.0.0.1:8000"
 
 
 def _find_project_root() -> Path:
-    """Find the sparkstation project root by walking up from cwd looking for models.yaml.
+    """Find the sparkstation repo root (delegates to models_config.find_sparkstation_root).
+
+    Discovery: walk up from cwd → $SPARKSTATION_HOME → ~/.sparkstation/root
+    breadcrumb (dropped below on every successful in-repo run) — so commands
+    like `sparkstation init` work from ANY directory, not just inside the repo.
 
     Why this exists: cli.py used to compute PROJECT_ROOT as Path(__file__).resolve().parent,
     which works in development (cli.py in repo root) but BREAKS for the installed CLI
@@ -31,11 +35,19 @@ def _find_project_root() -> Path:
     that means anything outside that unit was broken. Walking up from cwd is the
     standard "find your project root" pattern (git, npm, etc.).
     """
-    cwd = Path.cwd()
-    for candidate in [cwd, *cwd.parents]:
-        if (candidate / "models.yaml").exists():
-            return candidate
-    return cwd
+    from supervisor.models_config import find_sparkstation_root
+    root = find_sparkstation_root()
+    if (root / "models.yaml").exists():
+        # Breadcrumb so future invocations from OTHER directories (e.g.
+        # `sparkstation init` inside a client project) still find the repo.
+        try:
+            crumb = Path.home() / ".sparkstation" / "root"
+            crumb.parent.mkdir(parents=True, exist_ok=True)
+            if not crumb.exists() or crumb.read_text().strip() != str(root):
+                crumb.write_text(str(root) + "\n")
+        except OSError:
+            pass
+    return root
 
 
 PROJECT_ROOT = _find_project_root()
