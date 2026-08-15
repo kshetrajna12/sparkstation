@@ -63,3 +63,51 @@ groups:
       # Generation throughput (tokens/sec) per model.
       - record: sparkstation:engine_generation_tokens_per_second
         expr: sum by (alias, host, engine) (rate(vllm:generation_tokens_total[5m]))
+
+      # ── Cache & speculative-decoding efficiency (added 2026-08-15) ──────
+      # These answer "is prefix caching working?" and "is spec decode paying
+      # for itself?" — the tuning levers for every model on this cluster.
+
+      # Prompt throughput (tokens/sec) — pairs with generation throughput.
+      - record: sparkstation:engine_prompt_tokens_per_second
+        expr: sum by (alias, host, engine) (rate(vllm:prompt_tokens_total[5m]))
+
+      # Prefix-cache hit ratio, 0-1: fraction of queried blocks served from
+      # cache. NaN when idle (0/0) — Grafana renders gaps, which is correct.
+      - record: sparkstation:engine_prefix_cache_hit_ratio
+        expr: >-
+          sum by (alias, host, engine) (rate(vllm:prefix_cache_hits_total[5m]))
+          /
+          sum by (alias, host, engine) (rate(vllm:prefix_cache_queries_total[5m]))
+
+      # Fraction of prompt tokens that skipped prefill via cache, 0-1.
+      # This is the ratio that translates directly into TTFT savings.
+      - record: sparkstation:engine_prompt_cached_token_ratio
+        expr: >-
+          sum by (alias, host, engine) (rate(vllm:prompt_tokens_cached_total[5m]))
+          /
+          sum by (alias, host, engine) (rate(vllm:prompt_tokens_total[5m]))
+
+      # Spec-decode acceptance rate, 0-1: accepted / drafted tokens.
+      # DSpark k=5 and Qwen MTP-2 are content-dependent; this is the number
+      # that decides whether spec decode helps for the current workload.
+      - record: sparkstation:engine_spec_accept_rate
+        expr: >-
+          sum by (alias, host, engine) (rate(vllm:spec_decode_num_accepted_tokens_total[5m]))
+          /
+          sum by (alias, host, engine) (rate(vllm:spec_decode_num_draft_tokens_total[5m]))
+
+      # Mean accepted tokens per draft step. Effective decode speedup is
+      # roughly (1 + this) vs non-speculative.
+      - record: sparkstation:engine_spec_accepted_per_draft
+        expr: >-
+          sum by (alias, host, engine) (rate(vllm:spec_decode_num_accepted_tokens_total[5m]))
+          /
+          sum by (alias, host, engine) (rate(vllm:spec_decode_num_drafts_total[5m]))
+
+      # Inter-token latency p50/p95 — the "feel" of streaming speed.
+      - record: sparkstation:engine_itl_p50_seconds
+        expr: histogram_quantile(0.50, sum by (alias, host, le) (rate(vllm:inter_token_latency_seconds_bucket[5m])))
+
+      - record: sparkstation:engine_itl_p95_seconds
+        expr: histogram_quantile(0.95, sum by (alias, host, le) (rate(vllm:inter_token_latency_seconds_bucket[5m])))
