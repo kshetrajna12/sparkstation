@@ -25,7 +25,11 @@ cluster:
     # `host: worker1` needs that file present on the machine that runs the
     # supervisor.
 
-default_profile: coding  # TEMP 2026-08-15: --profile flag broken (supervisor never reads STARTUP_PROFILE); restore image-indexing after fixing
+# coding = the daily driver (2026-08-15, user decision): DSV4-Flash 2-node
+# stack + vision + embeddings. For indexing runs switch stacks with
+# `sparkstation stop && sparkstation start -d --profile image-indexing`
+# (qwen3.8 on worker1 cannot coexist with DSV4's worker rank).
+default_profile: coding
 
 # ─── Canonical model specs (one entry per alias) ────────────────────────────
 

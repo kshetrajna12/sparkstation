@@ -176,11 +176,22 @@ async def lifespan(app: FastAPI):
     from supervisor.models_config import get_autoload_models, get_profile_models
     from supervisor.models import ModelStartRequest
 
+    # Log WHERE the resolved profile came from — two days were lost to a
+    # systemd unit silently overriding the profile; make the source explicit.
     if settings.startup_profile:
         autoload_models = get_profile_models(settings.startup_profile)
-        logger.info(f"Loading profile: {settings.startup_profile} ({len(autoload_models)} models)")
+        logger.info(
+            f"Loading profile: {settings.startup_profile} "
+            f"(source: STARTUP_PROFILE env / --profile flag; {len(autoload_models)} models)"
+        )
     else:
+        from supervisor.models_config import load_models_config
+        _default_profile = load_models_config().default_profile
         autoload_models = get_autoload_models()
+        logger.info(
+            f"Loading profile: {_default_profile or '(none — autoload list)'} "
+            f"(source: models.yaml default_profile; {len(autoload_models)} models)"
+        )
     async def _autoload():
         """Autoload configured models. Runs as a BACKGROUND task so the
         supervisor binds its HTTP port immediately — `sparkstation start`

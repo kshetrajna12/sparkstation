@@ -190,6 +190,58 @@ def _docker_containers(only_running: bool = True) -> list[str]:
     return [n.strip() for n in r.stdout.strip().split("\n") if n.strip()]
 
 
+def _systemd_unit_exists() -> bool:
+    return subprocess.run(["systemctl", "cat", "sparkstation"],
+                          capture_output=True).returncode == 0
+
+
+def _systemd_active() -> bool:
+    return subprocess.run(["systemctl", "is-active", "--quiet", "sparkstation"],
+                          capture_output=True).returncode == 0
+
+
+def _under_systemd() -> bool:
+    """True when this process was spawned by systemd (ExecStart/ExecStop)."""
+    return bool(os.environ.get("INVOCATION_ID"))
+
+
+def _systemctl(verb: str) -> bool:
+    """Run `sudo -n systemctl <verb> sparkstation`. Non-interactive on purpose:
+    needs the NOPASSWD sudoers rule (see infra repo); returns False if absent."""
+    return subprocess.run(["sudo", "-n", "systemctl", verb, "sparkstation"],
+                          capture_output=True).returncode == 0
+
+
+def _stop_models_via_api() -> int:
+    """Gracefully stop all models through the supervisor before killing it.
+
+    This is the only path that tears models down CORRECTLY across backends
+    and hosts: the supervisor's launchers know how (dspark = 2-node script
+    teardown, vLLM-on-worker1 = docker over SSH). The local docker sweep in
+    stop() only sees sparkstation-* names on the PRIMARY daemon — on its own
+    it leaves worker-host containers and the whole DSV4 stack running
+    (holding ~94GB that then fails the next start's memory check).
+    """
+    stopped = 0
+    try:
+        r = httpx.get(f"{DEFAULT_SUPERVISOR_URL}/models/detailed", timeout=5)
+        models = r.json().get("models", [])
+    except Exception:
+        return 0
+    for m in models:
+        if m["status"] not in ("running", "starting"):
+            continue
+        name = m.get("alias") or m["model_name"]
+        try:
+            # dspark teardown crosses two nodes over SSH — give it time
+            httpx.post(f"{DEFAULT_SUPERVISOR_URL}/models/{m['id']}/stop", timeout=180)
+            click.echo(f"     stopped {name}")
+            stopped += 1
+        except Exception as e:
+            click.secho(f"     Warning: failed to stop {name}: {e}", fg="yellow")
+    return stopped
+
+
 def _docker_stop_all():
     """Stop and remove all sparkstation containers."""
     # Kill running
@@ -287,6 +339,29 @@ def start(ctx, detach, profile, wait_models):
         click.secho("Sparkstation supervisor is already running.", fg="yellow")
         click.echo("Run 'sparkstation stop' first, or 'sparkstation restart'.")
         return
+
+    # systemd delegation: when the unit exists and no profile override is
+    # asked for, start through systemctl so systemd tracks the supervisor it
+    # launched (Type=forking + PIDFile) and its crash-restart works on OUR
+    # process instead of racing it. With --profile we intentionally start
+    # outside systemd (the unit always starts the default profile); the unit
+    # is inactive at that point, so nothing races.
+    if detach and not _under_systemd() and _systemd_unit_exists() and not profile:
+        click.echo("Starting via systemd (unit exists)...")
+        if _systemctl("start"):
+            for _ in range(120):
+                if _supervisor_healthy():
+                    break
+                time.sleep(1)
+            if _supervisor_healthy():
+                click.secho("✓ Sparkstation is running (via systemd)!", fg="green")
+                click.echo(f"  Gateway:    {DEFAULT_GATEWAY_URL} (OpenAI-compatible API)")
+                click.echo(f"  Supervisor: {DEFAULT_SUPERVISOR_URL} (model management)")
+                click.echo("  Models load in the background — watch with 'sparkstation status'.")
+            else:
+                click.secho("systemd start issued but supervisor not healthy yet — check 'systemctl status sparkstation'.", fg="yellow")
+            return
+        click.secho("  passwordless systemctl unavailable — starting directly (systemd will not track this instance).", fg="yellow")
 
     # Reap any stray supervisor/gateway processes from a prior session that
     # outlived their pidfile. Without this, a prior start whose pidfile was
@@ -450,7 +525,29 @@ def start(ctx, detach, profile, wait_models):
 def stop():
     """Stop Sparkstation (gateway + supervisor + containers)."""
     _ensure_dirs()
+
+    # systemd race guard: if the unit is tracking the supervisor (Type=forking
+    # + PIDFile), killing it directly reads as a crash → Restart=on-failure
+    # relaunches everything ~30s later, and its stray-reap has killed
+    # manually-started supervisors mid-model-launch (2026-08-15). Delegate to
+    # systemctl so systemd both performs and records the stop. ExecStop runs
+    # this same command WITH INVOCATION_ID set, so the guard doesn't recurse.
+    if not _under_systemd() and _systemd_active():
+        click.echo("systemd unit is active — stopping via systemctl (avoids the auto-restart race)...")
+        if _systemctl("stop"):
+            click.secho("✓ Sparkstation stopped (via systemd)", fg="green")
+            return
+        click.secho("  passwordless systemctl unavailable (sudoers rule missing?) — stopping directly.", fg="yellow")
+        click.secho("  WARNING: systemd may auto-restart Sparkstation in ~30s!", fg="yellow")
+
     click.echo("Stopping Sparkstation...")
+
+    # 0) Gracefully stop models through the supervisor while it's still up —
+    #    the only path that correctly tears down remote-host and dspark
+    #    (2-node) models. The docker sweep below is local-daemon-only backstop.
+    click.echo("  → Stopping models via supervisor...")
+    n = _stop_models_via_api()
+    click.echo(f"     {n} model(s) stopped gracefully")
 
     # 1) Gateway (proxy + LiteLLM)
     click.echo("  → Stopping gateway...")
