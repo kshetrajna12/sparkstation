@@ -148,6 +148,14 @@ class GatewaySync:
             else:
                 config = {}
 
+            # Only write on a REAL change. The CLI runs LiteLLM under a
+            # watcher that restarts it when this file's mtime moves, so an
+            # unconditional rewrite every sync pass would bounce the gateway
+            # every N seconds.
+            if config.get("model_list") == model_list:
+                logger.debug(f"litellm.yaml already current ({len(model_list)} models); skipping write")
+                return
+
             # Update model_list
             config["model_list"] = model_list
 
@@ -155,7 +163,7 @@ class GatewaySync:
             with open(config_path, "w") as f:
                 yaml.dump(config, f, default_flow_style=False)
 
-            logger.info(f"Wrote litellm.yaml with {len(model_list)} models (applied on gateway restart)")
+            logger.info(f"Wrote litellm.yaml with {len(model_list)} models (gateway watcher will restart LiteLLM)")
 
         except Exception as e:
             logger.error(f"YAML rewrite failed: {e}", exc_info=True)

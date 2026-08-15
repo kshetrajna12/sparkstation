@@ -124,9 +124,28 @@ class ResourceManager:
             logger.error(f"Failed to get GPU power draw: {e}")
             return 0.0
 
+    def get_mem_available_gb(self) -> float:
+        """MemAvailable from /proc/meminfo, in GB (0.0 on read failure)."""
+        try:
+            with open("/proc/meminfo", "r") as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1]) / (1024 * 1024)
+        except Exception as e:
+            logger.error(f"Failed to read MemAvailable: {e}")
+        return 0.0
+
     def can_allocate_model(self, estimated_memory_gb: float) -> bool:
         """
         Check if we can allocate a new model.
+
+        Coexistence-aware semantics (2026-08-15): the primary check asks
+        "after loading this model, does MemAvailable stay above the safety
+        floor?" — it doesn't matter WHO holds the rest of the memory
+        (supervisor-managed models, the external DSV4 stack, page cache the
+        kernel will reclaim). The old check — max(gpu, system) usage plus a
+        hardcoded +16 GB buffer against a hard limit — double-counted under
+        coexistence and rejected 1 GB models while 14 GB sat free.
 
         Args:
             estimated_memory_gb: Expected memory usage for the model
@@ -134,14 +153,15 @@ class ResourceManager:
         Returns:
             True if model can be allocated, False otherwise
         """
-        current_usage = self.get_unified_memory_usage()
-        projected_usage = current_usage + estimated_memory_gb
+        floor_gb = getattr(settings, "memory_safety_floor_gb", 8)
+        mem_available = self.get_mem_available_gb()
+        remaining_after = mem_available - estimated_memory_gb
 
-        # Check memory limit
-        if projected_usage > self.hard_limit_gb:
+        if remaining_after < floor_gb:
             logger.warning(
-                f"Cannot allocate model: would exceed hard limit "
-                f"({projected_usage:.1f} GB > {self.hard_limit_gb} GB)"
+                f"Cannot allocate model: MemAvailable {mem_available:.1f} GB "
+                f"- {estimated_memory_gb:.1f} GB estimate leaves "
+                f"{remaining_after:.1f} GB < {floor_gb} GB safety floor"
             )
             return False
 
@@ -153,11 +173,12 @@ class ResourceManager:
             )
             return False
 
-        # Warn on soft limit
-        if projected_usage > self.soft_limit_gb:
+        # Warn when the node is running close to the floor even before this
+        # allocation (early signal of a squeezed coexistence layout).
+        if remaining_after < floor_gb * 2:
             logger.warning(
-                f"Approaching memory soft limit: "
-                f"{projected_usage:.1f} GB / {self.soft_limit_gb} GB"
+                f"Memory getting tight: {remaining_after:.1f} GB would remain "
+                f"after allocation (floor {floor_gb} GB)"
             )
 
         return True

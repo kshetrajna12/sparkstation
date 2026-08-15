@@ -73,7 +73,7 @@ models:
     backend: "vllm"
     model_type: "embedding"
     quantization: "none"
-    memory_gb: 2  # squeezed 2.5->2 (2026-08-15): weights ~1.2GB; embed models have no KV cache
+    memory_gb: 4  # 2026-08-15: measured 3.7GB actual RSS under load (earlier 2GB squeeze was under-counted)
     auto_suspend_enabled: false
     docker_image: "nvcr.io/nvidia/vllm:26.01-py3"
 
@@ -110,6 +110,43 @@ models:
       # num_recognized=0 until 2026-08-09.
       gallery_path: "/home/kshetrajna/.openclaw/workspace/agents/whatsapp-schoolfriends-group/gallery.json"
 
+  dsv4-flash:
+    # DeepSeek-V4-Flash-0731 on the Anemll DSpark 2-node TP=2 stack (both
+    # Sparks, NVFP4 + nvfp4_ds_mla KV, DSpark spec-decode k=5, 1M ctx).
+    # The dspark launcher wraps ~/dsv4-2xspark start/stop scripts — it does
+    # NOT build docker commands. `name` is the SERVED model name (what
+    # /v1/models reports and what LiteLLM must send), not a HF path; the
+    # stack's .env.dspark decides the actual checkpoint.
+    name: "deepseek-v4-flash-0731"
+    backend: "dspark"
+    model_type: "chat"
+    host: primary  # head node; worker rank comes from the stack's .env.dspark
+    quantization: "none"  # stack-managed (NVFP4 checkpoint)
+    memory_gb: 94  # head-node share; worker1's rank holds a similar amount
+    auto_suspend_enabled: false
+    extra_args:
+      dspark_dir: "/home/kshetrajna/dsv4-2xspark"
+      port: 8888
+      launch_timeout_seconds: 2700
+      head_container: "deepseek-v4-flash-vllm-dspark-1"
+
+  qwen3-vl-4b:
+    # Vision model for coding agents (user: "as small a vision model as you
+    # need"). Single-node vLLM on worker1, coexisting with DSV4's worker rank
+    # — must launch AFTER the dspark stack has GPU-profiled (phase 1 ordering
+    # in main.py handles this).
+    name: "cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit"
+    backend: "vllm"
+    model_type: "chat"
+    host: worker1
+    quantization: "awq"  # auto-detected; launcher skips the flag for AWQ
+    memory_gb: 10  # → gpu_memory_utilization ≈ 0.084 (proven 0.08 standalone)
+    auto_suspend_enabled: false
+    docker_image: "vllm/vllm-openai:muse-glimmer-arm64-cu130"
+    extra_args:
+      max_model_len: 32768
+      max_concurrent_requests: 4
+
   flux-dev:
     name: "black-forest-labs/FLUX.1-dev"
     backend: "flux"
@@ -125,10 +162,13 @@ models:
 # ─── Profiles (dict of alias → override) ────────────────────────────────────
 
 profiles:
-  # Coding profile (2026-08-15): embeddings + vector search only — the chat slot
-  # is DSV4-Flash on the MiaAI 2x-Spark stack (outside supervisor, port 8888,
-  # vision sidecar on 8889). See ~/dsv4-2xspark + memory: muse-glimmer-trial.
+  # Coding profile (2026-08-15): DSV4-Flash (dspark 2-node stack) as the chat
+  # daily driver + small vision model on worker1 + embeddings/detection on
+  # primary. Fully supervisor-managed since the dspark backend landed.
   coding:
+    dsv4-flash:
+      default: true  # the "default" gateway alias resolves to DSV4 here
+    qwen3-vl-4b: {}
     bge-m3: {}
     clip-vit: {}
     face-detect: {}  # added 2026-08-15 (user request): ~1GB, gallery lives on primary

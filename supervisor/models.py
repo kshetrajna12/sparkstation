@@ -39,6 +39,7 @@ class Backend(str, Enum):
     SPECIES = "species"
     FACE = "face"
     TRT_LLM = "trt-llm"  # Future support
+    DSPARK = "dspark"  # Anemll DSpark multi-node compose stack (2x GB10 TP=2)
 
 
 class ModelType(str, Enum):

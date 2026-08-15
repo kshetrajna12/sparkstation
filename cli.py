@@ -104,15 +104,26 @@ GATEWAY_INTERNAL_PORT = 7999
 
 
 def _start_litellm() -> "subprocess.Popen":
-    """Launch LiteLLM on the internal port; returns the process."""
+    """Launch LiteLLM under the config watcher; returns the watcher process.
+
+    The watcher (gateway/litellm-watch.sh) restarts LiteLLM whenever
+    litellm.yaml content changes — the supervisor's gateway_sync rewrites it
+    as models come up during background autoload, so the gateway can start
+    immediately and pick up models incrementally. The 'gateway' pidfile holds
+    the WATCHER pid; killing it (SIGTERM) also stops the LiteLLM child.
+    """
     gw_log = LOG_DIR / "gateway.log"
     gw_env = os.environ.copy()
     gw_env.pop("SUPERVISOR_DATABASE_URL", None)
+    # Prefer the project venv's python: it has the LOCKED litellm version.
+    # The uv tool env (where the installed `sparkstation` entrypoint lives)
+    # resolves fresh on every `uv tool install` and has drifted to litellm
+    # versions whose proxy is broken (`No module named 'proxy_server'`).
+    venv_python = PROJECT_ROOT / ".venv" / "bin" / "python3"
+    gw_env["LITELLM_PYTHON"] = str(venv_python) if venv_python.exists() else sys.executable
     with open(gw_log, "w") as lf:
         proc = subprocess.Popen(
-            [sys.executable, "-m", "litellm.proxy.proxy_cli",
-             "--config", "gateway/litellm.yaml",
-             "--host", "127.0.0.1", "--port", str(GATEWAY_INTERNAL_PORT)],
+            ["bash", "gateway/litellm-watch.sh", str(GATEWAY_INTERNAL_PORT)],
             stdout=lf, stderr=subprocess.STDOUT,
             env=gw_env, cwd=PROJECT_ROOT,
             start_new_session=True,
@@ -263,9 +274,12 @@ def cli(ctx, supervisor_url):
 @cli.command()
 @click.option("--detach", "-d", is_flag=True, help="Run in background")
 @click.option("--profile", "-p", help="Load models from named profile")
+@click.option("--wait", "wait_models", is_flag=True,
+              help="Block until all models finish loading (default: return once "
+                   "supervisor + gateway are up; models load in the background)")
 @click.pass_context
-def start(ctx, detach, profile):
-    """Start Sparkstation (supervisor + gateway) and wait for models to be ready."""
+def start(ctx, detach, profile, wait_models):
+    """Start Sparkstation (supervisor + gateway); models load in the background."""
     _ensure_dirs()
 
     # Check if already running
@@ -288,6 +302,7 @@ def start(ctx, detach, profile):
     if strays.stdout.strip():
         click.echo(f"  → Reaping {len(strays.stdout.strip().splitlines())} stray supervisor process(es) before start")
         subprocess.run(["pkill", "-9", "-f", "uvicorn supervisor.main:app"], capture_output=True)
+    subprocess.run(["pkill", "-9", "-f", "litellm-watch.sh"], capture_output=True)
     subprocess.run(["pkill", "-9", "-f", "litellm.proxy.proxy_cli"], capture_output=True)
     subprocess.run(["pkill", "-9", "-f", "uvicorn gateway.proxy:app"], capture_output=True)
     time.sleep(1)  # let the kernel finish reaping before we spawn the replacement
@@ -340,11 +355,11 @@ def start(ctx, detach, profile):
     _write_pid("supervisor", proc.pid)
     click.echo(f"     PID {proc.pid} — log: {sup_log}")
 
-    # 2) Wait for supervisor health (port bind + models loaded).
-    #    The supervisor loads ALL models in its lifespan before binding the
-    #    HTTP port, so "connection refused" is expected for several minutes.
-    click.echo("  → Waiting for supervisor (models loading)...")
-    max_wait = 900  # 15 minutes — large models can take a while
+    # 2) Wait for supervisor health. Model autoload runs as a background task
+    #    in the supervisor now, so the port binds within seconds — a long wait
+    #    here means DB reconcile is slow or the process died.
+    click.echo("  → Waiting for supervisor...")
+    max_wait = 120
     for elapsed in range(max_wait):
         # Check the process is still alive
         if proc.poll() is not None:
@@ -356,29 +371,36 @@ def start(ctx, detach, profile):
             click.secho(f"     Supervisor ready ({elapsed}s)", fg="green")
             break
 
-        if elapsed > 0 and elapsed % 30 == 0:
-            click.echo(f"     still loading... ({elapsed}s)")
+        if elapsed > 0 and elapsed % 15 == 0:
+            click.echo(f"     still waiting... ({elapsed}s)")
         time.sleep(1)
     else:
         click.secho(f"     Supervisor did not start within {max_wait}s", fg="red")
         click.secho(f"     Check log: {sup_log}", fg="red")
         return
 
-    # 3) Wait for all models to finish starting
-    click.echo("  → Waiting for models...")
-    for _ in range(300):
-        try:
-            r = httpx.get(f"{DEFAULT_SUPERVISOR_URL}/models/detailed", timeout=5)
-            models = r.json().get("models", [])
-            starting = [m for m in models if m["status"] == "starting"]
-            if not starting:
-                running = [m for m in models if m["status"] == "running"]
-                failed = [m for m in models if m["status"] == "failed"]
-                click.echo(f"     {len(running)} running, {len(failed)} failed")
-                break
-        except Exception:
-            pass
-        time.sleep(2)
+    # 3) Optionally block until models finish loading (--wait). Default is to
+    #    proceed: gateway_sync publishes each model to the gateway as it comes
+    #    up, and `sparkstation status` shows live progress. No fixed timeout —
+    #    progress is judged by the supervisor's own status, and a model stuck
+    #    in `starting` is the supervisor's (restart manager's) problem, not ours.
+    if wait_models:
+        click.echo("  → Waiting for models (--wait)...")
+        while True:
+            try:
+                r = httpx.get(f"{DEFAULT_SUPERVISOR_URL}/models/detailed", timeout=5)
+                models = r.json().get("models", [])
+                starting = [m for m in models if m["status"] == "starting"]
+                if not starting:
+                    running = [m for m in models if m["status"] == "running"]
+                    failed = [m for m in models if m["status"] == "failed"]
+                    click.echo(f"     {len(running)} running, {len(failed)} failed")
+                    break
+                click.echo(f"     {len(starting)} still starting: "
+                           f"{[m['alias'] or m['model_name'] for m in starting]}")
+            except Exception:
+                pass
+            time.sleep(10)
 
     # 4) Write gateway config from supervisor state
     click.echo("  → Writing gateway config...")
@@ -419,6 +441,9 @@ def start(ctx, detach, profile):
     click.secho("✓ Sparkstation is running!", fg="green")
     click.echo(f"  Gateway:    {DEFAULT_GATEWAY_URL} (OpenAI-compatible API)")
     click.echo(f"  Supervisor: {DEFAULT_SUPERVISOR_URL} (model management)")
+    if not wait_models:
+        click.echo("  Models load in the background and appear in the gateway as they")
+        click.echo("  come up — watch with 'sparkstation status' (or start with --wait).")
 
 
 @cli.command()
@@ -432,7 +457,9 @@ def stop():
     _kill_and_wait("gateway-proxy", timeout=5)
     subprocess.run(["pkill", "-9", "-f", "uvicorn gateway.proxy:app"], capture_output=True)
     _kill_and_wait("gateway", timeout=5)
-    # Also kill by pattern in case PID file was lost
+    # Also kill by pattern in case PID file was lost. Watcher FIRST — killing
+    # only the LiteLLM child leaves the watcher alive to restart it.
+    subprocess.run(["pkill", "-9", "-f", "litellm-watch.sh"], capture_output=True)
     subprocess.run(["pkill", "-9", "-f", "litellm.proxy.proxy_cli"], capture_output=True)
     click.echo("     done")
 
@@ -601,6 +628,7 @@ def _restart_gateway() -> bool:
     _ensure_dirs()
     _write_gateway_yaml()
     _kill_and_wait("gateway", timeout=5)
+    subprocess.run(["pkill", "-9", "-f", "litellm-watch.sh"], capture_output=True)
     subprocess.run(["pkill", "-9", "-f", "litellm.proxy.proxy_cli"], capture_output=True)
     time.sleep(1)
     _start_litellm()

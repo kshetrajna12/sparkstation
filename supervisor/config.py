@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     memory_hard_limit_gb: int = 110  # 85% of total
     memory_soft_limit_gb: int = 100  # 78% of total
     max_resident_models: int = 5  # Maximum concurrent models (2 chat + 2 embedding + headroom)
+    # Coexistence-aware allocation floor (2026-08-15): the primary admission
+    # check is now "would MemAvailable stay above this floor" — ownership-
+    # agnostic, so externally-managed models (e.g. the DSV4 2x-Spark stack)
+    # occupying memory don't produce phantom rejections the way the old
+    # max(gpu, system)+16GB estimate did.
+    memory_safety_floor_gb: int = 8
 
     # Port allocation
     model_port_range_start: int = 8001
