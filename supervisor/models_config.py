@@ -112,6 +112,7 @@ class ModelDefinition(BaseModel):
     speculative_method: Optional[str] = None
     speculative_extra: Dict[str, Any] = Field(default_factory=dict)
     default: bool = False
+    vision_default: bool = False  # profile's designated vision model → gateway "vision" alias
     extra_args: Dict[str, Any] = Field(default_factory=dict)
     docker_image: Optional[str] = None
     env_vars: Dict[str, str] = Field(default_factory=dict)
@@ -139,6 +140,7 @@ class ModelConfigYAML(BaseModel):
     speculative_method: Optional[str] = None
     speculative_extra: Dict[str, Any] = Field(default_factory=dict)
     default: bool = False
+    vision_default: bool = False  # profile's designated vision model → gateway "vision" alias
     extra_args: Dict[str, Any] = Field(default_factory=dict)
     docker_image: Optional[str] = None
     env_vars: Dict[str, str] = Field(default_factory=dict)
@@ -281,6 +283,24 @@ def get_default_model_alias(profile_name: Optional[str] = None) -> Optional[str]
         return None
     for m in get_profile_models(profile):
         if m.default:
+            return m.alias or m.name
+    return None
+
+
+def get_vision_model_alias(profile_name: Optional[str] = None) -> Optional[str]:
+    """Alias of the model marked `vision_default: true` in the resolved profile.
+
+    Published by gateway_sync as the "vision" alias so vision consumers (e.g.
+    the ds4f-vision MCP) never hardcode a model name — coding profile resolves
+    to qwen3-vl-4b, image-indexing to qwen3.8-27b (natively vision-capable).
+    """
+    profile = profile_name
+    if profile is None:
+        profile = load_models_config().default_profile
+    if profile is None:
+        return None
+    for m in get_profile_models(profile):
+        if m.vision_default:
             return m.alias or m.name
     return None
 

@@ -153,9 +153,14 @@ async def lifespan(app: FastAPI):
                 resource_manager.model_memory_usage[_surviving.id] = _surviving.memory_gb
     launcher_factory = LauncherFactory()
     auto_suspend_manager = AutoSuspendManager(registry, launcher_factory, resource_manager)
-    from supervisor.models_config import get_default_model_alias
+    from supervisor.models_config import get_default_model_alias, get_vision_model_alias
     default_model_alias = get_default_model_alias(settings.startup_profile)
-    gateway_sync = GatewaySync(registry, default_model_alias=default_model_alias)
+    vision_model_alias = get_vision_model_alias(settings.startup_profile)
+    gateway_sync = GatewaySync(
+        registry,
+        default_model_alias=default_model_alias,
+        vision_model_alias=vision_model_alias,
+    )
     restart_manager = RestartManager(registry, launcher_factory, resource_manager)
     health_check_manager = HealthCheckManager(registry, restart_manager)
 

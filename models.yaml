@@ -46,6 +46,7 @@ models:
     model_type: "chat"
     quantization: "modelopt"
     default: true
+    vision_default: true  # natively multimodal — "vision" alias resolves here when qwen is the profile's VLM
     memory_gb: 40  # single-host default; image-indexing overrides to 85
     idle_timeout_minutes: 60
     auto_suspend_enabled: false
@@ -142,6 +143,7 @@ models:
     name: "cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit"
     backend: "vllm"
     model_type: "chat"
+    vision_default: true  # gateway "vision" alias resolves here in coding profile
     host: worker1
     quantization: "awq"  # auto-detected; launcher skips the flag for AWQ
     memory_gb: 10  # → gpu_memory_utilization ≈ 0.084 (proven 0.08 standalone)
