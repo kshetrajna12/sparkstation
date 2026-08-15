@@ -3,20 +3,20 @@
 
 This project has access to local LLM models through Sparkstation gateway.
 
-**Active profile**: `image-indexing`
-
 ## Available Models
 
-- `qwen3.8-27b` - RadixArk/Qwen3.8-27B-NVFP4 (dense 27B, vision+video, 262K ctx, MTP)
+- `dsv4-flash` - deepseek-v4-flash-0731
+- `qwen3-vl-4b` - cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit
 - `bge-m3` - BAAI/bge-m3
 - `clip-vit` - openai/clip-vit-large-patch14
-- `species-detect` - species-ensemble
 - `face-detect` - face-recognition
+- `default` - alias for the loaded profile's default chat model (currently `dsv4-flash`). Prefer this unless you need a specific model.
 
 ## Available Profiles
 
 Switch profiles with `sparkstation start -d --profile <name>`:
 
+- **coding**: dsv4-flash, qwen3-vl-4b, bge-m3, clip-vit, face-detect
 - **dev**: qwen3.8-27b
 - **prod**: qwen3.8-27b
 - **inference**: qwen3.8-27b
@@ -42,7 +42,7 @@ client = OpenAI(
 
 # Make a request
 response = client.chat.completions.create(
-    model="qwen3-vl-4b",
+    model="dsv4-flash",
     messages=[
         {"role": "user", "content": "Hello!"}
     ]
@@ -58,7 +58,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer dummy-key" \
   -d '{
-    "model": "qwen3-vl-4b",
+    "model": "dsv4-flash",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -67,7 +67,7 @@ curl http://localhost:8000/v1/chat/completions \
 
 ```python
 stream = client.chat.completions.create(
-    model="qwen3-vl-4b",
+    model="dsv4-flash",
     messages=[{"role": "user", "content": "Tell me a story"}],
     stream=True
 )
@@ -79,13 +79,13 @@ for chunk in stream:
 
 ## Vision (Image Analysis)
 
-The `None` model supports vision capabilities. You can pass images via URL or base64:
+The `qwen3-vl-4b` model supports vision capabilities. You can pass images via URL or base64:
 
 ### With Image URL
 
 ```python
 response = client.chat.completions.create(
-    model="None",
+    model="qwen3-vl-4b",
     messages=[
         {
             "role": "user",
@@ -107,7 +107,7 @@ with open("image.jpg", "rb") as f:
     image_data = base64.b64encode(f.read()).decode('utf-8')
 
 response = client.chat.completions.create(
-    model="None",
+    model="qwen3-vl-4b",
     messages=[
         {
             "role": "user",
@@ -126,14 +126,14 @@ response = client.chat.completions.create(
 
 Sparkstation provides text embedding models for semantic search, RAG, and similarity tasks.
 
-### Text Embeddings (bge-large)
+### Text Embeddings (bge-m3)
 
-Generate embeddings for text using the `bge-large` model:
+Generate embeddings for text using the `bge-m3` model:
 
 ```python
 # Generate text embeddings
 response = client.embeddings.create(
-    model="bge-large",
+    model="bge-m3",
     input="Hello world"
 )
 
@@ -148,7 +148,7 @@ Generate embeddings for multiple inputs at once:
 
 ```python
 response = client.embeddings.create(
-    model="bge-large",
+    model="bge-m3",
     input=["First document", "Second document", "Third document"]
 )
 
@@ -228,10 +228,18 @@ print(f"Similarity: {similarity}")
 - Models are already running and ready to use
 - Use the gateway endpoint (`http://localhost:8000/v1`) for all requests
 - All models support standard OpenAI APIs:
-  - Chat: `/v1/chat/completions` (qwen3.8-27b, bge-m3, species-detect, face-detect)
-  - Embeddings: `/v1/embeddings` (clip-vit)
+  - Chat: `/v1/chat/completions` (dsv4-flash, qwen3-vl-4b)
+  - Embeddings: `/v1/embeddings` (bge-m3, clip-vit)
 
 ### Model-Specific Details
+
+- **Vision Chat** (`qwen3-vl-4b`):
+  - Supports image analysis via URL or base64
+  - Uses standard OpenAI vision format: `{"type": "image_url", "image_url": {"url": "..."}}`
+
+- **Text Embeddings** (`bge-m3`):
+  - Generates 1024-dim embeddings for text semantic tasks
+  - Standard format: `input="text"` or `input=["text1", "text2"]`
 
 - **Image Embeddings** (`clip-vit`):
   - Generates 768-dim embeddings for images and cross-modal search

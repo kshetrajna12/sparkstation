@@ -48,11 +48,15 @@ def run_init(profile):
                 )
                 sys.exit(1)
             for m in profiles_info[target_profile]:
-                models_info.append({"name": m["name"], "full_name": m["full_name"]})
+                models_info.append(
+                    {"name": m["name"], "full_name": m["full_name"], "model_type": m["model_type"]}
+                )
         else:
             # No profile hint anywhere — enumerate every defined model
             for alias, defn in cfg.models.items():
-                models_info.append({"name": alias, "full_name": defn.name})
+                models_info.append(
+                    {"name": alias, "full_name": defn.name, "model_type": defn.model_type}
+                )
     except Exception:
         # Fallback if models.yaml doesn't exist or can't be parsed
         models_info = [
@@ -65,6 +69,19 @@ def run_init(profile):
 
     # Generate model list for documentation
     model_list_str = "\n".join([f"- `{m['name']}` - {m['full_name']}" for m in models_info])
+
+    # Document the profile-following `default` alias so clients prefer it over
+    # pinning a model name that goes stale on the next profile/model swap.
+    try:
+        from supervisor.models_config import get_default_model_alias
+        _default_alias = get_default_model_alias(profile)
+        if _default_alias:
+            model_list_str += (
+                f"\n- `default` - alias for the loaded profile's default chat model "
+                f"(currently `{_default_alias}`). Prefer this unless you need a specific model."
+            )
+    except Exception:
+        pass
 
     # Generate profiles section
     profiles_section = ""
@@ -90,12 +107,31 @@ Switch profiles with `sparkstation start -d --profile <name>`:
     has_gpt_oss = "gpt-oss-20b" in model_aliases
     has_nemotron = "nemotron3-nano" in model_aliases
 
-    # Pick the primary chat model for examples
+    # Pick the primary chat model for examples: first chat-type model in the
+    # profile (profile order puts the daily driver first), falling back to the
+    # legacy preference list for configs without model_type info.
     chat_model = "qwen3-vl-4b"
-    for name in ["qwen3-vl-30b", "qwen3-vl-4b", "nemotron3-nano", "gpt-oss-20b"]:
-        if name in model_aliases:
-            chat_model = name
+    for m in models_info:
+        if m.get("model_type") == "chat":
+            chat_model = m["name"]
             break
+    else:
+        for name in ["qwen3-vl-30b", "qwen3-vl-4b", "nemotron3-nano", "gpt-oss-20b"]:
+            if name in model_aliases:
+                chat_model = name
+                break
+
+    # Text-embedding model for the embeddings examples (clip-vit is
+    # image-embedding and documented separately).
+    text_embed_model = None
+    for m in models_info:
+        if m.get("model_type") == "embedding" and m["name"] != "clip-vit":
+            text_embed_model = m["name"]
+            break
+    if text_embed_model is None and "bge-large" in model_aliases:
+        text_embed_model = "bge-large"
+    # The embeddings doc section always renders — never let it say "None"
+    text_embed_model = text_embed_model or "bge-m3"
 
     # Detect vision-capable model (any qwen3-vl variant)
     vision_model = None
@@ -259,8 +295,8 @@ curl http://localhost:8000/v1/images/generations \\
     if has_gpt_oss:
         model_details_lines.append("""- **Reasoning** (`gpt-oss-20b`):
   - Includes reasoning traces in `reasoning_content` field""")
-    if "bge-large" in model_aliases:
-        model_details_lines.append("""- **Text Embeddings** (`bge-large`):
+    if text_embed_model:
+        model_details_lines.append(f"""- **Text Embeddings** (`{text_embed_model}`):
   - Generates 1024-dim embeddings for text semantic tasks
   - Standard format: `input="text"` or `input=["text1", "text2"]`""")
     if has_clip:
@@ -278,10 +314,10 @@ curl http://localhost:8000/v1/images/generations \\
 
     # Build API capabilities list
     api_lines = []
-    chat_models = [m["name"] for m in models_info if m["name"] not in ("bge-large", "clip-vit", "flux-dev")]
+    chat_models = [m["name"] for m in models_info if m.get("model_type", "chat") == "chat"]
     if chat_models:
         api_lines.append(f"  - Chat: `/v1/chat/completions` ({', '.join(chat_models)})")
-    embed_models = [m["name"] for m in models_info if m["name"] in ("bge-large", "clip-vit")]
+    embed_models = [m["name"] for m in models_info if m.get("model_type") == "embedding" or m["name"] == "clip-vit"]
     if embed_models:
         api_lines.append(f"  - Embeddings: `/v1/embeddings` ({', '.join(embed_models)})")
     if has_flux:
@@ -400,14 +436,14 @@ response = client.chat.completions.create(
 
 Sparkstation provides text embedding models for semantic search, RAG, and similarity tasks.
 
-### Text Embeddings (bge-large)
+### Text Embeddings ({text_embed_model})
 
-Generate embeddings for text using the `bge-large` model:
+Generate embeddings for text using the `{text_embed_model}` model:
 
 ```python
 # Generate text embeddings
 response = client.embeddings.create(
-    model="bge-large",
+    model="{text_embed_model}",
     input="Hello world"
 )
 
@@ -422,7 +458,7 @@ Generate embeddings for multiple inputs at once:
 
 ```python
 response = client.embeddings.create(
-    model="bge-large",
+    model="{text_embed_model}",
     input=["First document", "Second document", "Third document"]
 )
 
