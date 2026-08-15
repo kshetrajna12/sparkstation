@@ -1046,7 +1046,9 @@ async def prometheus_targets():
     if registry is None:
         raise HTTPException(status_code=503, detail="Registry not initialized")
 
-    ENGINES_WITH_METRICS = {"vllm", "sglang", "trt-llm"}
+    # dspark = the Anemll DSV4 stack, vLLM underneath — its head serves the
+    # full vllm /metrics family on the API port.
+    ENGINES_WITH_METRICS = {"vllm", "sglang", "trt-llm", "dspark"}
     targets = []
     for model in await registry.list_running():
         backend = model.backend.value if hasattr(model.backend, "value") else str(model.backend)
