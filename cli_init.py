@@ -80,6 +80,13 @@ def run_init(profile):
                 f"\n- `default` - alias for the loaded profile's default chat model "
                 f"(currently `{_default_alias}`). Prefer this unless you need a specific model."
             )
+        from supervisor.models_config import get_vision_model_alias as _gva
+        _vision_alias = _gva(profile)
+        if _vision_alias:
+            model_list_str += (
+                f"\n- `vision` - alias for the loaded profile's vision model "
+                f"(currently `{_vision_alias}`). Use this for any image-understanding request."
+            )
     except Exception:
         pass
 
@@ -133,12 +140,22 @@ Switch profiles with `sparkstation start -d --profile <name>`:
     # The embeddings doc section always renders — never let it say "None"
     text_embed_model = text_embed_model or "bge-m3"
 
-    # Detect vision-capable model (any qwen3-vl variant)
+    # Vision model for examples: prefer the profile-following "vision"
+    # gateway alias (published by gateway_sync from vision_default markers in
+    # models.yaml) so generated docs never go stale on a model swap. Fall back
+    # to name-sniffing for configs predating the alias.
     vision_model = None
-    for name in model_aliases:
-        if name.startswith("qwen3-vl"):
-            vision_model = name
-            break
+    try:
+        from supervisor.models_config import get_vision_model_alias
+        if get_vision_model_alias(profile):
+            vision_model = "vision"
+    except Exception:
+        pass
+    if vision_model is None:
+        for name in model_aliases:
+            if name.startswith("qwen3-vl"):
+                vision_model = name
+                break
 
     # Pick the reasoning model for examples
     reasoning_model = None
@@ -285,6 +302,7 @@ curl http://localhost:8000/v1/images/generations \\
     model_details_lines = []
     if vision_model:
         model_details_lines.append(f"""- **Vision Chat** (`{vision_model}`):
+  - Profile-following alias — always routes to the loaded profile's vision model
   - Supports image analysis via URL or base64
   - Uses standard OpenAI vision format: `{{"type": "image_url", "image_url": {{"url": "..."}}}}`""")
     if has_nemotron:

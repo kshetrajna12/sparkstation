@@ -11,6 +11,7 @@ This project has access to local LLM models through Sparkstation gateway.
 - `clip-vit` - openai/clip-vit-large-patch14
 - `face-detect` - face-recognition
 - `default` - alias for the loaded profile's default chat model (currently `dsv4-flash`). Prefer this unless you need a specific model.
+- `vision` - alias for the loaded profile's vision model (currently `qwen3-vl-4b`). Use this for any image-understanding request.
 
 ## Available Profiles
 
@@ -79,13 +80,13 @@ for chunk in stream:
 
 ## Vision (Image Analysis)
 
-The `qwen3-vl-4b` model supports vision capabilities. You can pass images via URL or base64:
+The `vision` model supports vision capabilities. You can pass images via URL or base64:
 
 ### With Image URL
 
 ```python
 response = client.chat.completions.create(
-    model="qwen3-vl-4b",
+    model="vision",
     messages=[
         {
             "role": "user",
@@ -107,7 +108,7 @@ with open("image.jpg", "rb") as f:
     image_data = base64.b64encode(f.read()).decode('utf-8')
 
 response = client.chat.completions.create(
-    model="qwen3-vl-4b",
+    model="vision",
     messages=[
         {
             "role": "user",
@@ -233,7 +234,8 @@ print(f"Similarity: {similarity}")
 
 ### Model-Specific Details
 
-- **Vision Chat** (`qwen3-vl-4b`):
+- **Vision Chat** (`vision`):
+  - Profile-following alias — always routes to the loaded profile's vision model
   - Supports image analysis via URL or base64
   - Uses standard OpenAI vision format: `{"type": "image_url", "image_url": {"url": "..."}}`
 
