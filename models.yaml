@@ -25,7 +25,7 @@ cluster:
     # `host: worker1` needs that file present on the machine that runs the
     # supervisor.
 
-default_profile: image-indexing
+default_profile: coding  # TEMP 2026-08-15: --profile flag broken (supervisor never reads STARTUP_PROFILE); restore image-indexing after fixing
 
 # ─── Canonical model specs (one entry per alias) ────────────────────────────
 
@@ -73,7 +73,7 @@ models:
     backend: "vllm"
     model_type: "embedding"
     quantization: "none"
-    memory_gb: 2.5
+    memory_gb: 2  # squeezed 2.5->2 (2026-08-15): weights ~1.2GB; embed models have no KV cache
     auto_suspend_enabled: false
     docker_image: "nvcr.io/nvidia/vllm:26.01-py3"
 
@@ -82,7 +82,7 @@ models:
     backend: "clip"
     model_type: "embedding"
     quantization: "none"
-    memory_gb: 5
+    memory_gb: 3  # squeezed 5->3 (2026-08-15): measured 0.64GB RSS; margin for CUDA allocs
     idle_timeout_minutes: 30
     auto_suspend_enabled: false
 
@@ -91,7 +91,7 @@ models:
     backend: "species"
     model_type: "detection"
     quantization: "none"
-    memory_gb: 5
+    memory_gb: 3  # squeezed 5->3 (2026-08-15): measured 2.2GB under load
     idle_timeout_minutes: 60
     auto_suspend_enabled: false
 
@@ -125,6 +125,14 @@ models:
 # ─── Profiles (dict of alias → override) ────────────────────────────────────
 
 profiles:
+  # Coding profile (2026-08-15): embeddings + vector search only — the chat slot
+  # is DSV4-Flash on the MiaAI 2x-Spark stack (outside supervisor, port 8888,
+  # vision sidecar on 8889). See ~/dsv4-2xspark + memory: muse-glimmer-trial.
+  coding:
+    bge-m3: {}
+    clip-vit: {}
+    face-detect: {}  # added 2026-08-15 (user request): ~1GB, gallery lives on primary
+
   # Single-node development / production / inference — chat only on primary,
   # matches pre-cluster defaults.
   dev:
