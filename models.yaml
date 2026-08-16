@@ -118,6 +118,14 @@ models:
   dsv4-flash:
     # DeepSeek-V4-Flash-0731 on the Anemll DSpark 2-node TP=2 stack (both
     # Sparks, NVFP4 + nvfp4_ds_mla KV, DSpark spec-decode k=5, 1M ctx).
+    # REASONING BUDGET CONTRACT (2026-08-15): max_tokens caps reasoning +
+    # content COMBINED. Server default effort is `low` (.env.dspark
+    # DEFAULT_THINKING — was `max`, which starved structured-output clients:
+    # ~12K reasoning tokens ate any modest budget → empty content,
+    # finish_reason=length). Deep reasoning = send chat_template_kwargs
+    # {"thinking":true,"reasoning_effort":"high"|"max"} and size max_tokens
+    # accordingly, or cap with thinking_token_budget. Same class of care
+    # applies to qwen3.8-27b (thinking hybrid) under other profiles.
     # The dspark launcher wraps ~/dsv4-2xspark start/stop scripts — it does
     # NOT build docker commands. `name` is the SERVED model name (what
     # /v1/models reports and what LiteLLM must send), not a HF path; the
