@@ -450,6 +450,43 @@ response = client.chat.completions.create(
 
 **Note**: Vision requests use more tokens (~5000+ tokens for image processing).
 {reasoning_section}
+## Reasoning Models & Token Budgets (IMPORTANT)
+
+Chat models on this gateway may be reasoning models (e.g. DeepSeek-V4-Flash,
+Qwen thinking variants). **`max_tokens` caps reasoning + final content
+COMBINED.** The server's default reasoning effort is `low`; a complex prompt
+can still spend most of a small budget on reasoning.
+
+**Symptom of an under-sized budget**: `content` empty, `reasoning_content`
+non-empty, `finish_reason: "length"` — the model ran out of tokens before
+writing the answer. Raise `max_tokens`, or cap reasoning explicitly.
+
+```python
+# Bounded reasoning — guarantees room for the final answer:
+response = client.chat.completions.create(
+    model="default",
+    messages=[...],
+    max_tokens=4096,
+    extra_body={{"thinking_token_budget": 2048}},   # reasoning hard-capped
+)
+
+# Deep reasoning on demand (size max_tokens generously — 16K+):
+response = client.chat.completions.create(
+    model="default",
+    messages=[...],
+    max_tokens=16384,
+    extra_body={{"chat_template_kwargs": {{"thinking": True, "reasoning_effort": "high"}}}},
+)
+
+# No reasoning at all (fastest, for simple/structured tasks):
+#   extra_body={{"chat_template_kwargs": {{"thinking": False}}}}
+```
+
+These knobs pass through the gateway unchanged. For structured output
+(`response_format` json_schema), prefer `thinking_token_budget` or
+`thinking: False` — reasoning length is highly variable and can starve the
+JSON answer on tight budgets.
+
 ## Embeddings
 
 Sparkstation provides text embedding models for semantic search, RAG, and similarity tasks.
