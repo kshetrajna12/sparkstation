@@ -61,11 +61,11 @@ SparkStation is probably unnecessary for:
 
 1. **Profile-driven model fleets**: define workload-specific desired state in `models.yaml`.
 2. **Multi-Spark logical host placement**: place model services on roles such as `primary` and `worker1`.
-3. **Stable model aliases**: keep client configuration stable while changing model IDs, images, quantization, or runtime flags.
+3. **Stable model aliases**: keep client configuration stable while changing model IDs, images, quantization, or runtime flags. Profile-following capability aliases (`default` for chat, `vision` for image understanding) resolve to the loaded profile's designated model automatically.
 4. **LiteLLM gateway synchronization**: register running models with the OpenAI-compatible gateway.
 5. **Multi-backend and multi-model-type support**: run chat, embeddings, image, detection, recognition, and custom services behind the same management plane.
 6. **DGX Spark unified-memory admission control**: reserve configured memory before launching local services.
-7. **Ordered model startup**: launch profile models in configuration order, with extra handling for large and image-generation services.
+7. **Ordered, non-blocking startup**: models load as a background task in phase order (multi-node stacks first), the management API binds immediately, and the gateway picks up models incrementally as they become healthy.
 8. **Health monitoring**: periodic probes detect unresponsive services.
 9. **Automatic restart**: failed services can restart with configured backoff and attempt limits.
 10. **State reconciliation after supervisor restart**: persisted model state is compared with actual Docker containers.
@@ -73,6 +73,7 @@ SparkStation is probably unnecessary for:
 12. **Prometheus metrics**: expose supervisor, model, resource, and gateway proxy metrics.
 13. **API-key-protected management endpoints**: protect lifecycle mutation endpoints with `API_KEY`.
 14. **Docker-based backend isolation**: run model services in backend-specific containers.
+15. **Multi-node stacks as managed models** (`dspark` backend): wrap an external orchestration script pair so a tensor-parallel multi-machine deployment gets the same lifecycle, health, and gateway treatment as any single-node model.
 
 ## Architecture
 
@@ -157,13 +158,13 @@ Example:
 ```yaml
 profiles:
   openclaw:
-    qwen3.5-35b:
+    qwen3.8-27b:
       extra_args:
         max_concurrent_requests: 8
     bge-m3: {}
 
   image-indexing:
-    qwen3.5-35b:
+    qwen3.8-27b:
       host: worker1
       memory_gb: 100
     bge-m3: {}
@@ -325,21 +326,24 @@ Common model fields:
 
 ```yaml
 models:
-  qwen3.5-35b:
-    name: nvidia/Qwen3.6-35B-A3B-NVFP4
+  qwen3.8-27b:
+    name: RadixArk/Qwen3.8-27B-NVFP4
     backend: vllm
     model_type: chat
     host: primary
+    quantization: modelopt
     memory_gb: 40
-    docker_image: vllm/vllm-openai:nightly-20260611-goodgb10
-    env_vars:
-      VLLM_FP8_MOE_BACKEND: flashinfer_cutlass
+    default: true          # gateway "default" alias resolves here
+    vision_default: true   # gateway "vision" alias (multimodal model)
+    docker_image: vllm/vllm-openai:muse-glimmer-arm64-cu130
+    speculative_method: mtp
+    num_speculative_tokens: 2
     extra_args:
       max_model_len: 65536
-      max_concurrent_requests: 4
+      max_concurrent_requests: 8
 ```
 
-Supported fields are parsed by `supervisor.models_config.ModelDefinition` and include `name`, `backend`, `model_type`, `host`, `quantization`, `memory_gb`, `idle_timeout_minutes`, `auto_suspend_enabled`, speculative decoding fields, `default`, `extra_args`, `docker_image`, `env_vars`, and `volumes`.
+Supported fields are parsed by `supervisor.models_config.ModelDefinition` and include `name`, `backend`, `model_type`, `host`, `quantization`, `memory_gb`, `idle_timeout_minutes`, `auto_suspend_enabled`, speculative decoding fields, `default`, `vision_default`, `extra_args`, `docker_image`, `env_vars`, and `volumes`.
 
 ## Profiles
 
@@ -348,10 +352,10 @@ Profiles describe desired state for a workload. A profile entry enables an alias
 ```yaml
 profiles:
   inference:
-    qwen3.5-35b: {}
+    qwen3.8-27b: {}
 
   openclaw:
-    qwen3.5-35b:
+    qwen3.8-27b:
       extra_args:
         max_concurrent_requests: 8
     bge-m3: {}
@@ -365,7 +369,7 @@ Useful commands:
 sparkstation start -d --profile openclaw
 sparkstation models start bge-m3 --profile openclaw
 sparkstation models stop bge-m3
-sparkstation models swap qwen3.5-35b --profile image-indexing
+sparkstation models swap qwen3.8-27b --profile image-indexing
 sparkstation gateway restart
 ```
 
@@ -431,7 +435,7 @@ Distributed execution means one model is served by a distributed runtime, for ex
 - multi-node inference
 - distributed runtime execution
 
-SparkStation does not implement distributed inference itself. If a backend supports distributed execution, that behavior belongs to the underlying inference runtime or external tooling. SparkStation can still manage the resulting service as a configured model backend.
+SparkStation does not implement distributed inference itself — that behavior belongs to the underlying runtime. It can, however, manage a multi-node stack as a first-class model via the `dspark` backend: the launcher delegates start/stop to the stack's own orchestration scripts, and the supervisor provides registration, health checks, gateway routing, metrics discovery, and restart-the-whole-stack-together recovery. This is how a 2-Spark tensor-parallel DeepSeek deployment runs under the same management plane as single-node models.
 
 ## Lifecycle and Recovery
 

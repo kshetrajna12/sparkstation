@@ -245,7 +245,7 @@ cluster:
 profiles:
   image-indexing:
     overrides:
-      qwen3.5-35b:
+      qwen3.8-27b:
         host: worker1
         memory_gb: 100
         extra_args:
@@ -269,17 +269,17 @@ cluster:
 With the profile override above in place:
 
 ```bash
-sparkstation models swap qwen3.5-35b
+sparkstation models swap qwen3.8-27b
 ```
 
 The supervisor tears down the primary-hosted instance, launches a new container on `worker1` over SSH, updates gateway routing, and reports the new host in `sparkstation status`.
 
 ### Rollback (chat back to primary)
 
-Edit the `image-indexing` profile in `models.yaml` — either delete the `host: worker1` line from the `qwen3.5-35b` override, or set it to `host: primary` — then re-swap:
+Edit the `image-indexing` profile in `models.yaml` — either delete the `host: worker1` line from the `qwen3.8-27b` override, or set it to `host: primary` — then re-swap:
 
 ```bash
-sparkstation models swap qwen3.5-35b
+sparkstation models swap qwen3.8-27b
 ```
 
 The chat model returns to the primary host with its base spec (default `max_model_len` / `max_num_seqs`, no expanded batching room).
@@ -312,7 +312,7 @@ The TTFT collapse at c=16 (5.7 s → 1.4 s) is the largest UX win for multi-agen
 
 /var/lib/models/                # HuggingFace model cache (shared)
 ├── models--Qwen--Qwen3-VL-4B-Instruct-FP8/
-└── models--openai--gpt-oss-20b/
+└── models--RadixArk--Qwen3.8-27B-NVFP4/
 
 /var/log/sparkstation/          # Sparkstation logs (if configured)
 └── sparkstation.log            # Rotating log file
@@ -459,8 +459,8 @@ autoload:
         gpu_memory_utilization: 0.25
 
     # Reasoning model
-    - name: "openai/gpt-oss-20b"
-      alias: "gpt-oss-20b"
+    - name: "RadixArk/Qwen3.8-27B-NVFP4"
+      alias: "qwen3.8-27b"
       backend: "vllm"
       quantization: "none"  # Uses built-in MXFP4
       idle_timeout_minutes: 60

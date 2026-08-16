@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0] - 2026-08-15
+
+### Added
+- **`dspark` backend**: multi-node model stacks as first-class supervisor
+  citizens. The launcher wraps an external orchestration script pair
+  (start/stop) rather than building docker commands — used to run
+  DeepSeek-V4-Flash TP=2 across both Sparks (Anemll DSpark stack, 1M ctx)
+  with restart-the-pair-together semantics and automatic recovery from
+  distributed-rendezvous deadlocks (failed launch → full 2-node teardown →
+  one retry).
+- **Profile-following gateway aliases**: `default` (existing) is joined by
+  `vision` — models.yaml marks a `vision_default` model per profile and
+  gateway_sync publishes the alias, so vision consumers never hardcode a
+  model name that only exists in some profiles.
+- **`coding` profile**: DSV4-Flash (2-node) + small vision model + embeddings
+  + face detection, coexisting across both Sparks.
+- **Non-blocking startup**: model autoload now runs as a background task —
+  the supervisor binds its port in seconds (was: after ALL models loaded,
+  up to 15 minutes blind-waiting), and `sparkstation start -d` returns once
+  supervisor + gateway are up. `--wait` restores blocking behavior. LiteLLM
+  runs under a config watcher and picks up models incrementally as they
+  come RUNNING.
+- **systemd-aware CLI**: `stop`/`start` delegate to `systemctl` (NOPASSWD
+  rule) when the unit is active, so a manual stop is never mistaken for a
+  crash by `Restart=on-failure`. `stop` also gracefully stops all models
+  through the supervisor first — the only path that correctly tears down
+  remote-host and multi-node models.
+- **Cache & spec-decode telemetry**: recording rules + dashboard panels for
+  prefix-cache hit ratio, cached-prompt-token ratio, speculative-decoding
+  acceptance rate / accepted-per-draft, inter-token latency p50/p95, prompt
+  vs generation throughput, and per-model token-consumption accounting.
+  Dashboards deploy via `monitoring/push-dashboard.sh` (Grafana API).
+- **Live gateway regression tests** (`tests/test_gateway_live.py`,
+  auto-skipped when the gateway is down): reasoning-budget contract for
+  structured output on reasoning models.
+
+### Changed
+- **Coexistence-aware memory accounting**: model admission now checks
+  "would MemAvailable stay above `memory_safety_floor_gb` (default 8)"
+  instead of an internal usage estimate with a hardcoded +16 GB buffer —
+  externally-held memory no longer produces phantom rejections.
+- `sparkstation init` works from any directory (walk-up → `$SPARKSTATION_HOME`
+  → `~/.sparkstation/root` breadcrumb) and the generated CLAUDE.md documents
+  the `default`/`vision` aliases and the reasoning-token-budget contract
+  (`max_tokens` caps reasoning + content combined).
+- Prod chat model swapped to Qwen3.8-27B (RadixArk NVFP4, MTP-2); the
+  drifted `qwen3.5-35b` alias is retired.
+
+### Fixed
+- Supervisor Prometheus service discovery now includes dspark backends
+  (their engine metrics were invisible to every dashboard panel).
+- Init template no longer emits stale hardcoded model names — example chat,
+  vision, and embedding models are derived from the resolved profile.
+
+---
+
 ## [0.4.0] - 2026-06-30
 
 ### Added

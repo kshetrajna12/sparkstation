@@ -1,5 +1,18 @@
 # Known Issues
 
+## LiteLLM proxy broken in fresh uv tool environments (WORKED AROUND)
+
+**Status:** Permanent workaround in place (2026-08-15)
+**Affects:** the gateway's LiteLLM process after any `uv tool install --reinstall`
+
+`uv tool install` resolves dependencies fresh (it does not honor `uv.lock`),
+and recent LiteLLM releases fail at proxy startup with
+`ModuleNotFoundError: No module named 'proxy_server'`. The gateway launcher
+therefore runs LiteLLM with the **project venv's python** (locked, known-good
+version) instead of the tool env's — see `_start_litellm()` in `cli.py`.
+Nothing to do operationally; noted here so nobody "simplifies" that code back
+to `sys.executable`. Remove when a fixed LiteLLM release is locked.
+
 ## LiteLLM sends `encoding_format=null` to vLLM embeddings (PATCHED)
 
 **Status:** Workaround applied, waiting for upstream fix  
