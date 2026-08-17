@@ -154,7 +154,11 @@ models:
     vision_default: true  # gateway "vision" alias resolves here in coding profile
     host: worker1
     quantization: "awq"  # auto-detected; launcher skips the flag for AWQ
-    memory_gb: 10  # → gpu_memory_utilization ≈ 0.084 (proven 0.08 standalone)
+    # 12, not 10 (2026-08-16): dsv4's worker rank slowly grows host-side
+    # memory after boot; at 10GB the profiler found only 3.53GiB for a KV
+    # cache that needs 4.5GiB at max_model_len 32768 → relaunch-looped with
+    # "available KV cache memory" errors after a thermal suspend/resume.
+    memory_gb: 12  # → gpu_memory_utilization ≈ 0.101
     auto_suspend_enabled: false
     docker_image: "vllm/vllm-openai:muse-glimmer-arm64-cu130"
     extra_args:

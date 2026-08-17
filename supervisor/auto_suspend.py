@@ -148,15 +148,37 @@ class AutoSuspendManager:
                 await self.suspend_model(model.id)
 
     async def _suspend_least_used_model(self):
-        """Emergency suspend of least recently used model (thermal protection)."""
+        """Emergency suspend of least recently used model (thermal protection).
+
+        HOST-AWARE (2026-08-16): the temperature we monitor comes from
+        nvidia-smi on the PRIMARY — we have no visibility into other hosts'
+        thermals here. Suspending a remote-host model therefore frees
+        nothing on the hot node: during the 08-16 incident a benchmark
+        flood pinned primary at 82°C and this code suspended the vision
+        model on worker1, which cost vision downtime and a gateway bounce
+        while primary stayed hot. Only primary-host models are candidates;
+        multi-node stacks (dspark) are excluded — "suspending" one would
+        tear down a 2-node deployment that takes ~9 min to rebuild, far
+        worse than letting the GB10's own thermal throttling handle it.
+        """
         running_models = await self.registry.list_running()
-        if not running_models:
+        candidates = [
+            m for m in running_models
+            if (m.host or "primary") == "primary"
+            and (m.backend.value if hasattr(m.backend, "value") else str(m.backend)) != "dspark"
+        ]
+        if not candidates:
+            logger.warning(
+                "Thermal suspend requested but no eligible primary-host model "
+                "to suspend (remote/dspark models excluded) — relying on "
+                "hardware thermal throttling"
+            )
             return
 
         # Sort by last request time (oldest first)
-        models = sorted(running_models, key=lambda m: m.last_request_time or m.started_at)
+        models = sorted(candidates, key=lambda m: m.last_request_time or m.started_at)
         least_used = models[0]
-        logger.warning(f"Emergency thermal suspend: {least_used.id}")
+        logger.warning(f"Emergency thermal suspend: {least_used.id} (host=primary)")
         await self.suspend_model(least_used.id)
 
     async def suspend_model(self, model_id: str):

@@ -38,6 +38,17 @@ while true; do
     if [ "$new" != "$sum" ]; then
       echo "[litellm-watch] config changed; restarting LiteLLM"
       kill "$child" 2>/dev/null
+      # Escalate: uvicorn's graceful shutdown waits INDEFINITELY for open
+      # connections — a client holding a streaming response wedged the
+      # gateway for good on 2026-08-16. Give it 10s, then SIGKILL.
+      for _i in 1 2 3 4 5 6 7 8 9 10; do
+        kill -0 "$child" 2>/dev/null || break
+        sleep 1
+      done
+      if kill -0 "$child" 2>/dev/null; then
+        echo "[litellm-watch] graceful shutdown stuck; SIGKILL"
+        kill -9 "$child" 2>/dev/null
+      fi
       wait "$child" 2>/dev/null
       break
     fi

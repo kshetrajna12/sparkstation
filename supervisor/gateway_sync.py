@@ -182,9 +182,14 @@ class GatewaySync:
             # Update model_list
             config["model_list"] = model_list
 
-            # Write updated config
-            with open(config_path, "w") as f:
+            # Write updated config ATOMICALLY (tmp + rename): the CLI's
+            # watcher md5-polls this file every 5s, and a plain open("w")
+            # lets it read a half-written config — one logical change then
+            # looks like two, double-bouncing LiteLLM.
+            tmp_path = config_path.with_suffix(".yaml.tmp")
+            with open(tmp_path, "w") as f:
                 yaml.dump(config, f, default_flow_style=False)
+            tmp_path.replace(config_path)
 
             logger.info(f"Wrote litellm.yaml with {len(model_list)} models (gateway watcher will restart LiteLLM)")
 
