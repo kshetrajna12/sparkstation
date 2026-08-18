@@ -92,10 +92,14 @@ def verify_b(clone: Path) -> dict:
         if checks["function_exists"]:
             f = mod.median_ppsf
             try:
+                # ppsf values 200/300/400 -> median unambiguously 300.
+                # (Original check used values [200,300,200] but asserted 300 —
+                # a GRADER bug that failed correct implementations; caught
+                # live on the dsv4 arm 2026-08-17 22:14.)
                 checks["basic"] = abs(f([
                     {"sale_price": 400000, "sqft": 2000},
                     {"sale_price": 330000, "sqft": 1100},
-                    {"sale_price": 500000, "sqft": 2500},
+                    {"sale_price": 1000000, "sqft": 2500},
                 ]) - 300.0) < 1e-6
                 checks["ignores_bad_sqft"] = abs(f([
                     {"sale_price": 400000, "sqft": 2000},
