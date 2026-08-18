@@ -479,8 +479,21 @@ if __name__ == "__main__":
     ap.add_argument("--efforts", default="medium,high",
                     help="comma list, one per tier (dsv4: low,high)")
     ap.add_argument("--compare", nargs=2, metavar=("A", "B"))
+    ap.add_argument("--check-solution", nargs=2, metavar=("TASK_ID", "FILE"),
+                    help="verify a solution FILE (e.g. written by a pi mission) against TASK_ID's checks")
     args = ap.parse_args()
     root = Path(args.outdir)
+    if args.check_solution:
+        tid, fpath = args.check_solution
+        task = next((t for t in TASKS if t["id"] == tid), None)
+        if task is None:
+            print(json.dumps({"pass": False, "error": f"unknown task {tid}"})); sys.exit(2)
+        fp = Path(fpath)
+        if not fp.exists():
+            print(json.dumps({"pass": False, "error": "solution file missing"})); sys.exit(1)
+        ok, err = run_check(fp.read_text(), task["check"])
+        print(json.dumps({"pass": ok, "error": None if ok else err[-300:]}))
+        sys.exit(0 if ok else 1)
     if args.compare:
         compare(root, *args.compare)
     else:
