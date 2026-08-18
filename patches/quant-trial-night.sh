@@ -131,7 +131,7 @@ open(p, "w").write(s)
 PYEOF
   sparkstation models stop qwen3.8-27b >> "$LOG" 2>&1
   sleep 10
-  sparkstation models start qwen3.8-27b >> "$LOG" 2>&1 || true
+  sparkstation models start qwen3.8-27b --profile image-indexing >> "$LOG" 2>&1 || true  # profile flag REQUIRED: without it the alias resolves through default_profile (coding) and boots NVFP4 — cost us the fp8 arm on night 1
 }
 
 cd "$REPO"
