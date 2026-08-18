@@ -340,8 +340,9 @@ for bad in ["let x = in 3", "x+1", "if 1 then 2", "let 3 = 4 in 5", "1 +", "()"]
         run(bad); assert False, bad
     except ValueError:
         pass
+import re as _re
 src = {code!r}
-assert "eval(" not in src and "exec(" not in src
+assert not _re.search(r"(?<!def )(?<![\\w.])(eval|exec)\\s*\\(", src), "builtin eval/exec used"
 """,
     },
     {
