@@ -33,12 +33,26 @@ PLANT_NEW = """        beds = r["beds"] if r["beds"] is not None else 0
 
 
 def load_comps(clone: Path, data_dir: Path):
-    """Import <clone>/src/realtorzero/tools/comps.py with config stubbed."""
+    """Import <clone>/src/realtorzero/tools/comps.py with config stubbed.
+
+    The realtorzero/realtorzero.tools packages get REAL __path__ entries into
+    the clone so any sibling modules the agent created (e.g. a geo_math.py
+    extracted during a refactor mission) import normally — only config is
+    stubbed. Without this, a correct multi-file refactor crashed the grader
+    (caught live 2026-08-17 during the dsv4 escalation arm).
+    """
+    for name in list(sys.modules):
+        if name == "realtorzero" or name.startswith("realtorzero."):
+            del sys.modules[name]
     pkg = types.ModuleType("realtorzero")
+    pkg.__path__ = [str(clone / "src/realtorzero")]
+    tools = types.ModuleType("realtorzero.tools")
+    tools.__path__ = [str(clone / "src/realtorzero/tools")]
     cfg = types.ModuleType("realtorzero.config")
     cfg.DATA_DIR = data_dir
     cfg.HTTP_USER_AGENT = "trial"
     sys.modules["realtorzero"] = pkg
+    sys.modules["realtorzero.tools"] = tools
     sys.modules["realtorzero.config"] = cfg
     path = clone / "src/realtorzero/tools/comps.py"
     spec = importlib.util.spec_from_file_location("realtorzero.tools.comps", path)
