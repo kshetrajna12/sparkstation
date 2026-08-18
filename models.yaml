@@ -214,14 +214,14 @@ profiles:
   # seqs. Aux backends stay on primary.
   image-indexing:
     qwen3.8-27b:
-      # MAX-QUALITY variant (2026-08-17, user decision): official Qwen
-      # block-FP8 — documented near-identical to BF16, and the VISION TOWER
-      # stays unquantized BF16 (norms/gates/embeddings too), so image
-      # understanding takes zero quant hit. ~29GiB weights vs NVFP4's 23;
-      # slower single-stream (FP8+MTP measured 14.8 tok/s on qwen-day) but
-      # indexing throughput comes from concurrency on a dedicated node.
-      name: "Qwen/Qwen3.8-27B-FP8"
-      quantization: "none"  # vLLM auto-detects the HF fp8 block-quant config
+      # RadixArk NVFP4 (base spec) — quant decision 2026-08-17 after deep
+      # research: the documented NVFP4 quality failures are FULL-NVFP4 builds
+      # that quantize the (linear-)attention path. RadixArk's mixed recipe
+      # keeps attention FP8 and linear-attn/VISION/MTP tensors in BF16 (only
+      # MLPs are 4-bit) — measured GSM8K 97.3 / Terminal-Bench 73.8, and our
+      # own qwen-day photo replay ranked it best-of-all-models. ~23.6 tok/s
+      # vs FP8's 14.8 — usable for coding. Official FP8 stays cached on both
+      # nodes for an A/B quality replay if doubts resurface.
       host: worker1
       memory_gb: 90  # dedicated node; +5 over NVFP4-era 85 for the fatter weights
       extra_args:
