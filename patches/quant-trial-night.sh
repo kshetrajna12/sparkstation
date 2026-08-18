@@ -13,7 +13,7 @@ OUT="$HOME/.sparkstation/quant-ab/night-$(date +%Y%m%d)"
 LOG="$OUT/night.log"
 RESULTS="$OUT/results.jsonl"
 DEADLINE_H=7   # after 07:00 local: stop starting new work, restore, report
-PI_TIMEOUT=1800
+PI_TIMEOUT="${PI_TIMEOUT:-1800}"   # qwen arms need ~2x dsv4 (half the tok/s)
 mkdir -p "$OUT"
 
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
@@ -138,16 +138,20 @@ cd "$REPO"
 log "======== NIGHT TRIAL START ========"
 log "output: $OUT"
 
-# ARM 1: dsv4 — coding profile is already live
-wait_default_serves "deepseek" || exit 1
-run_arm dsv4
+if [ "${SKIP_TO_NVFP4:-0}" != "1" ]; then
+  # ARM 1: dsv4 — coding profile is already live
+  wait_default_serves "deepseek" || exit 1
+  run_arm dsv4
+fi
 
-# ARM 2: qwen NVFP4 — switch profiles
+# ARM 2: qwen NVFP4 — switch profiles (skipped if already switched)
 if ! past_deadline; then
-  log "=== switching to image-indexing profile (qwen NVFP4) ==="
-  sparkstation stop >> "$LOG" 2>&1
-  sleep 5
-  sparkstation start -d --profile image-indexing >> "$LOG" 2>&1
+  if [ "${SKIP_TO_NVFP4:-0}" != "1" ]; then
+    log "=== switching to image-indexing profile (qwen NVFP4) ==="
+    sparkstation stop >> "$LOG" 2>&1
+    sleep 5
+    sparkstation start -d --profile image-indexing >> "$LOG" 2>&1
+  fi
   wait_default_serves "Qwen3.8-27B-NVFP4" && run_arm nvfp4
 fi
 

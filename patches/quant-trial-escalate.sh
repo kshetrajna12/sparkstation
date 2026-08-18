@@ -8,7 +8,7 @@ REPO="$HOME/src/github.com/sparkstation"
 OUT="$HOME/.sparkstation/quant-ab/night-$(date +%Y%m%d)"
 LOG="$OUT/night.log"
 RESULTS="$OUT/results.jsonl"
-PI_TIMEOUT=2400
+PI_TIMEOUT="${PI_TIMEOUT:-2400}"
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG"; }
 cd "$REPO"
 
