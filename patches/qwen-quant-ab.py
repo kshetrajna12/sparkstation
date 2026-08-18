@@ -278,6 +278,44 @@ d3 = filter_comps(rows, 33.45, -112.07, 5.0)[1]['distance_miles']
 assert abs(d3 - round(69.0*math.cos(math.radians(33.45))*0.01, 2)) < 0.02
 """,
     },
+    {
+        "id": "real-hard-valuation",
+        "max_tokens": 20000,
+        "prompt": "HARD problem from a real-estate valuation engine (this is the core of a real codebase; ZHVI = Zillow-style monthly home-value index). Implement estimate_value(subject, comps, index, as_of) -> float.\n\nInputs: subject = {{'sqft': int}}; comps = list of {{'sale_price': int, 'sqft': int, 'sale_date': 'YYYY-MM'}}; index = dict mapping 'YYYY-MM' -> float (market index level, all needed months present incl. as_of); as_of = 'YYYY-MM'.\n\nGoal: estimate the subject's market value AS OF as_of. Real-world conditions your estimator MUST survive (the tests are built from them): (1) markets move — comps may be 6-18 months old while the index rose or fell 15-25%, so raw sale prices are stale; (2) occasional corrupted records — a comp may have a wildly wrong price (data-entry error, non-arms-length sale); (3) comps differ in size — value scales with sqft. Accuracy required: within 3% of true value on every scenario. Think carefully about HOW to use the index and how to aggregate robustly. Reply with ONLY a python code block.",
+        "check": """
+{code}
+import random
+def scenario(seed, drift, n=7, outlier=False):
+    rng = random.Random(seed)
+    months = [f"20{{24+(m//12)}}-{{(m%12)+1:02d}}" for m in range(24)]
+    idx = {{}}
+    level = 100.0
+    for mo in months:
+        idx[mo] = level
+        level *= (1 + drift + rng.uniform(-0.004, 0.004))
+    as_of = months[-1]
+    true_ppsf_asof = 300.0 * idx[as_of] / 100.0
+    comps = []
+    for i in range(n):
+        mo = months[rng.randrange(4, 20)]
+        sqft = rng.randrange(1200, 3200)
+        ppsf_at_sale = true_ppsf_asof * idx[mo] / idx[as_of]
+        price = ppsf_at_sale * sqft * (1 + rng.uniform(-0.015, 0.015))
+        comps.append({{'sale_price': int(price), 'sqft': sqft, 'sale_date': mo}})
+    if outlier:
+        comps[2] = dict(comps[2], sale_price=comps[2]['sale_price'] * 3)
+    subject = {{'sqft': 2000}}
+    truth = true_ppsf_asof * 2000
+    return subject, comps, idx, as_of, truth
+
+for seed, drift, outl in [(1, 0.012, False), (2, 0.015, True), (3, -0.010, False),
+                          (4, 0.018, True), (5, 0.000, True), (6, 0.020, False)]:
+    subj, comps, idx, as_of, truth = scenario(seed, drift, outlier=outl)
+    est = estimate_value(subj, comps, idx, as_of)
+    err = abs(est - truth) / truth
+    assert err < 0.03, f"seed={{seed}} drift={{drift}} outlier={{outl}}: est {{est:.0f}} vs truth {{truth:.0f}} ({{100*err:.1f}}% off)"
+""",
+    },
 ]
 
 # Effort TIERS, not fixed names: models name levels differently (qwen:
