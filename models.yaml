@@ -214,11 +214,24 @@ profiles:
   # seqs. Aux backends stay on primary.
   image-indexing:
     qwen3.8-27b:
+      # MAX-QUALITY variant (2026-08-17, user decision): official Qwen
+      # block-FP8 — documented near-identical to BF16, and the VISION TOWER
+      # stays unquantized BF16 (norms/gates/embeddings too), so image
+      # understanding takes zero quant hit. ~29GiB weights vs NVFP4's 23;
+      # slower single-stream (FP8+MTP measured 14.8 tok/s on qwen-day) but
+      # indexing throughput comes from concurrency on a dedicated node.
+      name: "Qwen/Qwen3.8-27B-FP8"
+      quantization: "none"  # vLLM auto-detects the HF fp8 block-quant config
       host: worker1
-      memory_gb: 85  # leave ~34 GB headroom on the 119 GB Spark for GB10 UMA stability
+      memory_gb: 90  # dedicated node; +5 over NVFP4-era 85 for the fatter weights
       extra_args:
         max_model_len: 262144  # native max; hybrid arch keeps KV cheap (DeltaNet layers = constant state)
         max_concurrent_requests: 8
+        # medium, not the template default xhigh: community-verified that
+        # xhigh overthinks pathologically (Simon Willison 2026-08-16: 22K
+        # reasoning tokens / 21 min on trivial prompts). Clients can still
+        # request any effort per-call via chat_template_kwargs.
+        default_chat_template_kwargs: '{"thinking": true, "reasoning_effort": "medium"}'
     bge-m3: {}
     clip-vit: {}
     species-detect: {}

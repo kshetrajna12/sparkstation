@@ -223,6 +223,13 @@ class VLLMLauncher(ModelLauncher):
                     "attention_backend": "--attention-backend",
                     "async_scheduling": "--async-scheduling",
                     "dtype": "--dtype",
+                    # Server-side default chat-template kwargs (JSON string),
+                    # e.g. '{"thinking": true, "reasoning_effort": "medium"}'.
+                    # Lesson from the DSV4 DEFAULT_THINKING incident: thinking
+                    # models MUST ship a sane server default — qwen3.8's
+                    # template default is xhigh, which overthinks pathologically
+                    # (22K reasoning tokens on trivial prompts).
+                    "default_chat_template_kwargs": "--default-chat-template-kwargs",
                 }
                 for arg_key, cli_flag in PASSTHROUGH_ARGS.items():
                     val = config.extra_args.get(arg_key)
