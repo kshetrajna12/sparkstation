@@ -111,6 +111,11 @@ assert list(chunked(iter('abcd'), 1)) == [['a'],['b'],['c'],['d']]
     },
 ]
 
+# Effort TIERS, not fixed names: models name levels differently (qwen:
+# low/medium/high/xhigh; DSV4: low/high/max — "medium" silently maps to LOW
+# on DSV4's parser). Pass --efforts per run; position = tier, so compare
+# aligns tier-to-tier: tier0 = "workhorse" (each model's sane daily level),
+# tier1 = "deep". Defaults suit qwen; use --efforts low,high for DSV4.
 EFFORTS = ["medium", "high"]
 SAMPLES = 2  # per task per effort
 
@@ -175,17 +180,17 @@ def trace_metrics(reasoning):
             "self_corrections": flips}
 
 
-def run_suite(base, label, outdir):
+def run_suite(base, label, outdir, efforts):
     outdir.mkdir(parents=True, exist_ok=True)
     results = []
     for task in TASKS:
-        for effort in EFFORTS:
+        for tier, effort in enumerate(efforts):
             for s in range(SAMPLES):
                 r = chat(base, task["prompt"], effort)
                 code = extract_code(r["content"])
                 ok, err = run_check(code, task["check"])
                 row = {
-                    "task": task["id"], "effort": effort, "sample": s,
+                    "task": task["id"], "effort": effort, "tier": tier, "sample": s,
                     "pass": ok, "finish": r["finish"],
                     "completion_tokens": r["completion_tokens"],
                     "wall_s": r["wall_s"], **trace_metrics(r["reasoning"]),
@@ -216,19 +221,18 @@ def agg(results, label):
 def compare(outroot, a, b):
     ra = json.loads((outroot / a / "summary.json").read_text())
     rb = json.loads((outroot / b / "summary.json").read_text())
-    print(f"\n{'':16}{a:>14}{b:>14}")
-    for eff in EFFORTS:
-        for name, sel in [("pass rate", lambda r: r["pass"]),
-                          ("med tokens", None)]:
-            xa = [r for r in ra if r["effort"] == eff]
-            xb = [r for r in rb if r["effort"] == eff]
-            if sel:
-                print(f"{eff} {name:12}{100*sum(map(sel,xa))/len(xa):>13.0f}%"
-                      f"{100*sum(map(sel,xb))/len(xb):>13.0f}%")
-            else:
-                ma = sorted(r['completion_tokens'] or 0 for r in xa)[len(xa)//2]
-                mb = sorted(r['completion_tokens'] or 0 for r in xb)[len(xb)//2]
-                print(f"{eff} {name:12}{ma:>14}{mb:>14}")
+    print(f"\n{'':20}{a:>14}{b:>14}")
+    tiers = sorted({r.get("tier", 0) for r in ra})
+    TIERNAME = {0: "workhorse", 1: "deep"}
+    for tier in tiers:
+        xa = [r for r in ra if r.get("tier", 0) == tier]
+        xb = [r for r in rb if r.get("tier", 0) == tier]
+        tn = f"{TIERNAME.get(tier, tier)}({xa[0]['effort']}/{xb[0]['effort']})"
+        print(f"{tn[:19]:19} pass{100*sum(r['pass'] for r in xa)/len(xa):>10.0f}%"
+              f"{100*sum(r['pass'] for r in xb)/len(xb):>13.0f}%")
+        ma = sorted(r['completion_tokens'] or 0 for r in xa)[len(xa)//2]
+        mb = sorted(r['completion_tokens'] or 0 for r in xb)[len(xb)//2]
+        print(f"{'':19} med tok{ma:>11}{mb:>14}")
     for name, key in [("dup 8-gram", "dup_8gram_frac"), ("self-corr", "self_corrections")]:
         print(f"{name:14}{sum(r[key] for r in ra)/len(ra):>14.3f}"
               f"{sum(r[key] for r in rb)/len(rb):>14.3f}")
@@ -245,6 +249,8 @@ if __name__ == "__main__":
     ap.add_argument("--base", default="http://127.0.0.1:8000")
     ap.add_argument("--label")
     ap.add_argument("--outdir", default=str(Path.home() / ".sparkstation" / "quant-ab"))
+    ap.add_argument("--efforts", default="medium,high",
+                    help="comma list, one per tier (dsv4: low,high)")
     ap.add_argument("--compare", nargs=2, metavar=("A", "B"))
     args = ap.parse_args()
     root = Path(args.outdir)
@@ -253,4 +259,5 @@ if __name__ == "__main__":
     else:
         if not args.label:
             ap.error("--label required for a run")
-        run_suite(args.base.rstrip("/"), args.label, root / args.label)
+        run_suite(args.base.rstrip("/"), args.label, root / args.label,
+                  [e.strip() for e in args.efforts.split(",")])
