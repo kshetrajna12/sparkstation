@@ -109,6 +109,175 @@ assert list(chunked([], 2)) == []
 assert list(chunked(iter('abcd'), 1)) == [['a'],['b'],['c'],['d']]
 """,
     },
+    # ── HARD tier (daily-driver-grade) ──────────────────────────────────
+    {
+        "id": "regex-lite",
+        "max_tokens": 16384,
+        "prompt": "Implement match(pattern, s) -> bool in Python: full-string regex matching supporting literal chars, '.' (any single char), and '*' (zero or more of the PRECEDING element). No other metachars. Implement the semantics yourself (no `re`). Reply with ONLY a python code block.",
+        "check": """
+{code}
+import sys
+sys.setrecursionlimit(100000)
+assert match("a", "aa") == False
+assert match("a*", "aa") == True
+assert match(".*", "ab") == True
+assert match("c*a*b", "aab") == True
+assert match("mis*is*p*.", "mississippi") == False
+assert match("mis*is*ip*.", "mississippi") == True
+assert match("a*a*a*a*a*a*b", "aaaaaaaaaaaaaaaaaaab") == True
+assert match("", "") == True
+assert match("a*", "") == True
+assert match(".", "") == False
+assert match("ab*", "a") == True
+assert "re." not in {code!r}
+""",
+    },
+    {
+        "id": "expr-eval",
+        "max_tokens": 16384,
+        "prompt": "Write a Python function evaluate(expr) that evaluates arithmetic expressions with + - * / ** parentheses and unary minus. Rules: normal precedence (** highest, then unary minus, then * /, then + -), ** is RIGHT-associative, unary minus binds tighter than ** on its LEFT operand (so -2**2 == 4 i.e. (-2)**2), / is float division, whitespace allowed anywhere, ints stay exact otherwise float. Raise ValueError on malformed input. No eval/exec/ast. Reply with ONLY a python code block.",
+        "check": """
+{code}
+assert evaluate("2+3*4") == 14
+assert evaluate("(2+3)*4") == 20
+assert evaluate("2**3**2") == 512
+assert evaluate("-2**2") == 4
+assert evaluate("2--3") == 5
+assert evaluate(" 7 / 2 ") == 3.5
+assert evaluate("-(3+4)*2") == -14
+assert evaluate("2*-3") == -6
+for bad in ["", "2+", "(2", "2 3", "*3", "2**", "()"]:
+    try:
+        evaluate(bad); assert False, bad
+    except ValueError:
+        pass
+src = {code!r}
+assert "eval(" not in src.replace("evaluate(", "") and "exec(" not in src
+""",
+    },
+    {
+        "id": "edit-script",
+        "max_tokens": 16384,
+        "prompt": "Write a Python function edit_script(a, b) for strings a, b returning a MINIMAL-length list of operations transforming a into b using only deletions and insertions (no substitutions). Op format: ('del', i) deletes the char at index i of the CURRENT string; ('ins', i, ch) inserts ch so it lands at index i of the CURRENT string. Ops apply sequentially. Minimal length = len(a)+len(b)-2*LCS(a,b). Reply with ONLY a python code block.",
+        "check": """
+{code}
+def lcs(a, b):
+    import functools
+    @functools.lru_cache(None)
+    def f(i, j):
+        if i == len(a) or j == len(b): return 0
+        return 1+f(i+1,j+1) if a[i]==b[j] else max(f(i+1,j), f(i,j+1))
+    return f(0,0)
+def apply(a, ops):
+    s = list(a)
+    for op in ops:
+        if op[0] == 'del': del s[op[1]]
+        else: s.insert(op[1], op[2])
+    return ''.join(s)
+for a, b in [("kitten","sitting"), ("", "abc"), ("abc",""), ("same","same"),
+             ("ABCABBA","CBABAC"), ("x"*30+"y", "y"+"x"*30)]:
+    ops = edit_script(a, b)
+    assert apply(a, ops) == b, (a, b, ops)
+    assert len(ops) == len(a)+len(b)-2*lcs(a,b), (a, b, len(ops))
+""",
+    },
+    {
+        "id": "wis-schedule",
+        "max_tokens": 16384,
+        "prompt": "Write a Python function best_schedule(jobs) solving weighted interval scheduling: jobs is a list of (start, end, weight) with end>start, weights>0; two jobs conflict if their half-open intervals [start,end) overlap. Return (max_total_weight, chosen) where chosen is the list of job INDICES (into the input list) of one optimal non-conflicting set, sorted by start time. Must be O(n log n) — it will be called with 200k jobs, so no O(n^2). Reply with ONLY a python code block.",
+        "check": """
+{code}
+w, ch = best_schedule([(1,3,5),(2,5,6),(4,6,5),(6,7,4),(5,8,11),(7,9,2)])
+assert w == 17, w
+picked = [(1,3,5),(2,5,6),(4,6,5),(6,7,4),(5,8,11),(7,9,2)]
+iv = [picked[i] for i in ch]
+assert sum(x[2] for x in iv) == 17
+assert all(iv[k][1] <= iv[k+1][0] for k in range(len(iv)-1))
+assert best_schedule([]) == (0, [])
+assert best_schedule([(0,10,3),(0,10,7)])[0] == 7
+import random, time
+random.seed(7)
+big = []
+for _ in range(200000):
+    s0 = random.randrange(10**6); big.append((s0, s0+random.randrange(1,50), random.randrange(1,100)))
+t0 = time.time(); wbig, chbig = best_schedule(big); dt = time.time()-t0
+assert dt < 20, f"too slow: {{dt}}s"
+ivb = [big[i] for i in chbig]
+ivb.sort()
+assert all(ivb[k][1] <= ivb[k+1][0] for k in range(len(ivb)-1))
+assert sum(x[2] for x in ivb) == wbig
+""",
+    },
+    {
+        "id": "token-bucket",
+        "max_tokens": 16384,
+        "prompt": "Implement a Python class TokenBucket(capacity, refill_rate) with method allow(now, cost=1) -> bool. Semantics: bucket starts FULL; tokens refill continuously at refill_rate per second (fractional accumulation, capped at capacity); allow spends `cost` tokens and returns True iff at least `cost` tokens are available at time `now`; a denied request spends NOTHING. `now` is a monotonically non-decreasing float passed in (no real clocks). Reply with ONLY a python code block.",
+        "check": """
+{code}
+b = TokenBucket(3, 1.0)
+assert [b.allow(0.0) for _ in range(3)] == [True, True, True]
+assert b.allow(0.0) == False
+assert b.allow(0.5) == False
+assert b.allow(1.0) == True
+assert b.allow(1.0) == False
+b2 = TokenBucket(10, 2.0)
+assert b2.allow(0.0, cost=10) == True
+assert b2.allow(2.0, cost=5) == False
+assert b2.allow(3.0, cost=5) == True
+assert b2.allow(1000.0, cost=10) == True
+b3 = TokenBucket(1, 0.1)
+assert b3.allow(0.0) == True
+assert b3.allow(5.0) == False
+assert b3.allow(10.0) == True
+""",
+    },
+    {
+        "id": "real-fix-ports",
+        "max_tokens": 16384,
+        "prompt": "This is REAL production code from an LLM-cluster supervisor (port allocator). Spec: the port range is INCLUSIVE on both ends (8001..8100 = exactly 100 allocatable ports); allocate_port returns the lowest free port; release with full_release=True frees the port for reuse. There is exactly one bug. Find it and reply with ONLY a python code block containing the fully corrected class (minimal change).\n\nclass PortAllocator:\n    def __init__(self, start=8001, end=8100):\n        self.port_range = (start, end)\n        self.allocated_ports = {{}}\n    def allocate_port(self, model_id):\n        allocated_set = set(self.allocated_ports.values())\n        for port in range(self.port_range[0], self.port_range[1]):\n            if port not in allocated_set:\n                self.allocated_ports[model_id] = port\n                return port\n        raise RuntimeError('No available ports in range')\n    def release(self, model_id, full_release=False):\n        if full_release and model_id in self.allocated_ports:\n            del self.allocated_ports[model_id]",
+        "check": """
+{code}
+pa = PortAllocator(8001, 8100)
+ports = [pa.allocate_port(f"m{{i}}") for i in range(100)]
+assert ports[0] == 8001 and ports[-1] == 8100 and len(set(ports)) == 100
+try:
+    pa.allocate_port("overflow"); assert False
+except RuntimeError:
+    pass
+pa.release("m50", full_release=True)
+assert pa.allocate_port("m50b") == 8051
+pa.release("m0")
+try:
+    pa.allocate_port("m0b"); assert False, "non-full release must NOT free the port"
+except RuntimeError:
+    pass
+""",
+    },
+    {
+        "id": "real-fix-comps",
+        "max_tokens": 16384,
+        "prompt": "This is REAL code from a real-estate comps engine (simplified from production). Spec: return comps within radius_miles of (lat, lon) using flat-earth distance dy=(dlat)*69 miles, dx=(dlon)*69*cos(lat in RADIANS) miles; filter by bed count — BUT counties like Maricopa publish beds as None, and unknown bed counts must PASS bed filters (never be coerced to a failing value); result sorted by distance_miles (rounded to 2dp, included in each dict). There is exactly one bug versus this spec. Reply with ONLY a python code block containing the corrected function (minimal change).\n\nimport math\n\ndef filter_comps(rows, lat, lon, radius_miles, min_beds=None, max_beds=None):\n    def dist_miles(r):\n        dy = (r['lat'] - lat) * 69.0\n        dx = (r['lon'] - lon) * 69.0 * math.cos(math.radians(lat))\n        return math.hypot(dx, dy)\n    comps = []\n    for r in rows:\n        d = dist_miles(r)\n        if d > radius_miles:\n            continue\n        beds = r['beds'] if r['beds'] is not None else 0\n        if min_beds is not None and beds < min_beds:\n            continue\n        if max_beds is not None and beds > max_beds:\n            continue\n        comps.append({**r, 'distance_miles': round(d, 2)})\n    comps.sort(key=lambda c: c['distance_miles'])\n    return comps",
+        "check": """
+{code}
+rows = [
+    {{'id': 1, 'lat': 33.45, 'lon': -112.07, 'beds': None}},
+    {{'id': 2, 'lat': 33.46, 'lon': -112.07, 'beds': 2}},
+    {{'id': 3, 'lat': 33.45, 'lon': -112.06, 'beds': 4}},
+    {{'id': 4, 'lat': 34.45, 'lon': -112.07, 'beds': 3}},
+]
+out = filter_comps(rows, 33.45, -112.07, 5.0, min_beds=3)
+ids = [c['id'] for c in out]
+assert 1 in ids, "None beds must pass min_beds filter (Maricopa case)"
+assert 2 not in ids and 3 in ids and 4 not in ids
+assert ids[0] == 1
+out2 = filter_comps(rows, 33.45, -112.07, 5.0, max_beds=3)
+assert [c['id'] for c in out2] == [1, 2]
+assert out[0]['distance_miles'] == 0.0
+import math
+d3 = filter_comps(rows, 33.45, -112.07, 5.0)[1]['distance_miles']
+assert abs(d3 - round(69.0*math.cos(math.radians(33.45))*0.01, 2)) < 0.02
+""",
+    },
 ]
 
 # Effort TIERS, not fixed names: models name levels differently (qwen:
@@ -152,13 +321,32 @@ def extract_code(text):
     return m[-1] if m else text
 
 
+import shutil
+BWRAP = shutil.which("bwrap")
+
+
 def run_check(code, check_tmpl):
+    """Execute model-generated code in a throwaway sandbox.
+
+    bubblewrap when available: no network, read-only /usr, tmpfs /tmp, dies
+    with parent — generated code cannot touch repos, HOME, or the cluster.
+    Falls back to a plain subprocess (with a loud note) if bwrap is absent.
+    """
     src = check_tmpl.format(code=code)
     with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
         f.write(src)
         path = f.name
+    if BWRAP:
+        cmd = [BWRAP, "--ro-bind", "/usr", "/usr", "--symlink", "usr/bin", "/bin",
+               "--symlink", "usr/lib", "/lib", "--symlink", "usr/sbin", "/sbin",
+               "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
+               "--unshare-all", "--die-with-parent", "--new-session",
+               "--ro-bind", path, "/check.py", "/usr/bin/python3", "/check.py"]
+    else:
+        print("  !! bwrap missing — running UNSANDBOXED", file=sys.stderr)
+        cmd = [sys.executable, path]
     try:
-        r = subprocess.run([sys.executable, path], capture_output=True, text=True, timeout=30)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         return r.returncode == 0, (r.stderr or r.stdout)[-400:]
     except subprocess.TimeoutExpired:
         return False, "TIMEOUT (infinite loop?)"
@@ -186,7 +374,8 @@ def run_suite(base, label, outdir, efforts):
     for task in TASKS:
         for tier, effort in enumerate(efforts):
             for s in range(SAMPLES):
-                r = chat(base, task["prompt"], effort)
+                r = chat(base, task["prompt"], effort,
+                         max_tokens=task.get("max_tokens", 8192), timeout=900)
                 code = extract_code(r["content"])
                 ok, err = run_check(code, task["check"])
                 row = {
