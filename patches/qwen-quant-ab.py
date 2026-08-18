@@ -316,6 +316,112 @@ for seed, drift, outl in [(1, 0.012, False), (2, 0.015, True), (3, -0.010, False
     assert err < 0.03, f"seed={{seed}} drift={{drift}} outlier={{outl}}: est {{est:.0f}} vs truth {{truth:.0f}} ({{100*err:.1f}}% off)"
 """,
     },
+    # ── ESCALATION tier: limit-finding. Not part of the standard battery;
+    # run explicitly by id when arms keep passing. ────────────────────────
+    {
+        "id": "esc-interpreter",
+        "max_tokens": 24000,
+        "prompt": "Implement run(src) -> int|float for a mini-language. Grammar: program = expr; expr supports: integer/float literals; variables; let-bindings `let NAME = expr in expr` (lexically scoped, shadowing allowed); conditionals `if expr then expr else expr` (0 and 0.0 are falsey, everything else truthy); comparison ops < > <= >= == != (result 1 or 0); arithmetic + - * / with normal precedence (comparisons bind LOOSER than arithmetic); parentheses; unary minus. Whitespace/newlines insignificant. Right-to-left evaluation NOT required — evaluate normally. Raise ValueError on syntax errors or unbound variables. No eval/exec. Reply with ONLY a python code block.",
+        "check": """
+{code}
+assert run("1+2*3") == 7
+assert run("let x = 5 in x*x") == 25
+assert run("let x = 2 in let x = x+1 in x*10") == 30
+assert run("if 2>1 then 10 else 20") == 10
+assert run("if 0 then 10 else 20") == 20
+assert run("let a = 3 in if a==3 then a*2 else -1") == 6
+assert run("let f = 1+1 in if f >= 2 then (let g = f*f in g+1) else 0") == 5
+assert run("-(2+3)*2") == -10
+assert run("1 < 2 + 3") == 1
+assert run("(1<2) + 3") == 4
+assert run("if 1<2 then if 0 then 1 else 2 else 3") == 2
+for bad in ["let x = in 3", "x+1", "if 1 then 2", "let 3 = 4 in 5", "1 +", "()"]:
+    try:
+        run(bad); assert False, bad
+    except ValueError:
+        pass
+src = {code!r}
+assert "eval(" not in src and "exec(" not in src
+""",
+    },
+    {
+        "id": "esc-ot-converge",
+        "max_tokens": 24000,
+        "prompt": "Operational transformation for concurrent text edits. Ops: ('ins', pos, ch) and ('del', pos). apply(doc, op) is standard (insert before pos / delete at pos). Implement transform(op_a, op_b) -> op_a2: rewrite op_a so that applying op_b then op_a2 has the same effect as the (intended) op_a on the original doc. Required convergence property (TP1): for any doc and any valid concurrent ops a, b: apply(apply(doc,a), transform(b,a)) == apply(apply(doc,b), transform(a,b)). Tie-break rule when both insert at the SAME position: the op whose char has the LOWER ordinal goes first (equal chars: either order is fine since result ties). A delete transformed against a delete of the same position becomes a no-op — represent no-op as ('nop',). apply must ignore ('nop',). Reply with ONLY a python code block containing transform and apply.",
+        "check": """
+{code}
+import random, itertools, string
+def ref_apply(doc, op):
+    if op[0]=='nop': return doc
+    if op[0]=='ins': return doc[:op[1]] + op[2] + doc[op[1]:]
+    return doc[:op[1]] + doc[op[1]+1:]
+rng = random.Random(42)
+fails = 0
+for trial in range(400):
+    doc = ''.join(rng.choice('abcdef') for _ in range(rng.randrange(1, 8)))
+    def rand_op():
+        if rng.random() < 0.5:
+            return ('ins', rng.randrange(0, len(doc)+1), rng.choice('xyz'))
+        return ('del', rng.randrange(0, len(doc)))
+    a, b = rand_op(), rand_op()
+    r1 = apply(apply(doc, a), transform(b, a))
+    r2 = apply(apply(doc, b), transform(a, b))
+    assert r1 == r2, f"diverged: doc={{doc!r}} a={{a}} b={{b}} -> {{r1!r}} vs {{r2!r}}"
+    assert apply(doc, a) == ref_apply(doc, a)
+""",
+    },
+    {
+        "id": "esc-bounded-queue",
+        "max_tokens": 24000,
+        "prompt": "Implement class BoundedQueue(capacity) with put(item, timeout=None) and get(timeout=None) using threading primitives (threading.Lock/Condition — NOT queue.Queue). Blocking semantics: put blocks while full, get blocks while empty; timeout (seconds) -> raise TimeoutError on expiry; FIFO order; must be correct under many concurrent producers/consumers (no lost items, no duplicates, no deadlock); shutdown() wakes ALL blocked threads which then raise RuntimeError, and makes future put/get raise RuntimeError. Reply with ONLY a python code block.",
+        "check": """
+{code}
+import threading, time, collections
+q = BoundedQueue(4)
+N, P, C = 500, 4, 4
+produced = collections.Counter(); consumed = collections.Counter()
+def prod(k):
+    for i in range(N):
+        item = (k, i)
+        q.put(item, timeout=10); produced[item] += 1
+def cons(out):
+    while True:
+        try:
+            item = q.get(timeout=1.5)
+        except TimeoutError:
+            return
+        except RuntimeError:
+            return
+        out[item] += 1
+threads = [threading.Thread(target=prod, args=(k,)) for k in range(P)]
+outs = [collections.Counter() for _ in range(C)]
+threads += [threading.Thread(target=cons, args=(outs[j],)) for j in range(C)]
+for t in threads: t.start()
+for t in threads: t.join(timeout=30)
+assert not any(t.is_alive() for t in threads), "deadlock or hang"
+total = collections.Counter()
+for o in outs: total.update(o)
+assert total == produced and sum(total.values()) == N*P, "lost or duplicated items"
+q2 = BoundedQueue(1)
+res = []
+def blocked_getter():
+    try: q2.get(timeout=10)
+    except RuntimeError: res.append("runtime")
+    except TimeoutError: res.append("timeout")
+t = threading.Thread(target=blocked_getter); t.start()
+time.sleep(0.2); q2.shutdown(); t.join(timeout=5)
+assert res == ["runtime"], res
+try:
+    q2.put(1); assert False
+except RuntimeError: pass
+q3 = BoundedQueue(1); q3.put('x')
+t0=time.time()
+try:
+    q3.put('y', timeout=0.3); assert False
+except TimeoutError: pass
+assert 0.2 < time.time()-t0 < 2.0
+""",
+    },
 ]
 
 # Effort TIERS, not fixed names: models name levels differently (qwen:
