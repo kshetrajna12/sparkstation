@@ -41,13 +41,22 @@ The SQL dialect to support (case-insensitive keywords; identifiers are case-sens
 Rows returned by SELECT preserve insertion order unless ORDER BY is given. Text is compared as strings, numbers numerically.
 
 This is a substantial, multi-part build. Decompose it: get the tokenizer/parser and a storage model right first, then SELECT with projection and WHERE, then ORDER/LIMIT, then aggregates and GROUP BY, then JOIN, then UPDATE/DELETE. WRITE YOUR OWN TESTS as you go — create test_*.py files with cases for each feature and run them to verify before moving on. You are graded by a hidden test suite that exercises every feature above against a fresh DB, checking exact results, so correctness and edge-case handling matter more than speed. Take the time to get it right; verify thoroughly before you finish.
+
+CRITICAL WORKING STYLE — follow exactly, it determines whether you succeed:
+- Build solution.py INCREMENTALLY with your file-editing tools. NEVER write or rewrite the whole file in a single step, and never emit a giant block of code in one message — a response that tries to write the entire engine at once will be truncated and lost. Add ONE small piece at a time (a single method or feature), then run its test, then move to the next.
+- Start by creating a minimal solution.py skeleton (just `class DB` with an `execute` stub), run a trivial test to confirm it imports, then grow it feature by feature with small edits.
+- Keep every response focused and short. Act with your tools rather than deliberating at length — prefer making an edit and running a test over long planning prose.
+- After each feature works, update solution.py with a small edit and re-run the relevant test_*.py. Only when all features pass should you finish.
 EOP
 )
 
 log "=== EPIC long-horizon arm: $ARM (timeout ${PI_TIMEOUT}s) ==="
 log "workspace: $WS"
 t0=$(date +%s)
-( cd "$WS" && timeout "$PI_TIMEOUT" pi -p "$PROMPT" > "$OUT/$ARM-pi.txt" 2>&1 )
+# --kill-after: pi traps SIGTERM, so escalate to SIGKILL 120s after the TERM.
+# Without this a hung pi ignores the timeout and runs until the box is reset
+# (2026-08-19: a reasoning spiral hung pi for 4h29m past a 4h timeout).
+( cd "$WS" && timeout --kill-after=120 --signal=TERM "$PI_TIMEOUT" pi -p "$PROMPT" > "$OUT/$ARM-pi.txt" 2>&1 )
 rc=$?; t1=$(date +%s)
 wall=$((t1-t0))
 log "pi finished: rc=$rc wall=${wall}s ($(($wall/60))min)"

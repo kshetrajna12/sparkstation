@@ -121,9 +121,18 @@ class SGLangLauncher(ModelLauncher):
                     # For embedding models, add --is-embedding flag (required by SGLang)
                     docker_cmd.append("--is-embedding")
                 else:
-                    # For chat models, add context length if specified
-                    max_len = config.extra_args.get("max_model_len", 8192)
-                    docker_cmd.extend(["--context-length", str(max_len)])
+                    # For chat models, add context length UNLESS the model asks
+                    # for its native default. Passing --context-length explicitly
+                    # changes the torch.compile graph shape vs SGLang's default —
+                    # which cost a cache MISS and a Triton codegen crash on the
+                    # daily driver (2026-08-18). "native" (or an unset value) →
+                    # omit the flag so SGLang uses the model's own max, matching
+                    # the hand-rolled recipe and reusing its compiled kernels.
+                    max_len = config.extra_args.get("max_model_len")
+                    if max_len not in (None, "native", "auto", 0, "0"):
+                        docker_cmd.extend(["--context-length", str(max_len)])
+                    else:
+                        logger.info("Omitting --context-length (native): SGLang will use the model default")
 
                 # Add quantization if specified
                 if config.quantization and config.quantization.lower() != "none":

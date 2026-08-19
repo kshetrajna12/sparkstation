@@ -82,12 +82,13 @@ restart_manager: Optional[RestartManager] = None
 # Startup state tracking
 startup_complete: bool = False
 default_model_alias: Optional[str] = None
+vision_model_alias: Optional[str] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize and cleanup resources."""
-    global registry, resource_manager, launcher_factory, auto_suspend_manager, gateway_sync, health_check_manager, restart_manager, default_model_alias
+    global registry, resource_manager, launcher_factory, auto_suspend_manager, gateway_sync, health_check_manager, restart_manager, default_model_alias, vision_model_alias
 
     logger.info("Initializing Sparkstation Supervisor...")
 
@@ -727,6 +728,8 @@ async def list_models_detailed():
                 "base_url": model.base_url,
                 "memory_gb": model.memory_gb,
                 "is_default": (model.model_alias or model.model_name) == default_model_alias,
+                "is_vision": bool(vision_model_alias)
+                and (model.model_alias or model.model_name) == vision_model_alias,
                 "last_request_time": model.last_request_time.isoformat()
                 if model.last_request_time
                 else None,
