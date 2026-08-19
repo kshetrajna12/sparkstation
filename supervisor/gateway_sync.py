@@ -17,6 +17,28 @@ from supervisor.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _litellm_params(model_name: str, base_url: str, model_type) -> dict:
+    """Build litellm_params, forwarding reasoning controls for chat models."""
+    mt = model_type.value if hasattr(model_type, "value") else (model_type or "chat")
+    params = {
+        "model": f"openai/{model_name}",
+        "api_base": f"{base_url}/v1",
+        "api_key": "EMPTY",
+    }
+    if mt == "chat":
+        # Forward (don't drop) reasoning-control params like chat_template_kwargs
+        # so a client's per-request thinking reaches the backend. drop_params:false
+        # routes unknown fields into the downstream extra_body (request body).
+        # NOTE: do NOT list them in allowed_openai_params — that promotes them to
+        # "known" params which LiteLLM passes as kwargs to the OpenAI SDK, which
+        # rejects chat_template_kwargs ("unexpected keyword argument").
+        params["drop_params"] = False
+    else:
+        # Embeddings / detection: keep dropping unsupported params.
+        params["drop_params"] = True
+    return params
+
+
 class GatewaySync:
     """
     Push model list to LiteLLM via admin API (more reliable than fetch_from_url).
@@ -95,12 +117,9 @@ class GatewaySync:
             model_list.append(
                 {
                     "model_name": display_name,
-                    "litellm_params": {
-                        "model": f"openai/{model.model_name}",  # Use actual model name from backend
-                        "api_base": f"{model.base_url}/v1",
-                        "api_key": "EMPTY",
-                        "drop_params": True,  # Silently drop unsupported params (e.g. reasoning_effort)
-                    },
+                    "litellm_params": _litellm_params(
+                        model.model_name, model.base_url, model.model_type
+                    ),
                 }
             )
 
@@ -112,12 +131,9 @@ class GatewaySync:
                     model_list.append(
                         {
                             "model_name": "default",
-                            "litellm_params": {
-                                "model": f"openai/{model.model_name}",
-                                "api_base": f"{model.base_url}/v1",
-                                "api_key": "EMPTY",
-                                "drop_params": True,
-                            },
+                            "litellm_params": _litellm_params(
+                                model.model_name, model.base_url, model.model_type
+                            ),
                         }
                     )
                     break
@@ -133,12 +149,9 @@ class GatewaySync:
                     model_list.append(
                         {
                             "model_name": "vision",
-                            "litellm_params": {
-                                "model": f"openai/{model.model_name}",
-                                "api_base": f"{model.base_url}/v1",
-                                "api_key": "EMPTY",
-                                "drop_params": True,
-                            },
+                            "litellm_params": _litellm_params(
+                                model.model_name, model.base_url, model.model_type
+                            ),
                         }
                     )
                     break

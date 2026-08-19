@@ -298,15 +298,24 @@ def _write_gateway_yaml():
         # the QSFP-side IP so LiteLLM's proxy reaches the container over the
         # 200 GbE direct link, not the LAN.
         base = m.get("base_url") or f"http://127.0.0.1:{m['port']}"
-        entry = {
-            "model_name": alias,
-            "litellm_params": {
-                "model": f"openai/{m['model_name']}",
-                "api_base": f"{base}/v1",
-                "api_key": "EMPTY",
-                "drop_params": True,
-            },
+        lp = {
+            "model": f"openai/{m['model_name']}",
+            "api_base": f"{base}/v1",
+            "api_key": "EMPTY",
         }
+        # Chat models: FORWARD reasoning-control params (thinking level, budget)
+        # so a client's per-request thinking actually reaches the backend.
+        # drop_params:true would silently strip chat_template_kwargs and every
+        # request would fall back to the server default (2026-08-19). Keep
+        # dropping for embeddings/detection. Mirrors supervisor gateway_sync.
+        # drop_params:false routes unknown fields (chat_template_kwargs, etc.)
+        # into the downstream extra_body. Do NOT use allowed_openai_params — it
+        # makes LiteLLM pass them as OpenAI SDK kwargs, which errors.
+        if (m.get("model_type") or "chat") == "chat":
+            lp["drop_params"] = False
+        else:
+            lp["drop_params"] = True
+        entry = {"model_name": alias, "litellm_params": lp}
         model_list.append(entry)
         if m.get("is_default"):
             model_list.append({
