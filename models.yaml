@@ -29,7 +29,7 @@ cluster:
 # stack + vision + embeddings. For indexing runs switch stacks with
 # `sparkstation stop && sparkstation start -d --profile image-indexing`
 # (qwen3.8 on worker1 cannot coexist with DSV4's worker rank).
-default_profile: coding
+default_profile: generic  # SGLang qwen daily driver (standalone container on worker1)
 
 # ─── Canonical model specs (one entry per alias) ────────────────────────────
 
@@ -87,7 +87,7 @@ models:
     backend: "clip"
     model_type: "embedding"
     quantization: "none"
-    memory_gb: 3  # squeezed 5->3 (2026-08-15): measured 0.64GB RSS; margin for CUDA allocs
+    memory_gb: 2  # 2026-08-18: nvidia-smi-measured 1.9GB GPU-side (RSS undercounts on GB10); 3GB padding kept it below the memory floor on a packed node
     idle_timeout_minutes: 30
     auto_suspend_enabled: false
 
@@ -180,16 +180,35 @@ models:
 # ─── Profiles (dict of alias → override) ────────────────────────────────────
 
 profiles:
-  # Coding profile (2026-08-15): DSV4-Flash (dspark 2-node stack) as the chat
-  # daily driver + small vision model on worker1 + embeddings/detection on
-  # primary. Fully supervisor-managed since the dspark backend landed.
-  coding:
+  # ── THREE-PROFILE STRUCTURE (2026-08-19, post-gauntlet) ─────────────────
+  # generic       — DAILY DRIVER (coding/generic). Qwen3.8-27B on SGLang +
+  #                 DSpark spec-decode (best-synthesis config: fp8 KV,
+  #                 float32 SSM, torch-compile). 39 tok/s single-stream,
+  #                 graceful concurrency, native vision. Won the coding
+  #                 gauntlet 14/14. NOT sparkstation-managed — runs as a
+  #                 standalone persistent container on worker1 (~/dspark-
+  #                 best-persist.sh, restart=unless-stopped, :30000). This
+  #                 profile brings up only the primary-side aux models;
+  #                 switch with patches/spark-profile.sh generic.
+  # deep          — RESERVE for hostile/long-horizon work. DSV4-Flash 2-node.
+  # image-indexing— BATCH photo intake. Qwen3.8-27B on vLLM+MTP-2 (concurrency-
+  #                 tuned, 135 tok/s aggregate c=8 — vLLM MTP batches well,
+  #                 unlike SGLang-DSpark which poisons batch, proven 08-18).
+  #
+  # generic: aux only on primary; qwen chat is the standalone SGLang container.
+  generic:
+    bge-m3: {}       # openclaw/memory-search text embeddings
+    clip-vit: {}     # image embeddings (cross-modal search)
+    face-detect: {}  # gallery recognition
+
+  # deep: DSV4-Flash 2-node reserve (was "coding" until 2026-08-19).
+  deep:
     dsv4-flash:
-      default: true  # the "default" gateway alias resolves to DSV4 here
+      default: true  # gateway "default" alias resolves to DSV4 in this profile
     qwen3-vl-4b: {}
     bge-m3: {}
     clip-vit: {}
-    face-detect: {}  # added 2026-08-15 (user request): ~1GB, gallery lives on primary
+    face-detect: {}
 
   # Single-node development / production / inference — chat only on primary,
   # matches pre-cluster defaults.
@@ -223,7 +242,12 @@ profiles:
       # vs FP8's 14.8 — usable for coding. Official FP8 stays cached on both
       # nodes for an A/B quality replay if doubts resurface.
       host: worker1
-      memory_gb: 90  # dedicated node; +5 over NVFP4-era 85 for the fatter weights
+      # 85, NOT 90 (2026-08-19): on GB10 unified memory, static reservations
+      # above ~0.75 (≈89GB) risk starving the OS during weight-load — an
+      # 0.88 attempt wedged worker1 into an unrecoverable hang (memory:
+      # qwen-serving-config-lessons). 85 (≈0.71) is the proven-safe ceiling
+      # with 34GB headroom; it already delivered 135 tok/s aggregate at c=8.
+      memory_gb: 85
       extra_args:
         max_model_len: 262144  # native max; hybrid arch keeps KV cheap (DeltaNet layers = constant state)
         max_concurrent_requests: 8
