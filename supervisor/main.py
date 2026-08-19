@@ -163,7 +163,7 @@ async def lifespan(app: FastAPI):
         vision_model_alias=vision_model_alias,
     )
     restart_manager = RestartManager(registry, launcher_factory, resource_manager)
-    health_check_manager = HealthCheckManager(registry, restart_manager)
+    health_check_manager = HealthCheckManager(registry, restart_manager, gateway_sync=gateway_sync)
 
     # Start background tasks
     if settings.auto_suspend_enabled:
