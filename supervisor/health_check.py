@@ -29,9 +29,14 @@ class HealthCheckManager:
     - Logs all health check results
     """
 
-    def __init__(self, registry: ModelRegistry, restart_manager=None):
+    def __init__(self, registry: ModelRegistry, restart_manager=None, gateway_sync=None):
         self.registry = registry
         self.restart_manager = restart_manager  # Optional: for triggering restarts
+        # Optional: publish a model to the gateway the instant it turns RUNNING,
+        # instead of waiting up to gateway_sync_interval (60s) for the periodic
+        # pass. Without this, a model (and its default/vision aliases) is ready
+        # but unroutable through :8000 for up to a minute after startup.
+        self.gateway_sync = gateway_sync
         self.client = httpx.AsyncClient(timeout=settings.health_check_timeout_seconds)
 
         # Configuration
@@ -159,6 +164,15 @@ class HealthCheckManager:
                         await self.registry.update(fresh)
 
                         logger.info(f"✓ Model {display_name} is now RUNNING (transitioned from STARTING)")
+
+                        # Publish to the gateway immediately so this model and
+                        # its default/vision aliases become routable the moment
+                        # it's ready — not up to 60s later on the periodic sync.
+                        if self.gateway_sync is not None:
+                            try:
+                                await self.gateway_sync.sync_models()
+                            except Exception as e:
+                                logger.warning(f"Gateway sync after promoting {display_name} failed: {e}")
                     else:
                         # Not ready yet, keep waiting
                         logger.debug(f"Model {display_name} not ready yet (HTTP {response.status_code}), will retry...")
