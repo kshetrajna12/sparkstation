@@ -54,11 +54,14 @@ class SGLangLauncher(ModelLauncher):
                 # for remote roles.
                 subprocess_env = merged_env(config.host)
 
-                # Build docker run command for SGLang
+                # Build docker run command for SGLang. Docker-level flags first
+                # (up to and including the image name), then sglang args.
+                docker_image = config.docker_image or settings.sglang_docker_image
                 docker_cmd = [
                     "docker",
                     "run",
-                    "-d",  # Detached mode
+                    "-d",  # Detached mode; sparkstation's restart_manager owns
+                           # relaunch, so NO docker --restart policy here.
                     "--platform", "linux/arm64",  # Explicit ARM64 for DGX Spark
                     "--gpus", "all",  # GPU passthrough
                     "--shm-size", "32g",  # Shared memory for model loading
@@ -67,8 +70,35 @@ class SGLangLauncher(ModelLauncher):
                     "--ulimit", "stack=67108864",  # 64MB stack
                     "-p", f"{port}:8000",  # Port mapping (SGLang internal port is 8000)
                     "-v", f"{Path.home()}/.cache/huggingface:/root/.cache/huggingface",  # HuggingFace cache
+                ]
+
+                # Optional docker memory cgroup cap — a hard safety backstop.
+                # On GB10 unified memory an over-large --mem-fraction-static can
+                # starve the OS during load and HANG the whole node (0.88 wedged
+                # worker1, 2026-08-18, only recoverable by unplugging). A cgroup
+                # cap makes the container OOM-killable BEFORE it takes the box.
+                dm = config.extra_args.get("docker_memory_gb")
+                if dm:
+                    docker_cmd.extend(["--memory", f"{dm}g", "--memory-swap", f"{dm}g"])
+
+                # Per-model env vars (e.g. TORCHINDUCTOR_CACHE_DIR for a
+                # persistent torch.compile cache → fast subsequent boots).
+                for env_key, env_val in (config.env_vars or {}).items():
+                    docker_cmd.extend(["-e", f"{env_key}={env_val}"])
+
+                # Extra volume mounts (host:container) on the TARGET host — e.g.
+                # a patched chat template dir. Relative host paths resolve under
+                # the project dir; absolute pass through.
+                project_dir = Path.cwd()
+                for vol in (config.volumes or []):
+                    parts = vol.split(":", 1)
+                    if len(parts) == 2 and not Path(parts[0]).is_absolute():
+                        vol = f"{project_dir / parts[0]}:{parts[1]}"
+                    docker_cmd.extend(["-v", vol])
+
+                docker_cmd += [
                     "--name", f"sparkstation-{model_id}",  # Container name
-                    settings.sglang_docker_image,
+                    docker_image,
                     "python3", "-m", "sglang.launch_server",
                     "--model-path", config.model_name,
                     "--host", "0.0.0.0",  # Bind to all interfaces
@@ -76,15 +106,15 @@ class SGLangLauncher(ModelLauncher):
                     "--trust-remote-code",  # Required for many models
                 ]
 
-                # Calculate mem_fraction_static from allocated memory_gb
-                # DGX Spark: 119 GB usable memory (128 GB total - system overhead)
+                # Calculate mem_fraction_static from allocated memory_gb, with a
+                # SAFETY CLAMP: never exceed 0.82 on unified memory (see the
+                # wedge note above; 0.88 hung the node, 0.78 booted clean).
                 if memory_gb is not None:
-                    mem_fraction = memory_gb / 119.0
-                    logger.info(f"Using mem_fraction_static={mem_fraction:.3f} (from {memory_gb}GB allocation)")
+                    mem_fraction = min(memory_gb / 119.0, 0.82)
+                    logger.info(f"Using mem_fraction_static={mem_fraction:.3f} (from {memory_gb}GB, clamped ≤0.82)")
                     docker_cmd.extend(["--mem-fraction-static", str(mem_fraction)])
                 else:
-                    # SGLang default is 0.85
-                    docker_cmd.extend(["--mem-fraction-static", "0.85"])
+                    docker_cmd.extend(["--mem-fraction-static", "0.80"])
 
                 # Add model-specific settings
                 if is_embedding:
@@ -98,6 +128,15 @@ class SGLangLauncher(ModelLauncher):
                 # Add quantization if specified
                 if config.quantization and config.quantization.lower() != "none":
                     docker_cmd.extend(["--quantization", config.quantization])
+
+                # Raw SGLang flag passthrough — a list of already-split args
+                # appended verbatim. This is how the daily driver specifies the
+                # DSpark spec-decode, fp8 KV cache, float32 SSM, torch-compile,
+                # mamba, and chat-template flags without the launcher needing to
+                # know each one. e.g. sglang_flags: ["--kv-cache-dtype",
+                # "fp8_e4m3", "--speculative-algorithm", "DSPARK", ...].
+                for flag in config.extra_args.get("sglang_flags", []):
+                    docker_cmd.append(str(flag))
 
                 logger.debug(f"Docker command: {' '.join(docker_cmd)}")
 

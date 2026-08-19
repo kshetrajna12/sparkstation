@@ -25,11 +25,11 @@ cluster:
     # `host: worker1` needs that file present on the machine that runs the
     # supervisor.
 
-# coding = the daily driver (2026-08-15, user decision): DSV4-Flash 2-node
-# stack + vision + embeddings. For indexing runs switch stacks with
-# `sparkstation stop && sparkstation start -d --profile image-indexing`
-# (qwen3.8 on worker1 cannot coexist with DSV4's worker rank).
-default_profile: generic  # SGLang qwen daily driver (standalone container on worker1)
+# generic (default) = daily driver: Qwen3.8-27B on SGLang+DSpark (managed).
+# deep = DSV4-Flash 2-node reserve. image-indexing = vLLM batch qwen. The
+# three worker1 chat deployments are mutually exclusive; switch profiles with
+# `sparkstation stop && sparkstation start -d --profile <name>`.
+default_profile: generic
 
 # ─── Canonical model specs (one entry per alias) ────────────────────────────
 
@@ -165,6 +165,75 @@ models:
       max_model_len: 32768
       max_concurrent_requests: 4
 
+  qwen3.8-sglang:
+    # DAILY DRIVER — Qwen3.8-27B on SGLang + DSpark spec-decode. Best-synthesis
+    # config from the 2026-08-18 gauntlet: 39 tok/s single-stream (fastest
+    # measured), 14/14 coding, native vision, graceful concurrency. Fully
+    # sparkstation-managed via the SGLang launcher (extended for raw-flag
+    # passthrough). Recipe reference: patches/qwen-daily-driver-sglang.sh.
+    name: "RadixArk/Qwen3.8-27B-NVFP4"
+    backend: "sglang"
+    model_type: "chat"
+    host: worker1
+    quantization: "none"  # SGLang auto-detects NVFP4 from the checkpoint
+    default: true          # gateway "default" alias → the daily driver
+    vision_default: true   # natively multimodal → gateway "vision" alias
+    # 93 → mem-fraction 0.78 (launcher clamps ≤0.82). fp8 KV makes 0.78 as
+    # capacious as a far higher bf16 fraction, with OS headroom. NEVER go
+    # near 0.88 (wedged worker1 2026-08-18; see qwen-serving-config-lessons).
+    memory_gb: 93
+    idle_timeout_minutes: 120
+    auto_suspend_enabled: false
+    docker_image: "lmsysorg/sglang@sha256:febfb971c7352570fc445c466ebd6ffc9d896024958e544a60f2137fd85856b1"
+    env_vars:
+      TORCHINDUCTOR_CACHE_DIR: "/cache/inductor"  # persistent compile cache → fast reboots
+    volumes:
+      - "/home/kshetrajna/.config/qwen38:/out"              # patched chat template
+      - "/home/kshetrajna/.config/qwen38/sglang-cache:/cache"  # torch.compile cache
+    extra_args:
+      max_model_len: 262144   # → --context-length; native, DeltaNet keeps KV cheap
+      docker_memory_gb: 105   # cgroup safety cap: OOM-kills the container before it can hang the node
+      sglang_flags:
+        - "--kv-cache-dtype"
+        - "fp8_e4m3"
+        - "--attention-backend"
+        - "flashinfer"
+        - "--chunked-prefill-size"
+        - "4096"
+        - "--disable-prefill-cuda-graph"
+        - "--cuda-graph-max-bs"
+        - "8"
+        - "--speculative-algorithm"
+        - "DSPARK"
+        - "--speculative-draft-model-path"
+        - "RadixArk/Qwen3.8-27B-DSpark"
+        - "--speculative-draft-attention-backend"
+        - "flashinfer"
+        - "--speculative-dspark-block-size"
+        - "7"
+        - "--speculative-draft-model-quantization"
+        - "unquant"
+        - "--mamba-radix-cache-strategy"
+        - "extra_buffer_lazy"
+        - "--mamba-ssm-dtype"
+        - "float32"
+        - "--mamba-full-memory-ratio"
+        - "11.01"
+        - "--max-running-requests"
+        - "8"
+        - "--enable-torch-compile"
+        - "--torch-compile-max-bs"
+        - "8"
+        - "--num-continuous-decode-steps"
+        - "2"
+        - "--reasoning-parser"
+        - "qwen3"
+        - "--tool-call-parser"
+        - "qwen3_coder"
+        - "--chat-template"
+        - "/out/chat-template-sglang.jinja"
+        - "--enable-metrics"
+
   flux-dev:
     name: "black-forest-labs/FLUX.1-dev"
     backend: "flux"
@@ -197,9 +266,10 @@ profiles:
   #
   # generic: aux only on primary; qwen chat is the standalone SGLang container.
   generic:
-    bge-m3: {}       # openclaw/memory-search text embeddings
-    clip-vit: {}     # image embeddings (cross-modal search)
-    face-detect: {}  # gallery recognition
+    qwen3.8-sglang: {}  # DAILY DRIVER chat (SGLang+DSpark, default+vision alias)
+    bge-m3: {}          # openclaw/memory-search text embeddings
+    clip-vit: {}        # image embeddings (cross-modal search)
+    face-detect: {}     # gallery recognition
 
   # deep: DSV4-Flash 2-node reserve (was "coding" until 2026-08-19).
   deep:
