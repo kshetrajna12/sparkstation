@@ -191,7 +191,13 @@ models:
       - "/home/kshetrajna/.config/qwen38:/out"              # patched chat template
       - "/home/kshetrajna/.config/qwen38/sglang-cache:/cache"  # torch.compile cache
     extra_args:
-      max_model_len: 262144   # → --context-length; native, DeltaNet keeps KV cheap
+      # "native" → launcher OMITS --context-length, so SGLang uses the model's
+      # own max (262144) exactly as the hand-rolled standalone did. This MATTERS:
+      # passing --context-length 262144 explicitly made torch.compile compile a
+      # different graph shape than the standalone's cached kernels → cache MISS →
+      # fresh compile → Triton "Unsupported rounding mode" crash at graph capture
+      # (2026-08-18). Omitting it → same shape → cache HIT → no recompile, no crash.
+      max_model_len: native
       docker_memory_gb: 105   # cgroup safety cap: OOM-kills the container before it can hang the node
       sglang_flags:
         - "--kv-cache-dtype"

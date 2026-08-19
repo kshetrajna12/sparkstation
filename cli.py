@@ -313,6 +313,15 @@ def _write_gateway_yaml():
                 "model_name": "default",
                 "litellm_params": dict(entry["litellm_params"]),
             })
+        # "vision" alias → profile's vision_default model. Mirror is_default so
+        # the CLI's gateway-restart path stays consistent with the supervisor's
+        # own gateway_sync (which already emits vision); without this, `gateway
+        # restart` silently dropped the vision alias (2026-08-18).
+        if m.get("is_vision"):
+            model_list.append({
+                "model_name": "vision",
+                "litellm_params": dict(entry["litellm_params"]),
+            })
 
     gw["model_list"] = model_list
     with open(config_path, "w") as f:
