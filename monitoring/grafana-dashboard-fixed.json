@@ -1332,7 +1332,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "sum by (alias) (increase(vllm:prompt_tokens_total[24h])) > 0",
+          "expr": "sum by (alias) (increase(vllm:prompt_tokens_total[24h]) or increase(sglang_prompt_tokens_total[24h])) > 0",
           "refId": "A",
           "legendFormat": "{{alias}}"
         }
@@ -1392,7 +1392,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "sum by (alias) (increase(vllm:generation_tokens_total[24h])) > 0",
+          "expr": "sum by (alias) (increase(vllm:generation_tokens_total[24h]) or increase(sglang_generation_tokens_total[24h])) > 0",
           "refId": "A",
           "legendFormat": "{{alias}}"
         }
@@ -1482,7 +1482,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "sum(increase(vllm:prompt_tokens_total[$__range])) by (alias)",
+          "expr": "sum(increase(vllm:prompt_tokens_total[$__range]) or increase(sglang_prompt_tokens_total[$__range])) by (alias)",
           "legendFormat": "{{alias}} input",
           "range": true,
           "refId": "A"
@@ -1492,7 +1492,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "sum(increase(vllm:generation_tokens_total[$__range])) by (alias)",
+          "expr": "sum(increase(vllm:generation_tokens_total[$__range]) or increase(sglang_generation_tokens_total[$__range])) by (alias)",
           "legendFormat": "{{alias}} output",
           "range": true,
           "refId": "B"
@@ -2211,7 +2211,7 @@
       ],
       "title": "Spec-Decode Acceptance",
       "type": "timeseries",
-      "description": "Generated tokens/sec per model, engine-side."
+      "description": "Acceptance rate (accepted/proposed drafts) and effective accepted tokens per forward pass. Both vLLM (MTP) and SGLang (DSpark) export these \u2014 for SGLang, accept-length already includes the bonus token."
     }
   ],
   "refresh": "10s",
