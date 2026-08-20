@@ -4,11 +4,20 @@
 #  1) cluster_translation — bridge raw exporter names to the schema the
 #     supervisor emits for host="primary", so one dashboard query covers all
 #     hosts (gpu temp/power, unified memory).
-#  2) engine_normalization — translate engine-specific metrics (vllm:*, and
-#     later sglang:*/trtllm:*) into canonical sparkstation:* names. Dashboards
-#     only query canonical names; supporting a new engine means adding an
-#     `or`-branch here, never editing dashboards. Scrape targets come from the
-#     supervisor's /prometheus/targets http_sd (labels: host, alias, engine).
+#  2) engine_normalization — translate engine-specific metrics (vllm:*,
+#     sglang_*, and later trtllm:*) into canonical sparkstation:* names.
+#     Dashboards only query canonical names; supporting a new engine means
+#     adding an `or`-branch here, never editing dashboards. Scrape targets come
+#     from the supervisor's /prometheus/targets http_sd (labels: host, alias,
+#     engine).
+#
+#     NAMING QUIRK (2026-08-19): SGLang exposes colon names (sglang:foo) just
+#     like vLLM (vllm:foo), but Prometheus stores SGLang's as UNDERSCORES
+#     (sglang_foo) while preserving vLLM's colons — an exposition/escaping
+#     difference between the two engines' client output. So the sglang branches
+#     below reference sglang_* (underscore), NOT sglang:* — verified against the
+#     live TSDB. If a Prometheus/SGLang upgrade flips this, the branches go
+#     empty; re-check the stored name with `count(sglang_num_running_reqs)`.
 
 groups:
   - name: sparkstation_cluster_translation
@@ -37,32 +46,35 @@ groups:
       # proxy's sparkstation_gateway_* metrics are the source of truth for
       # user-facing rate/latency; these engine-side series add scheduler
       # detail (and cover traffic that bypasses the gateway).
+      # SGLang has no request_success_total; the e2e latency histogram's _count
+      # is the completed-request counter.
       - record: sparkstation:engine_requests_per_second
-        expr: sum by (alias, host, engine) (rate(vllm:request_success_total[5m]))
+        expr: sum by (alias, host, engine) (rate(vllm:request_success_total[5m]) or rate(sglang_e2e_request_latency_seconds_count[5m]))
 
       - record: sparkstation:engine_latency_p50_seconds
-        expr: histogram_quantile(0.50, sum by (alias, host, le) (rate(vllm:e2e_request_latency_seconds_bucket[5m])))
+        expr: histogram_quantile(0.50, sum by (alias, host, le) (rate(vllm:e2e_request_latency_seconds_bucket[5m]) or rate(sglang_e2e_request_latency_seconds_bucket[5m])))
 
       - record: sparkstation:engine_latency_p95_seconds
-        expr: histogram_quantile(0.95, sum by (alias, host, le) (rate(vllm:e2e_request_latency_seconds_bucket[5m])))
+        expr: histogram_quantile(0.95, sum by (alias, host, le) (rate(vllm:e2e_request_latency_seconds_bucket[5m]) or rate(sglang_e2e_request_latency_seconds_bucket[5m])))
 
       - record: sparkstation:engine_ttft_p95_seconds
-        expr: histogram_quantile(0.95, sum by (alias, host, le) (rate(vllm:time_to_first_token_seconds_bucket[5m])))
+        expr: histogram_quantile(0.95, sum by (alias, host, le) (rate(vllm:time_to_first_token_seconds_bucket[5m]) or rate(sglang_time_to_first_token_seconds_bucket[5m])))
 
       - record: sparkstation:engine_queue_depth
-        expr: sum by (alias, host, engine) (vllm:num_requests_waiting)
+        expr: sum by (alias, host, engine) (vllm:num_requests_waiting or sglang_num_queue_reqs)
 
       - record: sparkstation:engine_running_requests
-        expr: sum by (alias, host, engine) (vllm:num_requests_running)
+        expr: sum by (alias, host, engine) (vllm:num_requests_running or sglang_num_running_reqs)
 
       # KV-cache utilization, 0-1. vLLM renamed gpu_cache_usage_perc ->
       # kv_cache_usage_perc (~v0.22); keep both via `or` for older engines.
+      # SGLang: token_usage is the pool occupancy fraction.
       - record: sparkstation:engine_kv_cache_usage_ratio
-        expr: sum by (alias, host, engine) (vllm:kv_cache_usage_perc or vllm:gpu_cache_usage_perc)
+        expr: sum by (alias, host, engine) (vllm:kv_cache_usage_perc or vllm:gpu_cache_usage_perc or sglang_token_usage)
 
       # Generation throughput (tokens/sec) per model.
       - record: sparkstation:engine_generation_tokens_per_second
-        expr: sum by (alias, host, engine) (rate(vllm:generation_tokens_total[5m]))
+        expr: sum by (alias, host, engine) (rate(vllm:generation_tokens_total[5m]) or rate(sglang_generation_tokens_total[5m]))
 
       # ── Cache & speculative-decoding efficiency (added 2026-08-15) ──────
       # These answer "is prefix caching working?" and "is spec decode paying
@@ -70,27 +82,43 @@ groups:
 
       # Prompt throughput (tokens/sec) — pairs with generation throughput.
       - record: sparkstation:engine_prompt_tokens_per_second
-        expr: sum by (alias, host, engine) (rate(vllm:prompt_tokens_total[5m]))
+        expr: sum by (alias, host, engine) (rate(vllm:prompt_tokens_total[5m]) or rate(sglang_prompt_tokens_total[5m]))
 
       # Prefix-cache hit ratio, 0-1: fraction of queried blocks served from
       # cache. NaN when idle (0/0) — Grafana renders gaps, which is correct.
+      # SGLang exposes the hit rate directly as a gauge (already 0-1).
       - record: sparkstation:engine_prefix_cache_hit_ratio
         expr: >-
           sum by (alias, host, engine) (rate(vllm:prefix_cache_hits_total[5m]))
           /
           sum by (alias, host, engine) (rate(vllm:prefix_cache_queries_total[5m]))
+          or
+          sum by (alias, host, engine) (sglang_cache_hit_rate)
 
       # Fraction of prompt tokens that skipped prefill via cache, 0-1.
       # This is the ratio that translates directly into TTFT savings.
+      # SGLang has no direct cached-token counter; derive it as
+      # 1 - uncached/total prompt tokens.
       - record: sparkstation:engine_prompt_cached_token_ratio
         expr: >-
           sum by (alias, host, engine) (rate(vllm:prompt_tokens_cached_total[5m]))
           /
           sum by (alias, host, engine) (rate(vllm:prompt_tokens_total[5m]))
+          or
+          (
+            1
+            -
+            sum by (alias, host, engine) (rate(sglang_uncached_prompt_tokens_histogram_sum[5m]))
+            /
+            sum by (alias, host, engine) (rate(sglang_prompt_tokens_histogram_sum[5m]))
+          )
 
       # Spec-decode acceptance rate, 0-1: accepted / drafted tokens.
       # DSpark k=5 and Qwen MTP-2 are content-dependent; this is the number
       # that decides whether spec decode helps for the current workload.
+      # NOTE: SGLang does NOT export spec-decode acceptance as a Prometheus
+      # metric (it only logs "accept len"/"accept rate"), so this stays
+      # vLLM-only and the SGLang daily driver shows no series here.
       - record: sparkstation:engine_spec_accept_rate
         expr: >-
           sum by (alias, host, engine) (rate(vllm:spec_decode_num_accepted_tokens_total[5m]))
@@ -98,7 +126,7 @@ groups:
           sum by (alias, host, engine) (rate(vllm:spec_decode_num_draft_tokens_total[5m]))
 
       # Mean accepted tokens per draft step. Effective decode speedup is
-      # roughly (1 + this) vs non-speculative.
+      # roughly (1 + this) vs non-speculative. vLLM-only (see note above).
       - record: sparkstation:engine_spec_accepted_per_draft
         expr: >-
           sum by (alias, host, engine) (rate(vllm:spec_decode_num_accepted_tokens_total[5m]))
@@ -107,7 +135,7 @@ groups:
 
       # Inter-token latency p50/p95 — the "feel" of streaming speed.
       - record: sparkstation:engine_itl_p50_seconds
-        expr: histogram_quantile(0.50, sum by (alias, host, le) (rate(vllm:inter_token_latency_seconds_bucket[5m])))
+        expr: histogram_quantile(0.50, sum by (alias, host, le) (rate(vllm:inter_token_latency_seconds_bucket[5m]) or rate(sglang_inter_token_latency_seconds_bucket[5m])))
 
       - record: sparkstation:engine_itl_p95_seconds
-        expr: histogram_quantile(0.95, sum by (alias, host, le) (rate(vllm:inter_token_latency_seconds_bucket[5m])))
+        expr: histogram_quantile(0.95, sum by (alias, host, le) (rate(vllm:inter_token_latency_seconds_bucket[5m]) or rate(sglang_inter_token_latency_seconds_bucket[5m])))
