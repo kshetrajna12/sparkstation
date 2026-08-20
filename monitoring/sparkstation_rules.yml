@@ -114,24 +114,29 @@ groups:
           )
 
       # Spec-decode acceptance rate, 0-1: accepted / drafted tokens.
-      # DSpark k=5 and Qwen MTP-2 are content-dependent; this is the number
-      # that decides whether spec decode helps for the current workload.
-      # NOTE: SGLang does NOT export spec-decode acceptance as a Prometheus
-      # metric (it only logs "accept len"/"accept rate"), so this stays
-      # vLLM-only and the SGLang daily driver shows no series here.
+      # DSpark and Qwen MTP-2 are content-dependent; this is the number that
+      # decides whether spec decode helps for the current workload. SGLang
+      # exports this directly as sglang:spec_accept_rate (a gauge), so `or` it
+      # onto the vLLM counter ratio.
       - record: sparkstation:engine_spec_accept_rate
         expr: >-
           sum by (alias, host, engine) (rate(vllm:spec_decode_num_accepted_tokens_total[5m]))
           /
           sum by (alias, host, engine) (rate(vllm:spec_decode_num_draft_tokens_total[5m]))
+          or
+          sum by (alias, host, engine) (sglang_spec_accept_rate)
 
-      # Mean accepted tokens per draft step. Effective decode speedup is
-      # roughly (1 + this) vs non-speculative. vLLM-only (see note above).
+      # Effective accepted tokens per verify/draft step — decode speedup ≈ this
+      # (vLLM: accepted/drafts, ~1+accepted; SGLang: spec_accept_length already
+      # includes the bonus token, so it's the effective tokens-per-forward
+      # directly). Both answer "how many tokens per model forward pass".
       - record: sparkstation:engine_spec_accepted_per_draft
         expr: >-
           sum by (alias, host, engine) (rate(vllm:spec_decode_num_accepted_tokens_total[5m]))
           /
           sum by (alias, host, engine) (rate(vllm:spec_decode_num_drafts_total[5m]))
+          or
+          sum by (alias, host, engine) (sglang_spec_accept_length)
 
       # Inter-token latency p50/p95 — the "feel" of streaming speed.
       - record: sparkstation:engine_itl_p50_seconds

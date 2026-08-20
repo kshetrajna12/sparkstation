@@ -2211,7 +2211,7 @@
       ],
       "title": "Spec-Decode Acceptance",
       "type": "timeseries",
-      "description": "Spec-decode acceptance is vLLM/dsv4 only \u2014 SGLang (the qwen daily driver) does not export accept rate as a Prometheus metric (it logs 'accept len'/'accept rate' instead), so this panel shows no data for SGLang models. Not a bug."
+      "description": "Acceptance rate (accepted/proposed drafts) and effective accepted tokens per forward pass. Both vLLM (MTP) and SGLang (DSpark) export these \u2014 for SGLang, accept-length already includes the bonus token."
     }
   ],
   "refresh": "10s",
