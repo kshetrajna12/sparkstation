@@ -259,3 +259,7 @@ gateway/litellm.yaml
 # Local machine-specific config (cluster hosts with real IPs, ssh users,
 # hostnames). Never commit. See models.yaml for the shape it should mirror.
 .sparkstation.local.yaml
+
+# blue-green gateway runtime state
+gateway/.litellm-port
+gateway/.litellm-*.log

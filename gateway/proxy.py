@@ -40,6 +40,37 @@ logger = logging.getLogger("gateway.proxy")
 # 7999: below the model port range (8001-8100) — see cli.GATEWAY_INTERNAL_PORT.
 UPSTREAM_URL = os.environ.get("SPARKSTATION_LITELLM_URL", "http://127.0.0.1:7999")
 SUPERVISOR_URL = os.environ.get("SPARKSTATION_SUPERVISOR_URL", "http://127.0.0.1:9001")
+
+# Blue-green: the litellm-bluegreen.sh manager runs litellm on one of two ports
+# and writes the ACTIVE port into this pointer file, flipping it atomically once
+# a freshly-reloaded litellm is healthy. The proxy watches the pointer and swaps
+# its upstream client live — so config reloads never drop the public :8000 port.
+LITELLM_PORT_FILE = os.environ.get("SPARKSTATION_LITELLM_PORT_FILE", "gateway/.litellm-port")
+# In-flight streams hold a reference to the old client; keep it alive this long
+# after a flip so long generations finish before the old connections close.
+_UPSTREAM_DRAIN_GRACE = float(os.environ.get("SPARKSTATION_UPSTREAM_DRAIN_GRACE", "300"))
+
+
+def _default_port() -> int:
+    try:
+        return int(UPSTREAM_URL.rsplit(":", 1)[1])
+    except Exception:
+        return 7999
+
+
+def _read_active_port() -> int:
+    try:
+        return int(open(LITELLM_PORT_FILE).read().strip())
+    except Exception:
+        return _default_port()
+
+
+def _new_upstream_client(port: int) -> "httpx.AsyncClient":
+    return httpx.AsyncClient(
+        base_url=f"http://127.0.0.1:{port}",
+        timeout=httpx.Timeout(connect=10, read=None, write=60, pool=10),
+        limits=httpx.Limits(max_connections=256, max_keepalive_connections=64),
+    )
 try:
     # Read the supervisor's settings (.env-aware) so auto-resume calls carry
     # the API key when one is configured. Falls back to plain env.
@@ -86,27 +117,62 @@ app = FastAPI(title="Sparkstation Gateway Proxy", docs_url=None, redoc_url=None)
 
 client: Optional[httpx.AsyncClient] = None
 supervisor_client: Optional[httpx.AsyncClient] = None
+_current_port: Optional[int] = None
+_upstream_task: Optional["asyncio.Task"] = None
 
 # Tiny TTL cache of supervisor model state so per-request checks don't hammer it.
 _models_cache: dict = {"ts": 0.0, "models": []}
 _MODELS_CACHE_TTL = 2.0
 
 
+async def _close_later(c: "httpx.AsyncClient", delay: float):
+    """Close a retired upstream client after a grace so in-flight streams drain."""
+    try:
+        await asyncio.sleep(delay)
+        await c.aclose()
+    except Exception:
+        pass
+
+
+async def _upstream_watcher():
+    """Follow the blue-green pointer file; swap the upstream client on a flip.
+
+    New requests use the freshly-assigned global `client`; requests already
+    streaming hold their own connection on the old client, which is closed only
+    after _UPSTREAM_DRAIN_GRACE. Result: config reloads never break the API.
+    """
+    global client, _current_port
+    while True:
+        try:
+            port = _read_active_port()
+            if port != _current_port:
+                new = _new_upstream_client(port)
+                old = client
+                client = new
+                _current_port = port
+                logger.info(f"Gateway proxy upstream flipped -> 127.0.0.1:{port}")
+                if old is not None:
+                    asyncio.create_task(_close_later(old, _UPSTREAM_DRAIN_GRACE))
+        except Exception as e:
+            logger.warning(f"upstream watcher error: {e}")
+        await asyncio.sleep(1)
+
+
 @app.on_event("startup")
 async def _startup():
-    global client, supervisor_client
+    global client, supervisor_client, _current_port, _upstream_task
+    _current_port = _read_active_port()
     # No read timeout: long generations stream for minutes.
-    client = httpx.AsyncClient(
-        base_url=UPSTREAM_URL,
-        timeout=httpx.Timeout(connect=10, read=None, write=60, pool=10),
-        limits=httpx.Limits(max_connections=256, max_keepalive_connections=64),
-    )
+    client = _new_upstream_client(_current_port)
     supervisor_client = httpx.AsyncClient(base_url=SUPERVISOR_URL, timeout=10)
-    logger.info(f"Gateway proxy up: upstream={UPSTREAM_URL} supervisor={SUPERVISOR_URL}")
+    _upstream_task = asyncio.create_task(_upstream_watcher())
+    logger.info(f"Gateway proxy up: upstream=127.0.0.1:{_current_port} (blue-green) supervisor={SUPERVISOR_URL}")
 
 
 @app.on_event("shutdown")
 async def _shutdown():
+    if _upstream_task:
+        _upstream_task.cancel()
     if client:
         await client.aclose()
     if supervisor_client:
