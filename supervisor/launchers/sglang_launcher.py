@@ -81,6 +81,16 @@ class SGLangLauncher(ModelLauncher):
                 if dm:
                     docker_cmd.extend(["--memory", f"{dm}g", "--memory-swap", f"{dm}g"])
 
+                # Optional docker-level flags some recipes require. The DFlash2
+                # daily driver runs --privileged and pins to the Cortex-X5 cores
+                # (--cpuset-cpus) per its qualified recipe; both are docker args
+                # (not sglang args) so they can't ride in sglang_flags.
+                if config.extra_args.get("docker_privileged"):
+                    docker_cmd.append("--privileged")
+                cpuset = config.extra_args.get("docker_cpuset")
+                if cpuset:
+                    docker_cmd.extend(["--cpuset-cpus", str(cpuset)])
+
                 # Per-model env vars (e.g. TORCHINDUCTOR_CACHE_DIR for a
                 # persistent torch.compile cache → fast subsequent boots).
                 for env_key, env_val in (config.env_vars or {}).items():
