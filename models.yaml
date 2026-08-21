@@ -166,11 +166,15 @@ models:
       max_concurrent_requests: 4
 
   qwen3.8-sglang:
-    # DAILY DRIVER — Qwen3.8-27B on SGLang + DSpark spec-decode. Best-synthesis
-    # config from the 2026-08-18 gauntlet: 39 tok/s single-stream (fastest
-    # measured), 14/14 coding, native vision, graceful concurrency. Fully
-    # sparkstation-managed via the SGLang launcher (extended for raw-flag
-    # passthrough). Recipe reference: patches/qwen-daily-driver-sglang.sh.
+    # DAILY DRIVER — Qwen3.8-27B on SGLang + DFlash2 speculative decoding.
+    # Swapped from DSpark 2026-08-21 after a full head-to-head: DFlash2 hits
+    # ~66 tok/s net decode C1 on code (vs DSpark ~38) — verified with the
+    # recipe's own net-decode bench on worker1. Single-node (second Spark free).
+    # Image built locally from the 0xWhiteMage overlay (patch/build-dflash2-image.sh):
+    # public SM121 base + 6 checksum-verified DFlash2 selector-capture .py files.
+    # Drafter z-lab/Qwen3.8-27B-DFlash2 cached on worker1.
+    # CRITICAL: NO torch.compile and NO num-continuous-decode-steps>1 on DFlash2 —
+    # the recipe measured them crawling to 3-6 tok/s on this build.
     name: "RadixArk/Qwen3.8-27B-NVFP4"
     backend: "sglang"
     model_type: "chat"
@@ -178,67 +182,65 @@ models:
     quantization: "none"  # SGLang auto-detects NVFP4 from the checkpoint
     default: true          # gateway "default" alias → the daily driver
     vision_default: true   # natively multimodal → gateway "vision" alias
-    # 93 → mem-fraction 0.78 (launcher clamps ≤0.82). fp8 KV makes 0.78 as
-    # capacious as a far higher bf16 fraction, with OS headroom. NEVER go
-    # near 0.88 (wedged worker1 2026-08-18; see qwen-serving-config-lessons).
-    memory_gb: 93
+    # 98 → mem-fraction 0.82 (launcher clamp). Actual usage ~80GB (weights +
+    # the 1M-token KV pool, bounded by --max-total-tokens), ~40GB OS headroom.
+    memory_gb: 98
     idle_timeout_minutes: 120
     auto_suspend_enabled: false
-    docker_image: "lmsysorg/sglang@sha256:febfb971c7352570fc445c466ebd6ffc9d896024958e544a60f2137fd85856b1"
-    env_vars:
-      TORCHINDUCTOR_CACHE_DIR: "/cache/inductor"  # persistent compile cache → fast reboots
-    volumes:
-      - "/home/kshetrajna/.config/qwen38:/out"              # patched chat template
-      - "/home/kshetrajna/.config/qwen38/sglang-cache:/cache"  # torch.compile cache
+    docker_image: "lmsysorg/sglang:qwen38-27b-dflash2"
     extra_args:
-      # "native" → launcher OMITS --context-length, so SGLang uses the model's
-      # own max (262144) exactly as the hand-rolled standalone did. This MATTERS:
-      # passing --context-length 262144 explicitly made torch.compile compile a
-      # different graph shape than the standalone's cached kernels → cache MISS →
-      # fresh compile → Triton "Unsupported rounding mode" crash at graph capture
-      # (2026-08-18). Omitting it → same shape → cache HIT → no recompile, no crash.
-      max_model_len: native
-      docker_memory_gb: 105   # cgroup safety cap: OOM-kills the container before it can hang the node
+      max_model_len: 262144        # → --context-length; native, safe (no torch.compile)
+      docker_memory_gb: 110        # cgroup safety cap: OOM-kills before it can hang the node
+      docker_privileged: true      # recipe requirement
+      docker_cpuset: "5-9,15-19"   # pin to the ten Cortex-X5 cores (recipe)
       sglang_flags:
+        - "--revision"
+        - "554ebba9b5f1b79dc11246341960360e6ef05ef4"   # pinned base model rev
         - "--kv-cache-dtype"
         - "fp8_e4m3"
         - "--attention-backend"
         - "flashinfer"
         - "--chunked-prefill-size"
-        - "4096"
+        - "8192"
         - "--disable-prefill-cuda-graph"
-        - "--cuda-graph-max-bs"
-        - "8"
-        - "--speculative-algorithm"
-        - "DSPARK"
-        - "--speculative-draft-model-path"
-        - "RadixArk/Qwen3.8-27B-DSpark"
-        - "--speculative-draft-attention-backend"
-        - "flashinfer"
-        - "--speculative-dspark-block-size"
-        - "7"
-        - "--speculative-draft-model-quantization"
-        - "unquant"
-        - "--mamba-radix-cache-strategy"
-        - "extra_buffer_lazy"
         - "--mamba-ssm-dtype"
-        - "float32"
+        - "bfloat16"
         - "--mamba-full-memory-ratio"
-        - "11.01"
+        - "4.21"
+        - "--mamba-radix-cache-strategy"
+        - "extra_buffer"
+        - "--max-mamba-cache-size"
+        - "20"
         - "--max-running-requests"
+        - "4"
+        - "--max-total-tokens"
+        - "1048576"
+        - "--speculative-algorithm"
+        - "DFLASH"
+        - "--speculative-draft-model-path"
+        - "z-lab/Qwen3.8-27B-DFlash2"
+        - "--speculative-draft-model-revision"
+        - "50307d4c4cde6860d4eee73e2547cd786fe8e8a4"
+        - "--speculative-num-draft-tokens"
         - "8"
-        - "--enable-torch-compile"
-        - "--torch-compile-max-bs"
-        - "8"
-        - "--num-continuous-decode-steps"
-        - "2"
+        - "--speculative-draft-window-size"
+        - "2048"
         - "--reasoning-parser"
         - "qwen3"
         - "--tool-call-parser"
         - "qwen3_coder"
-        - "--chat-template"
-        - "/out/chat-template-sglang.jinja"
+        - "--sampling-defaults"
+        - "model"
+        - "--cuda-graph-max-bs-decode"
+        - "4"
+        - "--sleep-on-idle"
+        - "--enable-priority-scheduling"
+        - "--default-priority-value"
+        - "0"
+        - "--priority-scheduling-preemption-threshold"
+        - "10"
         - "--enable-metrics"
+        - "--enable-cache-report"
 
   flux-dev:
     name: "black-forest-labs/FLUX.1-dev"
