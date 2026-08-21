@@ -15,6 +15,13 @@ REQUESTS="${BENCH_REQUESTS:-10}"
 WARMUP="${BENCH_WARMUP:-3}"
 MAX_TOKENS="${BENCH_MAX_TOKENS:-256}"
 
+# Attribute this harness to the 'autoresearch' gateway client (per-client
+# metrics/limits). The key is read from the gitignored gateway/clients.yaml so
+# it never lands in git; override with SPARKSTATION_API_KEY. Falls back to
+# dummy-key -> the anonymous client.
+SPARK_KEY="${SPARKSTATION_API_KEY:-$(grep -oE 'sk-spark-autoresearch-[0-9a-f]+' gateway/clients.yaml 2>/dev/null | head -1)}"
+export SPARK_KEY="${SPARK_KEY:-dummy-key}"
+
 echo "Benchmarking $MODEL ($MODE) — $REQUESTS requests, $WARMUP warmup, max_tokens=$MAX_TOKENS" >&2
 
 # Qwen3.5 / Qwen3.6 benchmark with thinking disabled
@@ -22,10 +29,11 @@ echo "Benchmarking $MODEL ($MODE) — $REQUESTS requests, $WARMUP warmup, max_to
 if [[ "$MODEL" == *"qwen3."* || "$MODEL" == *"qwen35"* || "$MODEL" == *"qwen36"* ]] && [[ "$MODE" == "chat" ]]; then
     echo "Qwen3.x detected — direct benchmark with thinking disabled" >&2
     .venv/bin/python - "$MODEL" "$REQUESTS" "$WARMUP" "$MAX_TOKENS" <<'PYEOF'
-import asyncio, sys, time, json, statistics, httpx
+import asyncio, os, sys, time, json, statistics, httpx
 
 model, num_req, warmup, max_tok = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 BASE_URL = "http://localhost:8000/v1"
+API_KEY = os.environ.get("SPARK_KEY", "dummy-key")
 prompts = [
     "Explain the concept of photosynthesis in two sentences.",
     "What are the three laws of thermodynamics?",
@@ -49,7 +57,7 @@ async def bench_one(client, prompt, max_tokens):
         "max_tokens": max_tokens,
         "stream": True,
         "chat_template_kwargs": {"enable_thinking": False},
-    }, headers={"Authorization": "Bearer dummy-key"}, timeout=120.0) as resp:
+    }, headers={"Authorization": f"Bearer {API_KEY}"}, timeout=120.0) as resp:
         async for line in resp.aiter_lines():
             if line.startswith("data: ") and line != "data: [DONE]":
                 if ttft is None:

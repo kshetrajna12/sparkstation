@@ -1,0 +1,65 @@
+# Per-client access control for the Sparkstation gateway.
+#
+# Copy to gateway/clients.yaml (gitignored — keys are secrets) and give each
+# real client its own key. `sparkstation start` copies this template if
+# clients.yaml is missing. The proxy hot-reloads clients.yaml on save — no
+# restart needed.
+#
+# Each request's key (Authorization: Bearer <key>, or x-api-key) is matched to
+# a client. A client has:
+#   keys:        one or more API keys that map to this client
+#   allow:       model-name globs it may call (["*"] = all)
+#   rpm:         requests/minute, sliding 60s window (0 = unlimited)
+#   concurrency: max simultaneous in-flight requests (0 = unlimited)
+#
+# concurrency is the real lever on a single-stream GPU: cap a noisy background
+# client (scout) so it can't starve an interactive one (foxhole), without
+# reordering or queueing anything.
+
+# When true, a key matching no client below is rejected with 401. Leave false
+# until every client has a key; then flip to lock the gateway down.
+enforce_auth: false
+
+clients:
+  # Interactive coding agents — never throttled.
+  - name: pi
+    keys: ["sk-spark-pi-REPLACE_ME"]
+    allow: ["*"]
+    rpm: 0
+    concurrency: 0
+
+  - name: openclaw
+    keys: ["sk-spark-openclaw-REPLACE_ME"]
+    allow: ["*"]
+    rpm: 0
+    concurrency: 0
+
+  # Long-horizon agent — explicitly never deprioritised.
+  - name: foxhole
+    keys: ["sk-spark-foxhole-REPLACE_ME"]
+    allow: ["*"]
+    rpm: 0
+    concurrency: 0
+
+  # Background watcher agent — capped so it can't saturate dsv4.
+  - name: scout
+    keys: ["sk-spark-scout-REPLACE_ME"]
+    allow: ["default", "dsv4-flash", "bge-m3", "clip-vit"]
+    rpm: 120
+    concurrency: 2
+
+  # Benchmark / autoresearch harness — its own key for attribution.
+  - name: autoresearch
+    keys: ["sk-spark-autoresearch-REPLACE_ME"]
+    allow: ["*"]
+    rpm: 0
+    concurrency: 0
+
+# Any key not listed above (incl. the legacy "dummy-key"/"sk-local" and the
+# CLI's own health checks) falls here. Kept generous so nothing breaks; tighten
+# once every client has a real key.
+default:
+  name: anonymous
+  allow: ["*"]
+  rpm: 0
+  concurrency: 0

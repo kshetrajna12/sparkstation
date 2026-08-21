@@ -263,3 +263,6 @@ gateway/litellm.yaml
 # blue-green gateway runtime state
 gateway/.litellm-port
 gateway/.litellm-*.log
+
+# Per-client gateway policy — holds API keys (secrets); template is clients.example.yaml
+gateway/clients.yaml

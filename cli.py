@@ -115,6 +115,22 @@ def _kill_and_wait(name: str, timeout: int = 10):
 GATEWAY_INTERNAL_PORT = 7999          # blue
 GATEWAY_INTERNAL_PORT_GREEN = 7998    # green (blue-green idle slot)
 GATEWAY_PORT_POINTER = "gateway/.litellm-port"  # active-port pointer (proxy follows this)
+GATEWAY_CLIENTS_FILE = "gateway/clients.yaml"           # per-client policy (gitignored; secrets)
+GATEWAY_CLIENTS_EXAMPLE = "gateway/clients.example.yaml"
+
+
+def _ensure_clients_config() -> None:
+    """Seed gateway/clients.yaml from the committed template on first run.
+
+    The real file holds API keys (secrets) so it's gitignored; the proxy
+    hot-reloads it. If it's missing we copy the example so the gateway comes up
+    with a working (allow-all, unenforced) policy instead of no policy at all.
+    """
+    dst = PROJECT_ROOT / GATEWAY_CLIENTS_FILE
+    src = PROJECT_ROOT / GATEWAY_CLIENTS_EXAMPLE
+    if not dst.exists() and src.exists():
+        import shutil
+        shutil.copyfile(src, dst)
 
 
 def _start_litellm() -> "subprocess.Popen":
@@ -159,8 +175,10 @@ def _ensure_proxy() -> None:
     if _is_port_open("127.0.0.1", 8000):
         return
     log = LOG_DIR / "gateway-proxy.log"
+    _ensure_clients_config()
     px_env = os.environ.copy()
     px_env["SPARKSTATION_LITELLM_PORT_FILE"] = GATEWAY_PORT_POINTER  # blue-green pointer to follow
+    px_env["SPARKSTATION_CLIENTS_FILE"] = GATEWAY_CLIENTS_FILE       # per-client policy file
     with open(log, "w") as lf:
         proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "gateway.proxy:app",
