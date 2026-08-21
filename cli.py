@@ -112,17 +112,21 @@ def _kill_and_wait(name: str, timeout: int = 10):
 # across LiteLLM bounces so model swaps no longer drop the public API port.
 # 7999 deliberately sits BELOW the model port range (8001-8100) — 8002 was
 # bge-m3's container port.
-GATEWAY_INTERNAL_PORT = 7999
+GATEWAY_INTERNAL_PORT = 7999          # blue
+GATEWAY_INTERNAL_PORT_GREEN = 7998    # green (blue-green idle slot)
+GATEWAY_PORT_POINTER = "gateway/.litellm-port"  # active-port pointer (proxy follows this)
 
 
 def _start_litellm() -> "subprocess.Popen":
-    """Launch LiteLLM under the config watcher; returns the watcher process.
+    """Launch LiteLLM under the BLUE-GREEN manager; returns the manager process.
 
-    The watcher (gateway/litellm-watch.sh) restarts LiteLLM whenever
-    litellm.yaml content changes — the supervisor's gateway_sync rewrites it
-    as models come up during background autoload, so the gateway can start
-    immediately and pick up models incrementally. The 'gateway' pidfile holds
-    the WATCHER pid; killing it (SIGTERM) also stops the LiteLLM child.
+    litellm-bluegreen.sh runs litellm on one of two ports and, on a config
+    change, brings the new litellm up on the idle port, health-checks it, then
+    atomically flips gateway/.litellm-port — the :8000 proxy follows that pointer
+    and swaps its upstream live, so reloads never drop the public API (the old
+    per-model restart-in-place dropped it ~2s each, 502-ing clients during a
+    profile bring-up). The 'gateway' pidfile holds the MANAGER pid; SIGTERM to it
+    stops the active litellm child too.
     """
     gw_log = LOG_DIR / "gateway.log"
     gw_env = os.environ.copy()
@@ -135,7 +139,8 @@ def _start_litellm() -> "subprocess.Popen":
     gw_env["LITELLM_PYTHON"] = str(venv_python) if venv_python.exists() else sys.executable
     with open(gw_log, "w") as lf:
         proc = subprocess.Popen(
-            ["bash", "gateway/litellm-watch.sh", str(GATEWAY_INTERNAL_PORT)],
+            ["bash", "gateway/litellm-bluegreen.sh",
+             str(GATEWAY_INTERNAL_PORT), str(GATEWAY_INTERNAL_PORT_GREEN), GATEWAY_PORT_POINTER],
             stdout=lf, stderr=subprocess.STDOUT,
             env=gw_env, cwd=PROJECT_ROOT,
             start_new_session=True,
@@ -154,12 +159,14 @@ def _ensure_proxy() -> None:
     if _is_port_open("127.0.0.1", 8000):
         return
     log = LOG_DIR / "gateway-proxy.log"
+    px_env = os.environ.copy()
+    px_env["SPARKSTATION_LITELLM_PORT_FILE"] = GATEWAY_PORT_POINTER  # blue-green pointer to follow
     with open(log, "w") as lf:
         proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "gateway.proxy:app",
              "--host", "127.0.0.1", "--port", "8000", "--log-level", "warning"],
             stdout=lf, stderr=subprocess.STDOUT,
-            cwd=PROJECT_ROOT, start_new_session=True,
+            env=px_env, cwd=PROJECT_ROOT, start_new_session=True,
         )
     _write_pid("gateway-proxy", proc.pid)
     for _ in range(15):
@@ -407,7 +414,7 @@ def start(ctx, detach, profile, wait_models):
     if strays.stdout.strip():
         click.echo(f"  → Reaping {len(strays.stdout.strip().splitlines())} stray supervisor process(es) before start")
         subprocess.run(["pkill", "-9", "-f", "uvicorn supervisor.main:app"], capture_output=True)
-    subprocess.run(["pkill", "-9", "-f", "litellm-watch.sh"], capture_output=True)
+    subprocess.run(["pkill", "-9", "-f", "gateway/litellm-"], capture_output=True)
     subprocess.run(["pkill", "-9", "-f", "litellm.proxy.proxy_cli"], capture_output=True)
     subprocess.run(["pkill", "-9", "-f", "uvicorn gateway.proxy:app"], capture_output=True)
     time.sleep(1)  # let the kernel finish reaping before we spawn the replacement
@@ -586,7 +593,7 @@ def stop():
     _kill_and_wait("gateway", timeout=5)
     # Also kill by pattern in case PID file was lost. Watcher FIRST — killing
     # only the LiteLLM child leaves the watcher alive to restart it.
-    subprocess.run(["pkill", "-9", "-f", "litellm-watch.sh"], capture_output=True)
+    subprocess.run(["pkill", "-9", "-f", "gateway/litellm-"], capture_output=True)
     subprocess.run(["pkill", "-9", "-f", "litellm.proxy.proxy_cli"], capture_output=True)
     click.echo("     done")
 
@@ -755,7 +762,7 @@ def _restart_gateway() -> bool:
     _ensure_dirs()
     _write_gateway_yaml()
     _kill_and_wait("gateway", timeout=5)
-    subprocess.run(["pkill", "-9", "-f", "litellm-watch.sh"], capture_output=True)
+    subprocess.run(["pkill", "-9", "-f", "gateway/litellm-"], capture_output=True)
     subprocess.run(["pkill", "-9", "-f", "litellm.proxy.proxy_cli"], capture_output=True)
     time.sleep(1)
     _start_litellm()
