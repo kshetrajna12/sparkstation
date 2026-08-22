@@ -65,6 +65,17 @@ clients:
     rpm: 0
     concurrency: 4
 
+  # Desire Foundry private runtime (autonomous forge-worker + its internal pi
+  # coding agents). All its traffic egresses through the df-spark-allowproxy
+  # choke point, which stamps THIS key — so the sandbox is attributed as one
+  # tenant and can't present another client's key. Bounded concurrency so the
+  # autonomous workers can't starve the interactive clients (foxhole/pi).
+  - name: desire-foundry
+    keys: ["sk-spark-desire-foundry-REPLACE_ME"]
+    allow: ["default", "vision", "bge-m3", "clip-vit"]
+    rpm: 0
+    concurrency: 4
+
 # Any key not listed above (incl. the legacy "dummy-key"/"sk-local" and the
 # CLI's own health checks) falls here. Kept generous so nothing breaks; tighten
 # once every client has a real key.
