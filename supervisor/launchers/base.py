@@ -10,7 +10,7 @@ class ModelLauncher(ABC):
     """Abstract base class for model launchers."""
 
     @abstractmethod
-    async def launch(self, config: ModelConfig, model_id: str, port: int) -> ModelInstance:
+    async def launch(self, config: ModelConfig, model_id: str, port: int, memory_gb: float | None = None) -> ModelInstance:
         """
         Launch a model server.
 
@@ -18,6 +18,8 @@ class ModelLauncher(ABC):
             config: Model configuration
             model_id: Unique model ID
             port: Allocated port
+            memory_gb: Allocated memory in GB (drives gpu_memory_utilization /
+                mem-fraction sizing and the pre-launch host headroom check)
 
         Returns:
             Model instance with runtime information
