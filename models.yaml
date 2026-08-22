@@ -25,7 +25,7 @@ cluster:
     # `host: worker1` needs that file present on the machine that runs the
     # supervisor.
 
-# generic (default) = daily driver: Qwen3.8-27B on SGLang+DSpark (managed).
+# generic (default) = daily driver: Qwen3.8-27B on SGLang + DFlash2 (managed).
 # deep = DSV4-Flash 2-node reserve. image-indexing = vLLM batch qwen. The
 # three worker1 chat deployments are mutually exclusive; switch profiles with
 # `sparkstation stop && sparkstation start -d --profile <name>`.
@@ -259,22 +259,25 @@ models:
 profiles:
   # ── THREE-PROFILE STRUCTURE (2026-08-19, post-gauntlet) ─────────────────
   # generic       — DAILY DRIVER (coding/generic). Qwen3.8-27B on SGLang +
-  #                 DSpark spec-decode (best-synthesis config: fp8 KV,
-  #                 float32 SSM, torch-compile). 39 tok/s single-stream,
-  #                 graceful concurrency, native vision. Won the coding
-  #                 gauntlet 14/14. NOT sparkstation-managed — runs as a
-  #                 standalone persistent container on worker1 (~/dspark-
-  #                 best-persist.sh, restart=unless-stopped, :30000). This
-  #                 profile brings up only the primary-side aux models;
-  #                 switch with patches/spark-profile.sh generic.
+  #                 DFlash2 spec-decode (swapped from DSpark 2026-08-21; the
+  #                 current recipe — NVFP4 base weights, fp8 KV cache, no
+  #                 torch.compile — lives in the qwen3.8-sglang spec above).
+  #                 Fully sparkstation-managed on worker1: the supervisor
+  #                 launches and health-checks the container, and the gateway
+  #                 routes default+vision to it. The old standalone qwen38-best
+  #                 container (:30000, restart=unless-stopped) is RETIRED.
+  #                 WARNING: never start a standalone SGLang container for
+  #                 this model while the managed driver is up — two ~90 GB
+  #                 SGLang instances on the 121 GB unified node will wedge it
+  #                 (the 0.88-frac incident class; unplug-only recovery).
+  #                 Switch profiles with:
+  #                 `sparkstation stop && sparkstation start -d --profile <name>`.
   # deep          — RESERVE for hostile/long-horizon work. DSV4-Flash 2-node.
   # image-indexing— BATCH photo intake. Qwen3.8-27B on vLLM+MTP-2 (concurrency-
   #                 tuned, 135 tok/s aggregate c=8 — vLLM MTP batches well,
   #                 unlike SGLang-DSpark which poisons batch, proven 08-18).
-  #
-  # generic: aux only on primary; qwen chat is the standalone SGLang container.
   generic:
-    qwen3.8-sglang: {}  # DAILY DRIVER chat (SGLang+DSpark, default+vision alias)
+    qwen3.8-sglang: {}  # DAILY DRIVER chat (SGLang + DFlash2 on worker1, managed; default+vision alias)
     bge-m3: {}          # openclaw/memory-search text embeddings
     clip-vit: {}        # image embeddings (cross-modal search)
     face-detect: {}     # gallery recognition
