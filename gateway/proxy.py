@@ -31,8 +31,15 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     Counter,
+    Gauge,
     Histogram,
     generate_latest,
+)
+
+from gateway.clients import (
+    DENY_UNKNOWN_KEY,
+    Registry,
+    extract_key,
 )
 
 logger = logging.getLogger("gateway.proxy")
@@ -49,6 +56,11 @@ LITELLM_PORT_FILE = os.environ.get("SPARKSTATION_LITELLM_PORT_FILE", "gateway/.l
 # In-flight streams hold a reference to the old client; keep it alive this long
 # after a flip so long generations finish before the old connections close.
 _UPSTREAM_DRAIN_GRACE = float(os.environ.get("SPARKSTATION_UPSTREAM_DRAIN_GRACE", "300"))
+
+# Per-client access control (keys + model allow-lists + rate/concurrency limits
+# + attribution). Hot-reloaded from this YAML; see gateway/clients.py.
+CLIENTS_FILE = os.environ.get("SPARKSTATION_CLIENTS_FILE", "gateway/clients.yaml")
+clients = Registry(CLIENTS_FILE)
 
 
 def _default_port() -> int:
@@ -107,6 +119,26 @@ RESUMES_TOTAL = Counter(
     ["alias", "outcome"],
 )
 
+# Per-client attribution + policy enforcement (kept separate from the alias-only
+# metrics above so existing dashboards/recording rules are untouched).
+CLIENT_REQUESTS = Counter(
+    "sparkstation_gateway_client_requests_total",
+    "Requests through the gateway, attributed to the resolved client",
+    ["client", "alias", "code"],
+)
+
+CLIENT_DENIED = Counter(
+    "sparkstation_gateway_client_denied_total",
+    "Requests rejected by per-client policy (auth / allow-list / limits)",
+    ["client", "alias", "reason"],
+)
+
+CLIENT_INFLIGHT = Gauge(
+    "sparkstation_gateway_client_inflight",
+    "In-flight requests currently attributed to each client",
+    ["client"],
+)
+
 # Hop-by-hop headers must not be forwarded (RFC 7230 §6.1).
 HOP_BY_HOP = {
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
@@ -155,6 +187,7 @@ async def _upstream_watcher():
                     asyncio.create_task(_close_later(old, _UPSTREAM_DRAIN_GRACE))
         except Exception as e:
             logger.warning(f"upstream watcher error: {e}")
+        clients.maybe_reload()  # pick up clients.yaml edits without a restart
         await asyncio.sleep(1)
 
 
@@ -288,11 +321,41 @@ async def forward(request: Request, path: str):
         except (json.JSONDecodeError, AttributeError):
             pass
 
+    # ── Per-client access control (auth + allow-list + limits + attribution) ──
+    policy = clients.resolve(extract_key(request.headers))
+    if policy is None:  # enforce_auth on + unknown key
+        CLIENT_DENIED.labels(client="unknown", alias=alias, reason=DENY_UNKNOWN_KEY).inc()
+        REQUESTS_TOTAL.labels(alias=alias, method=request.method, code="401").inc()
+        return JSONResponse(
+            status_code=401,
+            content={"error": {"message": "Invalid or missing API key", "type": "invalid_api_key"}},
+        )
+    if alias != "none" and not policy.allows_model(alias):
+        CLIENT_DENIED.labels(client=policy.name, alias=alias, reason="model_not_allowed").inc()
+        REQUESTS_TOTAL.labels(alias=alias, method=request.method, code="403").inc()
+        return JSONResponse(
+            status_code=403,
+            content={"error": {"message": f"Client '{policy.name}' is not permitted to use model '{alias}'", "type": "model_not_allowed"}},
+        )
+
     if alias != "none":
         short_circuit = await _ensure_available(alias)
         if short_circuit is not None:
+            CLIENT_REQUESTS.labels(client=policy.name, alias=alias, code=str(short_circuit.status_code)).inc()
             REQUESTS_TOTAL.labels(alias=alias, method=request.method, code=str(short_circuit.status_code)).inc()
             return short_circuit
+
+    # Rate / concurrency limits (counters committed here; released in stream()).
+    admitted, reason, retry_after = policy.admit(alias, time.monotonic())
+    if not admitted:
+        CLIENT_DENIED.labels(client=policy.name, alias=alias, reason=reason).inc()
+        REQUESTS_TOTAL.labels(alias=alias, method=request.method, code="429").inc()
+        return JSONResponse(
+            status_code=429,
+            headers={"Retry-After": str(retry_after or 1)},
+            content={"error": {"message": f"Client '{policy.name}' {reason} (retry after {retry_after or 1}s)", "type": reason}},
+        )
+    CLIENT_INFLIGHT.labels(client=policy.name).set(policy.inflight)
 
     headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP}
     upstream_request = client.build_request(
@@ -307,6 +370,9 @@ async def forward(request: Request, path: str):
     try:
         upstream = await client.send(upstream_request, stream=True)
     except Exception as e:
+        policy.release()
+        CLIENT_INFLIGHT.labels(client=policy.name).set(policy.inflight)
+        CLIENT_REQUESTS.labels(client=policy.name, alias=alias, code="502").inc()
         REQUESTS_TOTAL.labels(alias=alias, method=request.method, code="502").inc()
         return JSONResponse(status_code=502, content={"error": {"message": f"Upstream gateway error: {e}", "type": "bad_gateway"}})
 
@@ -324,8 +390,11 @@ async def forward(request: Request, path: str):
                 yield chunk
         finally:
             await upstream.aclose()
+            policy.release()
+            CLIENT_INFLIGHT.labels(client=policy.name).set(policy.inflight)
             if measured:
                 REQUEST_DURATION.labels(alias=alias).observe(time.perf_counter() - start)
+            CLIENT_REQUESTS.labels(client=policy.name, alias=alias, code=str(upstream.status_code)).inc()
             REQUESTS_TOTAL.labels(alias=alias, method=request.method, code=str(upstream.status_code)).inc()
 
     return StreamingResponse(
