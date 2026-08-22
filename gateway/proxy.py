@@ -41,6 +41,8 @@ from gateway.clients import (
     Registry,
     extract_key,
 )
+from gateway.reasoning import DialectResolver
+from gateway.reasoning import normalize as normalize_reasoning
 
 logger = logging.getLogger("gateway.proxy")
 
@@ -61,6 +63,11 @@ _UPSTREAM_DRAIN_GRACE = float(os.environ.get("SPARKSTATION_UPSTREAM_DRAIN_GRACE"
 # + attribution). Hot-reloaded from this YAML; see gateway/clients.py.
 CLIENTS_FILE = os.environ.get("SPARKSTATION_CLIENTS_FILE", "gateway/clients.yaml")
 clients = Registry(CLIENTS_FILE)
+
+# Reasoning-control normalization: translate whatever thinking knobs a client
+# sends into the dialect the currently-loaded backend actually honors, so client
+# configs survive model swaps (see gateway/reasoning.py + reasoning.yaml).
+reasoning = DialectResolver()
 
 
 def _default_port() -> int:
@@ -187,7 +194,8 @@ async def _upstream_watcher():
                     asyncio.create_task(_close_later(old, _UPSTREAM_DRAIN_GRACE))
         except Exception as e:
             logger.warning(f"upstream watcher error: {e}")
-        clients.maybe_reload()  # pick up clients.yaml edits without a restart
+        clients.maybe_reload()    # pick up clients.yaml edits without a restart
+        reasoning.maybe_reload()  # pick up reasoning.yaml / litellm.yaml changes
         await asyncio.sleep(1)
 
 
@@ -314,10 +322,17 @@ async def forward(request: Request, path: str):
     body = await request.body()
 
     # Extract the model alias from JSON bodies on /v1/* (chat, embeddings, ...)
+    # and, for chat, normalize reasoning controls to the backend's dialect.
     alias = "none"
     if request.method == "POST" and path.startswith("v1/") and body:
         try:
-            alias = json.loads(body).get("model") or "none"
+            parsed = json.loads(body)
+            alias = parsed.get("model") or "none"
+            if alias != "none" and path.endswith("chat/completions") and isinstance(parsed, dict):
+                dialect = reasoning.dialect_for(alias)
+                if dialect != "passthrough":
+                    normalize_reasoning(parsed, dialect)
+                    body = json.dumps(parsed).encode()
         except (json.JSONDecodeError, AttributeError):
             pass
 

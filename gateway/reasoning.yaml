@@ -1,0 +1,33 @@
+# Thinking-control dialect per served model, for the gateway's reasoning
+# normalizer (gateway/reasoning.py). The proxy translates whatever a client
+# sends (thinking / enable_thinking / reasoning / reasoning_effort, anywhere)
+# into the dialect the CURRENTLY LOADED backend actually honors — so pi,
+# foxhole, desire-foundry etc. keep working across model swaps without any
+# per-client reconfiguration.
+#
+# Matching: `match` is a substring tested against the litellm target model for
+# the request's alias (from gateway/litellm.yaml). First rule that matches wins.
+# Hot-reloaded on save — no restart.
+#
+# Dialects (see gateway/reasoning.py):
+#   qwen_enable_thinking  on/off via chat_template_kwargs.enable_thinking (bool),
+#                         level via TOP-LEVEL reasoning_effort. (SGLang Qwen3.8
+#                         NVFP4 build — the current daily driver.)
+#   qwen_thinking         on/off via chat_template_kwargs.thinking (bool),
+#                         level via reasoning_effort INSIDE chat_template_kwargs.
+#                         (Qwen3.8 DFlash2 build.)
+#   passthrough           leave the request untouched.
+
+dialects:
+  # Current daily driver: RadixArk/Qwen3.8-27B-NVFP4 on SGLang.
+  - match: "NVFP4"
+    dialect: qwen_enable_thinking
+  # DFlash2 build (if the daily driver is swapped back to it).
+  - match: "DFlash2"
+    dialect: qwen_thinking
+  # DeepSeek-V4-Flash (deep profile) — leave its own reasoning handling alone.
+  - match: "deepseek"
+    dialect: passthrough
+
+# Anything not matched above: don't touch the request.
+default: passthrough
