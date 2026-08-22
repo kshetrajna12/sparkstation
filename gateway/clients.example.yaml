@@ -55,6 +55,16 @@ clients:
     rpm: 0
     concurrency: 0
 
+  # image_metadata_indexing app — bursty batch embeddings + VLM description.
+  # Bounded concurrency so a big indexing run can't starve interactive clients;
+  # scoped to the models it actually calls through :8000 (species-detect goes
+  # direct to :8004, not the gateway).
+  - name: image-indexing
+    keys: ["sk-spark-image-indexing-REPLACE_ME"]
+    allow: ["default", "vision", "bge-m3", "clip-vit"]
+    rpm: 0
+    concurrency: 4
+
 # Any key not listed above (incl. the legacy "dummy-key"/"sk-local" and the
 # CLI's own health checks) falls here. Kept generous so nothing breaks; tighten
 # once every client has a real key.
