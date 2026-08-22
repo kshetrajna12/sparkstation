@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, Optional
 import httpx
 from supervisor.launchers.base import ModelLauncher, LaunchError
+from supervisor.launchers.host_memory import check_memory_headroom
 from supervisor.models import ModelConfig, ModelInstance, ModelStatus, HealthStatus, Backend, ModelType
 from supervisor.config import settings
 from supervisor.cluster_helpers import merged_env, base_url_for_host
@@ -41,7 +42,7 @@ class VLLMLauncher(ModelLauncher):
         """Cleanup resources (close httpx client)."""
         await self.client.aclose()
 
-    async def launch(self, config: ModelConfig, model_id: str, port: int, memory_gb: float = None) -> ModelInstance:
+    async def launch(self, config: ModelConfig, model_id: str, port: int, memory_gb: float | None = None) -> ModelInstance:
         """
         Launch vLLM model server.
 
@@ -285,6 +286,15 @@ class VLLMLauncher(ModelLauncher):
                 # For a remote role it prepends DOCKER_HOST=ssh://... which
                 # Docker CLI routes through OpenSSH — no separate agent needed.
                 subprocess_env = merged_env(config.host)
+
+                # Pre-launch headroom gate (same as the SGLang launcher):
+                # remote hosts skip ResourceManager's primary-only budget
+                # check, so the host's actual MemAvailable is what keeps
+                # unified memory from overcommitting. Runs before the docker
+                # call; no-op when the host probe is inconclusive.
+                await asyncio.to_thread(
+                    check_memory_headroom, config.host, memory_gb
+                )
 
                 # to_thread: docker over SSH (cluster workers) can take seconds;
                 # a blocking run() here would stall the whole event loop —

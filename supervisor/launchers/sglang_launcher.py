@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 import httpx
 from supervisor.launchers.base import ModelLauncher, LaunchError
+from supervisor.launchers.host_memory import check_memory_headroom
 from supervisor.models import ModelConfig, ModelInstance, ModelStatus, HealthStatus, Backend, ModelType
 from supervisor.config import settings
 from supervisor.cluster_helpers import merged_env, base_url_for_host
@@ -26,7 +27,7 @@ class SGLangLauncher(ModelLauncher):
         """Cleanup resources (close httpx client)."""
         await self.client.aclose()
 
-    async def launch(self, config: ModelConfig, model_id: str, port: int, memory_gb: float = None) -> ModelInstance:
+    async def launch(self, config: ModelConfig, model_id: str, port: int, memory_gb: float | None = None) -> ModelInstance:
         """
         Launch SGLang model server.
 
@@ -158,6 +159,15 @@ class SGLangLauncher(ModelLauncher):
                     docker_cmd.append(str(flag))
 
                 logger.debug(f"Docker command: {' '.join(docker_cmd)}")
+
+                # Pre-launch headroom gate: refuse to overcommit this host's
+                # unified memory before docker run. Remote hosts skip
+                # ResourceManager's primary-only budget check, so this is the
+                # only pre-launch check for worker1 et al. (no-op when the
+                # host probe is inconclusive; see host_memory.py).
+                await asyncio.to_thread(
+                    check_memory_headroom, config.host, memory_gb
+                )
 
                 # Launch Docker container on the assigned host
                 result = subprocess.run(
