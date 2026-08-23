@@ -65,9 +65,9 @@ DENY_CONCURRENCY = "concurrency_limited"
 class Client:
     """One named policy + its live limiter state (rpm window + in-flight count)."""
 
-    __slots__ = ("name", "allow", "rpm", "concurrency", "_window", "_inflight")
+    __slots__ = ("name", "allow", "rpm", "concurrency", "reasoning", "_window", "_inflight")
 
-    def __init__(self, name: str, allow, rpm: int, concurrency: int):
+    def __init__(self, name: str, allow, rpm: int, concurrency: int, reasoning=None):
         self.name = name
         # normalise allow-list to a list of globs; empty or missing -> allow all
         if not allow:
@@ -75,6 +75,13 @@ class Client:
         self.allow = list(allow)
         self.rpm = int(rpm or 0)
         self.concurrency = int(concurrency or 0)
+        # Default reasoning intent to inject when a request carries none:
+        # 'off' | 'low' | 'medium' | 'high' | 'xhigh' | None. Applied by the
+        # proxy before dialect normalization (see gateway/reasoning.py). Lets a
+        # client whose framework marks the model non-reasoning (openclaw sends no
+        # thinking control, so qwen falls to its xhigh template default) get a
+        # sane cap without touching that framework's config.
+        self.reasoning = (str(reasoning).strip().lower() or None) if reasoning else None
         self._window: "deque[float]" = deque()
         self._inflight = 0
 
@@ -174,7 +181,8 @@ class Registry:
         def build(spec: dict, fallback_name: str) -> Client:
             name = str(spec.get("name") or fallback_name)
             prev = old_by_name.get(name)
-            c = Client(name, spec.get("allow"), spec.get("rpm", 0), spec.get("concurrency", 0))
+            c = Client(name, spec.get("allow"), spec.get("rpm", 0), spec.get("concurrency", 0),
+                       reasoning=spec.get("reasoning"))
             if prev is not None:  # preserve live limiter state across reloads
                 c._window = prev._window
                 c._inflight = prev._inflight
