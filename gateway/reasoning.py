@@ -131,6 +131,31 @@ _DIALECTS = {
 }
 
 
+_OFF_WORDS = {"off", "false", "none", "disable", "disabled", "0", "no"}
+
+
+def apply_client_default(body: dict, pref) -> None:
+    """Inject a client's DEFAULT reasoning intent when the request carries none.
+
+    `pref` is a per-client policy string ('off' | 'low' | 'medium' | 'high' |
+    'xhigh' | None). No-op when it's None or the request already expresses a
+    thinking intent — an explicit client signal always wins. What we inject is a
+    canonical intent (`reasoning` bool + `reasoning_effort`) that normalize()
+    then translates into the loaded backend's dialect, so this stays
+    engine-agnostic. Used for clients whose framework marks the model
+    non-reasoning and thus sends no thinking control (e.g. openclaw), letting
+    qwen's xhigh template default be overridden centrally.
+    """
+    if not pref or _has_signal(body):
+        return
+    p = str(pref).strip().lower()
+    if p in _OFF_WORDS:
+        body["reasoning"] = False
+    else:
+        body["reasoning"] = True
+        body["reasoning_effort"] = p
+
+
 def normalize(body: dict, dialect: str) -> dict:
     """Rewrite a chat request's reasoning controls into `dialect`.
 

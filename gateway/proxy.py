@@ -42,6 +42,7 @@ from gateway.clients import (
     extract_key,
 )
 from gateway.reasoning import DialectResolver
+from gateway.reasoning import apply_client_default as apply_client_reasoning
 from gateway.reasoning import normalize as normalize_reasoning
 
 logger = logging.getLogger("gateway.proxy")
@@ -321,8 +322,13 @@ async def _ensure_available(alias: str) -> Optional[Response]:
 async def forward(request: Request, path: str):
     body = await request.body()
 
+    # Resolve the client up front — its reasoning default is applied before
+    # dialect normalization below.
+    policy = clients.resolve(extract_key(request.headers))
+
     # Extract the model alias from JSON bodies on /v1/* (chat, embeddings, ...)
-    # and, for chat, normalize reasoning controls to the backend's dialect.
+    # and, for chat, apply the client's reasoning default then normalize the
+    # thinking controls to the backend's dialect.
     alias = "none"
     if request.method == "POST" and path.startswith("v1/") and body:
         try:
@@ -331,13 +337,14 @@ async def forward(request: Request, path: str):
             if alias != "none" and path.endswith("chat/completions") and isinstance(parsed, dict):
                 dialect = reasoning.dialect_for(alias)
                 if dialect != "passthrough":
+                    if policy is not None:
+                        apply_client_reasoning(parsed, policy.reasoning)
                     normalize_reasoning(parsed, dialect)
                     body = json.dumps(parsed).encode()
         except (json.JSONDecodeError, AttributeError):
             pass
 
     # ── Per-client access control (auth + allow-list + limits + attribution) ──
-    policy = clients.resolve(extract_key(request.headers))
     if policy is None:  # enforce_auth on + unknown key
         CLIENT_DENIED.labels(client="unknown", alias=alias, reason=DENY_UNKNOWN_KEY).inc()
         REQUESTS_TOTAL.labels(alias=alias, method=request.method, code="401").inc()

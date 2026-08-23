@@ -11,6 +11,14 @@
 #   allow:       model-name globs it may call (["*"] = all)
 #   rpm:         requests/minute, sliding 60s window (0 = unlimited)
 #   concurrency: max simultaneous in-flight requests (0 = unlimited)
+#   reasoning:   default thinking level to inject when a request sends none
+#                (off | low | medium | high | xhigh). Optional. Only touches
+#                chat requests to a reasoning backend (via reasoning.yaml); an
+#                explicit client signal always wins. Use for frameworks that
+#                mark the model non-reasoning and send no thinking control —
+#                openclaw does exactly this, so qwen falls to its xhigh template
+#                default and spirals; `low` is the tested sweet spot (higher
+#                accuracy than xhigh AND bounded).
 #
 # concurrency is the real lever on a single-stream GPU: cap a noisy background
 # client (scout) so it can't starve an interactive one (foxhole), without
@@ -33,6 +41,7 @@ clients:
     allow: ["*"]
     rpm: 0
     concurrency: 0
+    reasoning: low     # openclaw sends no thinking control → cap qwen at low
 
   # Long-horizon agent — explicitly never deprioritised.
   - name: foxhole
@@ -40,6 +49,7 @@ clients:
     allow: ["*"]
     rpm: 0
     concurrency: 0
+    reasoning: low
 
   # Background watcher agent — capped so it can't saturate dsv4.
   - name: scout
@@ -75,6 +85,7 @@ clients:
     allow: ["default", "vision", "bge-m3", "clip-vit"]
     rpm: 0
     concurrency: 4
+    reasoning: low
 
 # Any key not listed above (incl. the legacy "dummy-key"/"sk-local" and the
 # CLI's own health checks) falls here. Kept generous so nothing breaks; tighten
