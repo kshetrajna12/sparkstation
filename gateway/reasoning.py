@@ -73,6 +73,15 @@ def _extract_intent(body: dict):
         if enabled is None:
             enabled = False  # "reasoning_effort: none" is an off signal
 
+    # An explicit effort level implies thinking is ON: a client that asks for a
+    # level obviously wants to think. This lets a client express reasoning with a
+    # single knob — the level — and we derive the on/off switch. (openclaw's
+    # openai-format spark provider emits only a top-level reasoning_effort and no
+    # enable_thinking, so without this the switch would be left to the model's
+    # template default, which on Qwen3.8 is xhigh.)
+    if enabled is None and effort is not None:
+        enabled = True
+
     return enabled, effort
 
 
