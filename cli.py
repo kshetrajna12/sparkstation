@@ -107,6 +107,25 @@ def _kill_and_wait(name: str, timeout: int = 10):
     (PID_DIR / f"{name}.pid").unlink(missing_ok=True)
 
 
+def _wait_no_process(pattern: str, timeout: int = 15) -> bool:
+    """Poll (1s) until no process matches `pattern` (pgrep -f), up to timeout.
+
+    Returns True once clear, False if a match still exists at timeout. Used to
+    make teardown VERIFIED rather than timed: a fixed sleep after `pkill -9`
+    raced the kernel actually reaping the process and releasing its SQLite DB
+    handle, which is what made `restart` flaky (DB-lock race) while a manual
+    `stop && start` — two separate processes with more settling time — usually
+    got away with it.
+    """
+    for _ in range(max(1, timeout)):
+        # pgrep returns non-zero when nothing matches. pgrep never matches its
+        # own pid, and the CLI's argv is `sparkstation …`, not the pattern.
+        if subprocess.run(["pgrep", "-f", pattern], capture_output=True).returncode != 0:
+            return True
+        time.sleep(1)
+    return False
+
+
 # LiteLLM listens internally on this port; the public :8000 is owned by the
 # sparkstation metrics/auto-resume proxy (gateway/proxy.py), which stays up
 # across LiteLLM bounces so model swaps no longer drop the public API port.
@@ -619,7 +638,11 @@ def stop():
     click.echo("  → Stopping supervisor...")
     _kill_and_wait("supervisor", timeout=10)
     subprocess.run(["pkill", "-9", "-f", "uvicorn supervisor.main:app"], capture_output=True)
-    time.sleep(2)
+    # Verify the supervisor is actually gone before deleting its SQLite DB below
+    # — a fixed sleep raced the SIGKILL reap/WAL release and left `restart`
+    # reopening a DB the dying process still held (the flaky-restart bug).
+    if not _wait_no_process("uvicorn supervisor.main:app", timeout=15):
+        click.secho("     warning: supervisor process still present after 15s", fg="yellow")
     click.echo("     done")
 
     # 3) Docker containers
@@ -639,9 +662,17 @@ def stop():
 @click.option("--profile", "-p", help="Load models from named profile")
 @click.pass_context
 def restart(ctx, profile):
-    """Restart Sparkstation (stop → start)."""
+    """Restart Sparkstation (stop → start) with a verified-clean teardown."""
     ctx.invoke(stop)
-    time.sleep(2)
+    # `stop` is now authoritative — it blocks until the supervisor is gone
+    # before clearing the SQLite DB, and (being synchronous) has already
+    # deleted the DB by the time it returns. Re-confirm as a cheap barrier so a
+    # stop that warned-but-proceeded, or a systemd-delegated stop, can't race
+    # start into a half-torn-down DB. Replaces the old blind sleep(2) that was
+    # the flaky-restart DB-lock race.
+    db = PROJECT_ROOT / "data" / "sparkstation.db"
+    if not _wait_no_process("uvicorn supervisor.main:app", timeout=15) or db.exists():
+        click.secho("  warning: previous instance not fully torn down; starting anyway", fg="yellow")
     ctx.invoke(start, detach=True, profile=profile)
 
 
