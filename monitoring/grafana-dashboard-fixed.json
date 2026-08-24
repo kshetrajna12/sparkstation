@@ -2234,7 +2234,7 @@
           "type": "prometheus",
           "uid": "PBFA97CFB590B2093"
         },
-        "definition": "label_values(model_status, host)",
+        "definition": "label_values(up, host)",
         "hide": 0,
         "includeAll": true,
         "label": "Host",
@@ -2242,7 +2242,7 @@
         "name": "host",
         "options": [],
         "query": {
-          "query": "label_values(model_status, host)",
+          "query": "label_values(up, host)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 1,
