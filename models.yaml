@@ -242,6 +242,34 @@ models:
         - "--enable-metrics"
         - "--enable-cache-report"
 
+  gemma4-2b:
+    # Gemma 4 E2B instruct on worker2 (spark-0908). Variant chosen by on-node
+    # A/B 2026-08-25 (bench: scratchpad gemma_bench.py, c=1/4/8, 256 tok):
+    #   google QAT w4a16-ct  100 tok/s c=1, 672 agg c=8, TTFT 24ms  ← winner
+    #   NVFP4 weight-only     99 tok/s c=1, 617 agg c=8 (prithivMLmods)
+    #   BF16 baseline         42 tok/s c=1, 301 agg c=8
+    #   unsloth NVFP4        crashes: quantizes E2B's per-layer embeddings
+    #                        (KeyError embed_tokens_per_layer.weight_packed)
+    # QAT = Google's quantization-aware-trained checkpoint — best quality of
+    # the 4-bit options AND fastest. Image: day-1 Gemma 4 image; it force-picks
+    # TRITON_ATTN for the heterogeneous head dims automatically.
+    name: "google/gemma-4-E2B-it-qat-w4a16-ct"
+    backend: "vllm"
+    model_type: "chat"
+    host: worker2
+    quantization: "none"  # compressed-tensors auto-detected from config.json
+    memory_gb: 16
+    idle_timeout_minutes: 120
+    auto_suspend_enabled: false
+    # -audio = gemma4-cu130 + `pip install vllm[audio]` (librosa/soundfile),
+    # built on worker2 (~/gemma4-audio-image). Needed for input_audio requests.
+    docker_image: "vllm/vllm-openai:gemma4-cu130-audio"
+    extra_args:
+      max_model_len: 8192
+      max_concurrent_requests: 8
+      enable_auto_tool_choice: true   # OpenClaw active-memory sends tools
+      tool_call_parser: "gemma4"      # native vLLM parser for Gemma 4
+
   flux-dev:
     name: "black-forest-labs/FLUX.1-dev"
     backend: "flux"
@@ -281,6 +309,7 @@ profiles:
     bge-m3: {}          # openclaw/memory-search text embeddings
     clip-vit: {}        # image embeddings (cross-modal search)
     face-detect: {}     # gallery recognition
+    gemma4-2b: {}       # small fast chat on worker2 (Gemma 4 E2B QAT w4a16)
 
   # deep: DSV4-Flash 2-node reserve (was "coding" until 2026-08-19).
   deep:

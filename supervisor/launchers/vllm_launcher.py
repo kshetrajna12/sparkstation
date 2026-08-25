@@ -231,6 +231,11 @@ class VLLMLauncher(ModelLauncher):
                     # template default is xhigh, which overthinks pathologically
                     # (22K reasoning tokens on trivial prompts).
                     "default_chat_template_kwargs": "--default-chat-template-kwargs",
+                    # OpenAI-compatible tool calling (needed by any client that
+                    # sends tools with tool_choice=auto, e.g. OpenClaw's
+                    # active-memory sub-agent — vLLM 400s without both flags).
+                    "enable_auto_tool_choice": "--enable-auto-tool-choice",
+                    "tool_call_parser": "--tool-call-parser",
                 }
                 for arg_key, cli_flag in PASSTHROUGH_ARGS.items():
                     val = config.extra_args.get(arg_key)
