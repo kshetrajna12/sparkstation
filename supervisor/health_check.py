@@ -11,8 +11,19 @@ from typing import Optional, Dict
 import httpx
 
 from supervisor.registry import ModelRegistry
-from supervisor.models import ModelStatus, HealthStatus, ModelInstance
+from supervisor.models import Backend, ModelStatus, HealthStatus, ModelInstance
 from supervisor.config import settings
+
+
+def _health_path(model: ModelInstance) -> str:
+    """Liveness probe path for a model's server.
+
+    Backends speaking the OpenAI-ish HTTP surface all serve /health. The
+    voicechat backend is a Pipecat runner: no /health route (404, which kept
+    it stuck in STARTING forever, 2026-08-25) — its playground page /client/
+    is the lightweight always-200 route.
+    """
+    return "/client/" if model.backend == Backend.VOICECHAT else "/health"
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +149,7 @@ class HealthCheckManager:
                 # Try to health check the model (without counting failures)
                 try:
                     # Use /health endpoint for all models (liveness check)
-                    response = await self.client.get(f"{model.base_url}/health")
+                    response = await self.client.get(f"{model.base_url}{_health_path(model)}")
 
                     if response.status_code == 200:
                         # Re-fetch before promoting: the row may have been
@@ -246,7 +257,7 @@ class HealthCheckManager:
         try:
             # Use /health endpoint for all models (liveness check)
             # This is lightweight and doesn't queue behind inference requests
-            response = await self.client.get(f"{model.base_url}/health")
+            response = await self.client.get(f"{model.base_url}{_health_path(model)}")
 
             if response.status_code == 200:
                 # Health check passed

@@ -214,14 +214,24 @@ async def lifespan(app: FastAPI):
             # worker1 model (e.g. the vision vLLM model) profiles. The dspark
             # launcher blocks until the stack's API is healthy, and phase 1's
             # sequential wait covers the rest.
-            vllm_sglang_models = [m for m in autoload_models if m.backend in ("dspark", "vllm", "sglang")]
-            vllm_sglang_models.sort(key=lambda m: 0 if m.backend == "dspark" else 1)
+            # voicechat joins phase 1 LAST: its Nano engine sizes off free
+            # memory at init (0.42 of total), so every other model on its host
+            # must have reserved first.
+            vllm_sglang_models = [m for m in autoload_models if m.backend in ("dspark", "vllm", "sglang", "voicechat")]
+            vllm_sglang_models.sort(key=lambda m: {"dspark": 0, "voicechat": 2}.get(m.backend, 1))
             clip_models = [m for m in autoload_models if m.backend == "clip"]
             flux_models = [m for m in autoload_models if m.backend == "flux"]
             species_models = [m for m in autoload_models if m.backend == "species"]
             face_models = [m for m in autoload_models if m.backend == "face"]
 
-            logger.info(f"Auto-loading models: {len(vllm_sglang_models)} vLLM/SGLang, {len(clip_models)} CLIP, {len(species_models)} Species, {len(face_models)} Face, {len(flux_models)} FLUX")
+            # A backend missing from every bucket above would be dropped without
+            # a trace (how voicechat's first autoload was lost, 2026-08-25).
+            _bucketed = {id(m) for bucket in (vllm_sglang_models, clip_models, flux_models, species_models, face_models) for m in bucket}
+            for m in autoload_models:
+                if id(m) not in _bucketed:
+                    logger.error(f"Autoload has no phase for backend {m.backend!r} — {m.alias or m.name} will NOT be loaded")
+
+            logger.info(f"Auto-loading models: {len(vllm_sglang_models)} vLLM/SGLang/DSpark/Voicechat, {len(clip_models)} CLIP, {len(species_models)} Species, {len(face_models)} Face, {len(flux_models)} FLUX")
             launched_model_ids = []  # Track models we actually launched
 
             # Helper function to wait for models to be ready
