@@ -109,16 +109,25 @@ def _has_signal(body: dict) -> bool:
 
 
 def _apply_qwen_enable_thinking(body: dict, enabled, effort) -> None:
-    """SGLang NVFP4 build: enable_thinking (ctk bool) + top-level reasoning_effort."""
+    """SGLang NVFP4 build: enable_thinking + reasoning_effort, both inside ctk.
+
+    Effort MUST ride inside chat_template_kwargs, not top level: LiteLLM
+    recognizes top-level `reasoning_effort` as an official OpenAI param and
+    consumes it instead of forwarding — the backend then falls back to the
+    template default (xhigh) and spirals (~35K reasoning chars on hard
+    structured prompts; 2026-08-25 live-test failure). ctk is unknown to
+    LiteLLM, so with drop_params:false it lands in extra_body verbatim.
+    (An earlier build 400'd on ctk.reasoning_effort — the current
+    qwen38-27b-dflash2 SGLang image accepts and honors it, verified direct.)
+    """
     ctk = body.get("chat_template_kwargs")
     ctk = ctk if isinstance(ctk, dict) else {}
     if enabled is not None:
         ctk["enable_thinking"] = enabled
+    if effort is not None and enabled is not False:
+        ctk["reasoning_effort"] = effort
     if ctk:
         body["chat_template_kwargs"] = ctk
-    # effort only matters when thinking is on; inside ctk it 400s -> top level.
-    if effort is not None and enabled is not False:
-        body["reasoning_effort"] = effort
 
 
 def _apply_qwen_thinking(body: dict, enabled, effort) -> None:

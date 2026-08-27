@@ -111,6 +111,11 @@ class GatewaySync:
         # Format for LiteLLM
         model_list = []
         for model in all_models:
+            # Voice models speak WebSocket/WebRTC audio, not the OpenAI API —
+            # a LiteLLM route would just 502. Clients connect to them directly.
+            mt = getattr(model.model_type, "value", model.model_type)
+            if mt == "voice":
+                continue
             # Use alias for display name, but actual model_name for the backend
             display_name = model.model_alias or model.model_name.split("/")[-1]
 

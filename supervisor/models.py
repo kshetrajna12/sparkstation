@@ -40,6 +40,7 @@ class Backend(str, Enum):
     FACE = "face"
     TRT_LLM = "trt-llm"  # Future support
     DSPARK = "dspark"  # Anemll DSpark multi-node compose stack (2x GB10 TP=2)
+    VOICECHAT = "voicechat"  # pipecat nemotron-voicechat runtime (speech-to-speech)
 
 
 class ModelType(str, Enum):
@@ -49,6 +50,7 @@ class ModelType(str, Enum):
     EMBEDDING = "embedding"
     IMAGE = "image"
     DETECTION = "detection"
+    VOICE = "voice"  # WebSocket/WebRTC audio — not an OpenAI-API model
 
 
 # SQLAlchemy ORM Model
