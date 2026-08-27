@@ -302,6 +302,17 @@ models:
       # advertised to the model; calls are forwarded to the connected RTVI/WS
       # client as llm-function-call and answered with llm-function-call-result.
       client_tools_file: "/home/kshetrajna/nemotron-voicechat/config/client-tools.json"
+      # NOTE (memory-squeeze finding, 2026-08-27): the container's env is
+      # FROZEN in the runtime's qualified config (config/*.toml +
+      # provenance.py constants) — VOICECHAT_VLLM_* knobs set here reach only
+      # the host CLI/bot, NOT the model server. Real footprint: ~85GB fresh,
+      # drifting to ~110GB with session aging (periodic restart reclaims it).
+      # Tuning the engine pools means forking the frozen candidate — don't.
+      extra_env:
+        # Dev iteration: skip the image/checkout provenance match so bot-source
+        # edits don't force a ~20min no-op image rebuild on cold `up` (our
+        # cli.py escape hatch). REMOVE for blessed runs and re-bootstrap.
+        VOICECHAT_DEV_BOT: "1"
 
   flux-dev:
     name: "black-forest-labs/FLUX.1-dev"
