@@ -122,8 +122,22 @@ class VoicechatLauncher(ModelLauncher):
         # ALL THREE stdio fds must be detached from the ssh channel (stdin
         # included) or sshd keeps the session open until `up` exits and the
         # dispatch times out — that exact hang failed the first managed launch.
+        # Optional client-executed tool schemas (OpenAI function format JSON,
+        # path on the WORKER) — forwarded to connected RTVI clients (the
+        # Reachy/OpenClaw bridge) as llm-function-call messages.
+        tools_file = config.extra_args.get("client_tools_file")
+        tools_env = f"VOICECHAT_CLIENT_TOOLS={tools_file} " if tools_file else ""
+        # Generic env passthrough for runtime knobs (VOICECHAT_VAD_*,
+        # VOICECHAT_TURN_STOP_TIMEOUT, VOICECHAT_SMART_TURN, VOICECHAT_DEV_BOT,
+        # ...). Values are shell-quoted; keys must be plain env-var names.
+        import shlex
+        extra_env = config.extra_args.get("extra_env") or {}
+        for key, value in extra_env.items():
+            if not str(key).replace("_", "").isalnum():
+                raise LaunchError(f"invalid extra_env key: {key!r}")
+            tools_env += f"{key}={shlex.quote(str(value))} "
         up_cmd = (
-            f"cd {vc_dir} && PATH=$HOME/.local/bin:$PATH "
+            f"cd {vc_dir} && PATH=$HOME/.local/bin:$PATH {tools_env}"
             f"setsid nohup ./voicechat up --host 0.0.0.0 --port {api_port} "
             f"> /tmp/voicechat-up.log 2>&1 < /dev/null & echo started"
         )

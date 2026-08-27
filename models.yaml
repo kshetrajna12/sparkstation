@@ -298,6 +298,10 @@ models:
       voicechat_dir: "/home/kshetrajna/nemotron-voicechat"
       port: 7860
       launch_timeout_seconds: 900
+      # Client-executed tool schemas (OpenAI function format, path on worker2):
+      # advertised to the model; calls are forwarded to the connected RTVI/WS
+      # client as llm-function-call and answered with llm-function-call-result.
+      client_tools_file: "/home/kshetrajna/nemotron-voicechat/config/client-tools.json"
 
   flux-dev:
     name: "black-forest-labs/FLUX.1-dev"
