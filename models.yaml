@@ -292,7 +292,10 @@ models:
     model_type: "voice"
     host: worker2
     quantization: "none"  # runtime-managed (pre-quantized release artifacts)
-    memory_gb: 30  # 11B W8 LLM + EarTTS on GPU; audio codec is CPU-side
+    # Measured: ~85GB fresh, drifting to ~110GB with session aging — matches
+    # NVIDIA's official 80GB-class GPU requirement for this model family.
+    # Effectively owns worker2; nothing else fits beside it.
+    memory_gb: 105
     auto_suspend_enabled: false
     extra_args:
       voicechat_dir: "/home/kshetrajna/nemotron-voicechat"
@@ -354,7 +357,22 @@ profiles:
     clip-vit: {}        # image embeddings (cross-modal search)
     face-detect: {}     # gallery recognition
     gemma4-2b: {}       # small fast chat on primary (Gemma 4 E2B QAT w4a16)
-    voicechat: {}       # Nemotron VoiceChat 11B speech-to-speech on worker2 (Reachy/Sparky voice)
+
+  # voice: the generic stack + Nemotron VoiceChat 11B on worker2 (Reachy/
+  # Sparky voice). Deliberately NOT part of generic — voice owns worker2
+  # (~85GB fresh, drifts to ~110GB aged) and shouldn't ride every daily-
+  # driver restart. Two ways to run it:
+  #   full switch:  sparkstation stop && sparkstation start -d --profile voice
+  #   on demand:    sparkstation models start voicechat -p voice
+  #                 (generic stays up; voice stack starts on worker2 in ~8min;
+  #                  stop with: sparkstation models stop voicechat)
+  voice:
+    qwen3.8-sglang: {}
+    bge-m3: {}
+    clip-vit: {}
+    face-detect: {}
+    gemma4-2b: {}
+    voicechat: {}
 
   # deep: DSV4-Flash 2-node reserve (was "coding" until 2026-08-19).
   deep:
