@@ -143,6 +143,43 @@ models:
       launch_timeout_seconds: 2700
       head_container: "deepseek-v4-flash-vllm-dspark-1"
 
+  glm5.3-flash:
+    # GLM-5.3-Flash (320B-A18B MoE, MIT, 262K ctx) — winner of the 2026-08-28
+    # TP2 autoresearch sweep on worker1+worker2: LibertAIDAI NVFP4 + incoai
+    # DFlash2 drafter (spec-7) + CUDA graphs + fp8 KV (pinned 4.15GiB), image
+    # radixark/vllm-glm53-flash:sm121-v12-dflash2 (tonyd2wild v1-v8 chain +
+    # DFlash2 overlay, plus local patches):
+    #   v11 — one-shot reasoning in the glm47 parser: stray mid-content
+    #         <think> spans at long ctx fragmented content deltas and broke
+    #         OpenClaw's NO_REPLY sentinel match (delivered literally, 00:06
+    #         2026-08-28).
+    #   v12 — SM121 kpool top-k routing: stock persistent_topk hard-crashes
+    #         decode past ~24K ctx on GB10's 99KB smem (verified crash-free
+    #         to 40K after fix; from tonyd2wild 3a2b793).
+    # Serve knobs: --max-num-batched-tokens 8192 --max-num-seqs 12
+    # (c4 TTFT 3.8s -> 0.6s, agg +7%; ~15% code-c1 cost, accepted).
+    # Measured (v12 final, thinking off, temp 0): c1 29.7 prose / 34.1 code,
+    # c4 agg 45/59, TTFT ~0.35s. Tools+thinking-control gate 4/4.
+    # Client note: thinking-off leaks a preamble sentence into content (glm45
+    # parser only strips proper think-blocks); prefer thinking ON for clean
+    # separation. Teardown must kill BOTH ranks before relaunch (stop script
+    # does).
+    name: "glm-5.3-flash"   # SERVED model name (what /v1/models reports)
+    backend: "dspark"        # generic 2-node script-stack launcher
+    model_type: "chat"
+    vision_default: true     # natively multimodal (verified 2026-08-28) — gateway "vision" alias
+    host: worker1            # head rank; worker2 runs the second rank
+    quantization: "none"     # stack-managed (NVFP4 checkpoint)
+    memory_gb: 60            # head-rank share; worker2's rank holds similar
+    auto_suspend_enabled: false
+    extra_args:
+      dspark_dir: "/home/kshetrajna/glm53-deploy"
+      start_script: "start-glm53-2xspark.sh"
+      stop_script: "stop-glm53-2xspark.sh"
+      port: 8009
+      launch_timeout_seconds: 2400
+      head_container: "vllm_glm53"
+
   qwen3-vl-4b:
     # Vision model for coding agents (user: "as small a vision model as you
     # need"). Single-node vLLM on worker1, coexisting with DSV4's worker rank
@@ -374,11 +411,18 @@ profiles:
     gemma4-2b: {}
     voicechat: {}
 
-  # deep: DSV4-Flash 2-node reserve (was "coding" until 2026-08-19).
+  # deep: GLM-5.3-Flash 2-node reserve on worker1+worker2 (swapped from
+  # DSV4-Flash 2026-08-28 after the TP2 autoresearch sweep — better agentic
+  # benches, 40 tok/s c1 code w/ DFlash2+graphs, MIT license). Chat takes the
+  # two workers; EVERYTHING else (gemma, vision, embeddings, aux) runs on
+  # primary. DSV4 spec kept above for manual revival (weights cached on
+  # primary+worker1).
   deep:
-    dsv4-flash:
-      default: true  # gateway "default" alias resolves to DSV4 in this profile
-    qwen3-vl-4b: {}
+    glm5.3-flash:
+      default: true  # gateway "default" alias resolves to GLM in this profile
+      # vision alias also resolves here (vision_default in base spec) — GLM is
+      # natively multimodal; the separate VL-4B was dropped 2026-08-28.
+    gemma4-2b: {}    # small fast chat (base spec host: primary)
     bge-m3: {}
     clip-vit: {}
     face-detect: {}
