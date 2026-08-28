@@ -266,3 +266,5 @@ gateway/.litellm-*.log
 
 # Per-client gateway policy — holds API keys (secrets); template is clients.example.yaml
 gateway/clients.yaml
+data/last_profile
+data/.bounce-keep-models

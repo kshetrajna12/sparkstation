@@ -54,6 +54,14 @@ PROJECT_ROOT = _find_project_root()
 RUN_DIR = Path.home() / ".sparkstation"
 LOG_DIR = RUN_DIR / "logs"
 PID_DIR = RUN_DIR / "pids"
+# Last profile explicitly started — `start` without --profile resumes it, so
+# systemd crash-restarts (ExecStart has no --profile) don't silently fall back
+# to default_profile while e.g. `deep` was running.
+LAST_PROFILE_FILE = PROJECT_ROOT / "data" / "last_profile"
+# `bounce` touches this; `stop` then keeps models + DB and only restarts the
+# supervisor/gateway processes. Survives the systemctl-delegation hop (the
+# ExecStop invocation consumes it, not the delegating one).
+BOUNCE_SENTINEL = PROJECT_ROOT / "data" / ".bounce-keep-models"
 
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
@@ -408,6 +416,21 @@ def start(ctx, detach, profile, wait_models):
     """Start Sparkstation (supervisor + gateway); models load in the background."""
     _ensure_dirs()
 
+    # Sticky profile: remember explicit choices; resume the last one when none
+    # is given (systemd ExecStart passes none — without this a crash-restart
+    # boots default_profile even if another profile was live).
+    profile_was_explicit = bool(profile)
+    if profile:
+        try:
+            LAST_PROFILE_FILE.write_text(profile)
+        except OSError:
+            pass
+    elif LAST_PROFILE_FILE.exists():
+        remembered = LAST_PROFILE_FILE.read_text().strip()
+        if remembered:
+            profile = remembered
+            click.echo(f"  (no --profile given — resuming last profile: {profile})")
+
     # Check if already running
     if _read_pid("supervisor") and _supervisor_healthy():
         click.secho("Sparkstation supervisor is already running.", fg="yellow")
@@ -420,7 +443,9 @@ def start(ctx, detach, profile, wait_models):
     # process instead of racing it. With --profile we intentionally start
     # outside systemd (the unit always starts the default profile); the unit
     # is inactive at that point, so nothing races.
-    if detach and not _under_systemd() and _systemd_unit_exists() and not profile:
+    # (sticky-resumed profiles still delegate — ExecStart re-resolves the same
+    # sticky file, so systemd manages the identical start.)
+    if detach and not _under_systemd() and _systemd_unit_exists() and not profile_was_explicit:
         click.echo("Starting via systemd (unit exists)...")
         if _systemctl("start"):
             for _ in range(120):
@@ -616,12 +641,24 @@ def stop():
 
     click.echo("Stopping Sparkstation...")
 
+    # `bounce` sentinel: keep models + DB; only the supervisor/gateway
+    # processes go down. Consumed HERE (the invocation doing real work), not
+    # in the systemctl-delegating invocation above, so it survives the hop
+    # into ExecStop.
+    keep_models = BOUNCE_SENTINEL.exists()
+    if keep_models:
+        BOUNCE_SENTINEL.unlink(missing_ok=True)
+        click.secho("  bounce mode: models and DB stay; restarting processes only", fg="cyan")
+
     # 0) Gracefully stop models through the supervisor while it's still up —
     #    the only path that correctly tears down remote-host and dspark
     #    (2-node) models. The docker sweep below is local-daemon-only backstop.
-    click.echo("  → Stopping models via supervisor...")
-    n = _stop_models_via_api()
-    click.echo(f"     {n} model(s) stopped gracefully")
+    if keep_models:
+        click.echo("  → Keeping models running (bounce)")
+    else:
+        click.echo("  → Stopping models via supervisor...")
+        n = _stop_models_via_api()
+        click.echo(f"     {n} model(s) stopped gracefully")
 
     # 1) Gateway (proxy + LiteLLM)
     click.echo("  → Stopping gateway...")
@@ -645,6 +682,13 @@ def stop():
         click.secho("     warning: supervisor process still present after 15s", fg="yellow")
     click.echo("     done")
 
+    if keep_models:
+        # Bounce: containers keep serving and the DB stays — the next
+        # supervisor adopts them via reconcile_state() and autoload skips
+        # RUNNING models.
+        click.secho("\n✓ Supervisor/gateway stopped (models still serving)", fg="green")
+        return
+
     # 3) Docker containers
     click.echo("  → Stopping containers...")
     n = _docker_stop_all()
@@ -656,6 +700,27 @@ def stop():
         p.unlink(missing_ok=True)
 
     click.secho("\n✓ Sparkstation stopped", fg="green")
+
+
+@cli.command()
+@click.option("--profile", "-p", help="Profile for the restarted supervisor (default: last used)")
+@click.pass_context
+def bounce(ctx, profile):
+    """Restart supervisor + gateway WITHOUT touching running models.
+
+    Containers keep serving throughout; the fresh supervisor adopts them
+    (reconcile keeps live DB rows, autoload skips RUNNING models) and rewrites
+    gateway routes from current models.yaml — so alias changes (default /
+    vision) and supervisor code changes apply in ~30s with zero model
+    downtime. Container-level config changes (flags, images, memory) still
+    need a real restart of the affected model.
+    """
+    _ensure_dirs()
+    BOUNCE_SENTINEL.touch()
+    ctx.invoke(stop)
+    if not _wait_no_process("uvicorn supervisor.main:app", timeout=15):
+        click.secho("  warning: old supervisor still present; proceeding", fg="yellow")
+    ctx.invoke(start, detach=True, profile=profile)
 
 
 @cli.command()
@@ -883,7 +948,11 @@ def models_stop(ctx, alias, no_gateway_refresh):
     except Exception as e:
         click.secho(f"Supervisor unreachable: {e}", fg="red")
         sys.exit(1)
-    matching = [m for m in r.json()["models"] if m.get("alias") == alias and m.get("status") in ("running", "starting", "suspended")]
+    # "failed" is stoppable on purpose: stopping a FAILED instance marks it
+    # STOPPED, which cancels RestartManager's pending backoff retries (the
+    # post-backoff re-fetch guard skips non-FAILED instances). Without this,
+    # a failed model could not be detached from auto-recovery at all.
+    matching = [m for m in r.json()["models"] if m.get("alias") == alias and m.get("status") in ("running", "starting", "suspended", "failed")]
     if not matching:
         click.secho(f"No live model with alias '{alias}'", fg="red")
         sys.exit(1)
