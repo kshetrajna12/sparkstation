@@ -181,8 +181,23 @@ class RestartManager:
         # Wait for backoff period
         await asyncio.sleep(backoff_minutes * 60)
 
+        # Re-fetch after the backoff: the world may have changed while we
+        # slept — an operator stopped/deleted the instance, or another
+        # recovery path already handled it. Restarting from the stale object
+        # blindly relaunches over whatever is running now (it clobbered a
+        # manual benchmark deployment on 2026-08-28). Same re-fetch-guard
+        # class as the 2026-07-02 zombie-ModelInstance fix.
+        current = await self.registry.get(model_id)
+        if not current or current.status != ModelStatus.FAILED:
+            logger.info(
+                f"Skipping scheduled restart of {model_id}: "
+                f"{'instance gone' if not current else f'status now {current.status}'} "
+                f"after backoff"
+            )
+            return
+
         # Attempt restart
-        await self._restart_model(model)
+        await self._restart_model(current)
 
     async def _restart_model(self, model: ModelInstance):
         """

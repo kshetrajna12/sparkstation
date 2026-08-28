@@ -209,16 +209,26 @@ async def lifespan(app: FastAPI):
             # 1. vLLM/SGLang first - they calculate gpu_memory_utilization as percentage of TOTAL memory
             # 2. CLIP next - Docker container that grabs memory immediately
             # 3. FLUX last - largest Docker container, must load after vLLM has reserved its memory
-            # DSpark (2-node DSV4 stack) joins phase 1 and is ordered FIRST: its
-            # worker rank GPU-profiles on worker1 and must finish before any other
-            # worker1 model (e.g. the vision vLLM model) profiles. The dspark
-            # launcher blocks until the stack's API is healthy, and phase 1's
-            # sequential wait covers the rest.
+            # DSpark (2-node script stack: DSV4, GLM-5.3) joins phase 1 and must
+            # finish before any other model GPU-profiles ON ITS HOSTS — but
+            # models on OTHER hosts (e.g. primary aux while the stack owns the
+            # workers) launch first so a ~20 min stack boot doesn't hold up
+            # 1-minute loads elsewhere (2026-08-28: deep profile moved all
+            # non-chat models to primary).
             # voicechat joins phase 1 LAST: its Nano engine sizes off free
             # memory at init (0.42 of total), so every other model on its host
             # must have reserved first.
             vllm_sglang_models = [m for m in autoload_models if m.backend in ("dspark", "vllm", "sglang", "voicechat")]
-            vllm_sglang_models.sort(key=lambda m: {"dspark": 0, "voicechat": 2}.get(m.backend, 1))
+            _dspark_hosts = {m.host for m in vllm_sglang_models if m.backend == "dspark"}
+
+            def _phase1_key(m):
+                if m.backend == "voicechat":
+                    return 3
+                if m.backend == "dspark":
+                    return 1
+                return 2 if m.host in _dspark_hosts else 0
+
+            vllm_sglang_models.sort(key=_phase1_key)
             clip_models = [m for m in autoload_models if m.backend == "clip"]
             flux_models = [m for m in autoload_models if m.backend == "flux"]
             species_models = [m for m in autoload_models if m.backend == "species"]
