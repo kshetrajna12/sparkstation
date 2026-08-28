@@ -105,8 +105,15 @@ class DsparkLauncher(ModelLauncher):
         Blocks until the stack's own health wait + smoke request pass.
         """
         script_dir = self._script_dir(config)
-        start_script = script_dir / "start-deepseek-v4-flash-dspark.sh"
-        stop_script = script_dir / "stop-deepseek-v4-flash-dspark.sh"
+        # Script names are per-stack (default: the DSV4 dspark stack). Other
+        # 2-node stacks (e.g. GLM-5.3-Flash DFlash2) reuse this launcher by
+        # naming their own scripts in extra_args.
+        start_script = script_dir / config.extra_args.get(
+            "start_script", "start-deepseek-v4-flash-dspark.sh"
+        )
+        stop_script = script_dir / config.extra_args.get(
+            "stop_script", "stop-deepseek-v4-flash-dspark.sh"
+        )
         if not start_script.exists():
             raise LaunchError(f"DSpark start script not found: {start_script}")
 
@@ -195,7 +202,9 @@ class DsparkLauncher(ModelLauncher):
         script_dir = Path(
             (instance.extra_args or {}).get("dspark_dir", DEFAULT_DSPARK_DIR)
         ).expanduser()
-        stop_script = script_dir / "stop-deepseek-v4-flash-dspark.sh"
+        stop_script = script_dir / (instance.extra_args or {}).get(
+            "stop_script", "stop-deepseek-v4-flash-dspark.sh"
+        )
         if not stop_script.exists():
             logger.error(f"DSpark stop script not found: {stop_script}")
             return False
