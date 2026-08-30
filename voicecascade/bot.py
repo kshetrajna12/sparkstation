@@ -120,7 +120,7 @@ def create_transport(runner_args):
             webrtc_connection=runner_args.webrtc_connection,
             params=TransportParams(
                 audio_in_enabled=True, audio_out_enabled=True,
-                audio_in_sample_rate=16_000, audio_out_sample_rate=24_000,
+                audio_in_sample_rate=24_000, audio_out_sample_rate=24_000,
                 audio_in_channels=1, audio_out_channels=1,
             ),
         )
@@ -129,7 +129,7 @@ def create_transport(runner_args):
             websocket=runner_args.websocket,
             params=FastAPIWebsocketParams(
                 audio_in_enabled=True, audio_out_enabled=True,
-                audio_in_sample_rate=16_000, audio_out_sample_rate=24_000,
+                audio_in_sample_rate=24_000, audio_out_sample_rate=24_000,
                 audio_in_channels=1, audio_out_channels=1,
                 add_wav_header=False,
                 serializer=ProtobufFrameSerializer(),
@@ -139,7 +139,7 @@ def create_transport(runner_args):
 
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
-    stt = KyutaiSTTService(sample_rate=16_000)
+    stt = KyutaiSTTService(sample_rate=24_000)
     llm = RouterLLMService(
         fast_model=FAST_BRAIN, think_model=THINK_BRAIN,
         base_url=GATEWAY, api_key="dummy-key",
@@ -191,7 +191,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         pipeline,
         enable_rtvi=True,
         params=PipelineParams(
-            audio_in_sample_rate=16_000, audio_out_sample_rate=24_000,
+            audio_in_sample_rate=24_000, audio_out_sample_rate=24_000,
             enable_metrics=True, enable_usage_metrics=True,
         ),
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
