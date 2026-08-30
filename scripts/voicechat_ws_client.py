@@ -161,7 +161,10 @@ async def main():
                     await asyncio.sleep(0.02)
                     continue
                 await ws.send(encode_audio_frame(pcm))
-                await asyncio.sleep(0.02)
+                await asyncio.sleep(0.02 / float(os.environ.get("SEND_SPEED", "1")))
+                rep = float(os.environ.get("REPEAT_EVERY", "0") or 0)
+                if rep and wav_pcm and pos >= len(wav_pcm) and wav_done_at and time.monotonic() - wav_done_at > rep:
+                    pos = 0  # say it again → another turn
 
         send_task = asyncio.create_task(sender())
         deadline = time.monotonic() + RUN_SECS
