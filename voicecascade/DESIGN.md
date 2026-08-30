@@ -54,6 +54,20 @@ for the 2-worker big-model plan.
   ~10s clean sample when ready; we generate the voice embedding from it. No
   cloning of anyone's voice without K saying so.
 
+## Definition of done (K, 2026-08-30: "no legacy stuff")
+
+If the cascade wins the bench, the merge to main INCLUDES the cleanup:
+- Remove the voicechat backend (launcher, enums, gateway/health special-cases,
+  autoload bucket), the `voice` profile entry, models.yaml voicechat block.
+- worker2: retire ~/nemotron-voicechat checkout + 65GB bootstrap cache + images
+  (the patched runtime survives in the private GitHub backup + tags only).
+- Dashboard Voice row re-pointed at cascade metrics; dead VoiceChat-only
+  metrics removed.
+- homecloud runbook rewritten for the cascade (VoiceChat section reduced to a
+  pointer at the backup repo); memory files updated.
+- Bridge contract v2 published; v1.x VoiceChat-specific rules retired.
+No parallel legacy path kept "just in case" — restoration path is git history.
+
 ## Working rules
 
 - All sparkstation changes on `cascade-voice` only; merge via PR after bench.
