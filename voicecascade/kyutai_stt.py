@@ -42,6 +42,8 @@ def preload(device: str = "cuda", hf_repo: str = "kyutai/stt-1b-en_fr"):
     with _ENGINE_LOCK:
         if _ENGINE.get("repo") == hf_repo:
             return _ENGINE
+        import contextlib
+
         import torch
         from moshi.models import loaders, LMGen
 
@@ -50,8 +52,14 @@ def preload(device: str = "cuda", hf_repo: str = "kyutai/stt-1b-en_fr"):
         mimi = info.get_mimi(device=device)
         tokenizer = info.get_text_tokenizer()
         lm = info.get_moshi(device=device, dtype=torch.bfloat16)
+        lm_gen = LMGen(lm, temp=0, temp_text=0.0)
+        # Streaming contexts stay open for the life of the process (entering
+        # twice raises "already streaming"); sessions reset state instead.
+        es = contextlib.ExitStack()
+        es.enter_context(mimi.streaming(1))
+        es.enter_context(lm_gen.streaming(1))
         _ENGINE.update(repo=hf_repo, mimi=mimi, tokenizer=tokenizer,
-                       lm_gen=LMGen(lm, temp=0, temp_text=0.0))
+                       lm_gen=lm_gen, _es=es)
         logger.info("KyutaiSTT ready (frame {} @ {} Hz)", mimi.frame_size, mimi.sample_rate)
         return _ENGINE
 
@@ -83,28 +91,34 @@ class KyutaiSTTService(STTService):
     def _worker(self):
         """Feeds 80ms mimi frames through the shared engine, posts text pieces."""
         try:
-            import julius
             import numpy as np
             import torch
 
             eng = preload(self._device, self._hf_repo)
             mimi, tokenizer, lm_gen = eng["mimi"], eng["tokenizer"], eng["lm_gen"]
             frame_size = mimi.frame_size
+            # fresh recurrent state for this session
+            for m in (mimi, lm_gen):
+                if hasattr(m, "reset_streaming"):
+                    m.reset_streaming()
             self._post(("ready", None))
 
             buf = torch.zeros(0)
-            with mimi.streaming(1), lm_gen.streaming(1):
+            if True:
                 while self._running:
                     try:
                         item = self._in_q.get(timeout=0.2)
                     except queue.Empty:
                         continue
-                    pcm16k, in_rate = item
-                    audio = torch.from_numpy(
-                        np.frombuffer(pcm16k, dtype=np.int16).astype(np.float32) / 32768.0
-                    )
+                    pcm, in_rate = item
                     if in_rate != mimi.sample_rate:
-                        audio = julius.resample_frac(audio, in_rate, mimi.sample_rate)
+                        # The transport is configured to deliver mimi's rate;
+                        # anything else means a misconfigured pipeline.
+                        self._post(("error", f"expected {mimi.sample_rate} Hz input, got {in_rate}"))
+                        return
+                    audio = torch.from_numpy(
+                        np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+                    )
                     buf = torch.cat([buf, audio])
                     while buf.shape[-1] >= frame_size:
                         chunk, buf = buf[:frame_size], buf[frame_size:]
@@ -112,6 +126,9 @@ class KyutaiSTTService(STTService):
                         text_tokens = lm_gen.step(codes)
                         if text_tokens is None:
                             continue
+                        self._steps = getattr(self, "_steps", 0) + 1
+                        if self._steps % 50 == 1:
+                            logger.debug("KyutaiSTT worker step #{}", self._steps)
                         tok = text_tokens[0, 0, 0].item()
                         if tok not in (0, 3):  # EPAD/PAD
                             piece = tokenizer.id_to_piece(tok).replace("▁", " ")
@@ -142,6 +159,9 @@ class KyutaiSTTService(STTService):
         # Called once per InputAudioRawFrame (continuous mode): enqueue for the
         # worker; results surface via _emit_loop.
         self._in_q.put((audio, self.sample_rate))
+        self._rx = getattr(self, "_rx", 0) + 1
+        if self._rx % 100 == 1:
+            logger.debug("KyutaiSTT rx frame #{} ({} bytes @ {})", self._rx, len(audio), self.sample_rate)
         yield None
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
