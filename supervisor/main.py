@@ -221,9 +221,26 @@ async def lifespan(app: FastAPI):
             vllm_sglang_models = [m for m in autoload_models if m.backend in ("dspark", "vllm", "sglang", "voicechat")]
             _dspark_hosts = {m.host for m in vllm_sglang_models if m.backend == "dspark"}
 
+            # voicechat's Nano engine sizes off FREE memory at init, so models
+            # on ITS host must reserve first — but only its host: when nothing
+            # else runs there (e.g. voice profile: chat on worker1, voicechat
+            # alone on worker2) it launches immediately instead of waiting out
+            # a ~12 min chat-stack boot (2026-08-29, same host-scoping as the
+            # dspark rule above). CAVEAT: dspark stacks may implicitly span
+            # hosts beyond their configured `host` (e.g. GLM TP2's second rank
+            # on worker2) — if a profile ever pairs such a stack with
+            # voicechat, this check under-counts; declare the extra host on
+            # the spec or keep voicechat out of that profile.
+            _voice_hosts = {m.host for m in vllm_sglang_models if m.backend == "voicechat"}
+            _shared_voice_host = any(
+                m.host in _voice_hosts
+                for m in vllm_sglang_models
+                if m.backend != "voicechat"
+            )
+
             def _phase1_key(m):
                 if m.backend == "voicechat":
-                    return 3
+                    return 3 if _shared_voice_host else 0
                 if m.backend == "dspark":
                     return 1
                 return 2 if m.host in _dspark_hosts else 0
