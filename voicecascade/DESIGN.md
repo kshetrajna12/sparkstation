@@ -35,6 +35,16 @@ sentence gen (~0.3s gemma) + TTS first chunk (<1s, overlapped) — stretch: ~1.2
   load + compile. Transcription solid given espeak test audio. Streaming STT
   on GB10: PROVEN.
 
+### TTS serving notes (worker2)
+
+- Image `martinb78/faster-qwen3-tts-dgx-spark:streaming` (:8023→8000). Two server
+  modes: `run_server.py` + Base model = VOICE-CLONE (needs reference wavs in
+  /config/speakers — dev voice only until K picks); `run_customvoice_server.py`
+  + CustomVoice model = STOCK speakers (Ryan/Aiden/... — the no-cloning default;
+  model downloading). Formats: wav|pcm|mp3, streamed (wav header sized 0xFFFFFFFF).
+- Trap: don't mount an HF snapshot dir into containers (symlinks dangle) —
+  dereference with `cp -rL` (plain copy at ~/cascade-tts/model).
+
 ## Placement
 
 Trial on worker2 (free). Production intent: STT+TTS are small (~6GB total) →
