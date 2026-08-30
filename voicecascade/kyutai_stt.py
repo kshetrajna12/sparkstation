@@ -27,7 +27,8 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.stt_service import STTService
 from pipecat.utils.time import time_now_iso8601
 
-FLUSH_AFTER_TURN_S = 0.9  # model text delay (~0.5s) + margin
+FLUSH_AFTER_TURN_S = 0.9   # model text delay (~0.5s) + margin
+TEXT_GAP_FINAL_S = 1.1     # no new pieces for this long (with text pending) => final
 
 # Process-global engine: the model loads ONCE per bot process (~19 s) and is
 # reused across sessions (sessions are serial — single-session bot). Without
@@ -75,6 +76,7 @@ class KyutaiSTTService(STTService):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._running = False
         self._turn_text: list[str] = []
+        self._last_piece_at = 0.0
         self._flush_task: asyncio.Task | None = None
 
     async def start(self, frame: StartFrame):
@@ -155,9 +157,19 @@ class KyutaiSTTService(STTService):
 
     async def _emit_loop(self):
         while True:
-            kind, payload = await self._out_q.get()
+            try:
+                kind, payload = await asyncio.wait_for(self._out_q.get(), timeout=0.25)
+            except asyncio.TimeoutError:
+                # text-gap finalization: the model has been quiet for a while
+                # after producing words -> the utterance is complete
+                if self._turn_text and time.monotonic() - self._last_piece_at > TEXT_GAP_FINAL_S:
+                    await self._emit_final()
+                continue
             if kind == "text":
+                if not self._turn_text:
+                    logger.debug("KyutaiSTT first piece: {!r}", payload)
                 self._turn_text.append(payload)
+                self._last_piece_at = time.monotonic()
                 await self.push_frame(
                     InterimTranscriptionFrame(
                         text="".join(self._turn_text).strip(),
@@ -166,6 +178,15 @@ class KyutaiSTTService(STTService):
                 )
             elif kind == "error":
                 await self.push_error(error_msg=f"KyutaiSTT: {payload}", fatal=True)
+
+    async def _emit_final(self):
+        text = "".join(self._turn_text).strip()
+        self._turn_text = []
+        if text:
+            logger.info("KyutaiSTT final: {!r}", text)
+            await self.push_frame(
+                TranscriptionFrame(text=text, user_id="user", timestamp=time_now_iso8601())
+            )
 
     async def run_stt(self, audio: bytes):
         # Called once per InputAudioRawFrame (continuous mode): enqueue for the
@@ -191,11 +212,6 @@ class KyutaiSTTService(STTService):
         await super().stop(frame)
 
     async def _finalize_turn(self):
+        # belt-and-braces: if a stop frame ever does reach us, flush then too
         await asyncio.sleep(FLUSH_AFTER_TURN_S)
-        text = "".join(self._turn_text).strip()
-        self._turn_text = []
-        if text:
-            logger.info("KyutaiSTT final: {!r}", text)
-            await self.push_frame(
-                TranscriptionFrame(text=text, user_id="user", timestamp=time_now_iso8601())
-            )
+        await self._emit_final()
