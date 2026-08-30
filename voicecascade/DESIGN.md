@@ -1,0 +1,47 @@
+# Cascade Voice — streaming STT → routed brain → streaming TTS
+
+Branch: `cascade-voice` (checkpoint tag: `pre-cascade-voice`). Replaces
+VoiceChat 11B as Sparky's voice IF it wins the bench; VoiceChat stays intact
+and restorable (`models start voicechat -p voice`).
+
+## Decision record (2026-08-30, with K)
+
+- Rejected: tool-call consult inside VoiceChat (dislikes wait-for-full-answer),
+  Qwen3-Omni (turn-based anyway, bleeding-edge on GB10, second resident 30B).
+- Chosen: cascaded pipeline — the only architecture where speech starts after
+  the FIRST phrase of the brain's streaming answer.
+- Brain is dynamic per turn: router → gemma4-2b (fast/social) | default qwen
+  (hard questions) | later OpenClaw agent endpoint. Routing must cost ~0
+  (rules or single gemma token). Escalation replaces the speaker mid-stream.
+
+## Components (all local, all proven-on-GB10 or design-proven)
+
+| Stage | Choice | Why |
+|---|---|---|
+| STT | kyutai/stt-1b-en_fr (moshi>=0.2.6, streaming, 0.5s delay) | native streaming + built-in SEMANTIC VAD (turn detection for free); worker2 venv ~/cascade-stt/.venv |
+| Brain | sparkstation gateway (gemma4-2b / default / per-session alias) | streams; tools native; memory/persona = text Sparky |
+| TTS | martinb78/faster-qwen3-tts-dgx-spark:streaming (Qwen3-TTS-12Hz-1.7B) | GB10 CUDA-graph image, OpenAI-compatible, streams WAV <1s first audio, voice cloning for Sparky's voice |
+| Orchestration | Pipecat (same pinned rev), same /ws-client protobuf contract | bridge contract v2 == v1.2 transport-wise; tool calls become native OpenAI tool-calls via brain |
+
+## Latency budget (target ≤1.5s speech-end → first audio)
+
+STT finalization ~0.5s + brain TTFT (gemma 26ms / qwen ~0.3-1s) + first
+sentence gen (~0.3s gemma) + TTS first chunk (<1s, overlapped) — stretch: ~1.2s.
+
+## Placement
+
+Trial on worker2 (free). Production intent: STT+TTS are small (~6GB total) →
+primary; brain already lives wherever the daily driver lives → worker2 freed
+for the 2-worker big-model plan.
+
+## Working rules
+
+- All sparkstation changes on `cascade-voice` only; merge via PR after bench.
+- NOTE: the tree carries UNRELATED uncommitted WIP (dspark launcher placeholder
+  hooks, gemma max_model_len 32K bump — another session's work). Never stage
+  supervisor/main.py, health_check.py, launchers/dspark_launcher.py, models.yaml
+  hunks that aren't ours.
+- worker2 assets: ~/cascade-stt (kyutai repo+venv), ~/cascade-tts (recipe),
+  TTS docker image, models via cluster sync-cache.
+- Bench gate vs VoiceChat numbers: voice-to-voice latency, barge-in reaction,
+  answer quality (the DC test), long-answer completeness, session stability.
