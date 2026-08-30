@@ -45,6 +45,15 @@ sentence gen (~0.3s gemma) + TTS first chunk (<1s, overlapped) — stretch: ~1.2
 - Trap: don't mount an HF snapshot dir into containers (symlinks dangle) —
   dereference with `cp -rL` (plain copy at ~/cascade-tts/model).
 
+- TTS (CustomVoice server, stock speaker "Ryan", worker2:8024, CUDA graphs):
+  **first audio chunk 0.46–0.56 s**, streams while generating (7.8 s of audio
+  delivered in 4.4 s wall). TTS on GB10: PROVEN. All three cascade components
+  now individually proven.
+- Open issue: the VOICE-CLONE server path 500s ("ref_text is required", ICL
+  mode) even with ref_text supplied via file and CLI — a bug in the image's
+  plumbing; not blocking (CustomVoice is the no-cloning default; revisit when
+  K picks Sparky's voice — sample of "Ryan" sent to K 2026-08-30).
+
 ## Placement
 
 Trial on worker2 (free). Production intent: STT+TTS are small (~6GB total) →
