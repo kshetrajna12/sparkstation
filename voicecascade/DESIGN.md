@@ -34,6 +34,19 @@ Trial on worker2 (free). Production intent: STT+TTS are small (~6GB total) →
 primary; brain already lives wherever the daily driver lives → worker2 freed
 for the 2-worker big-model plan.
 
+## Ownership boundaries (agreed with OpenClaw integration, 2026-08-30)
+
+- **Persona & memory injection is OpenClaw-owned, opaque to this pipeline.**
+  The session config carries `system_instruction` + memory digest verbatim from
+  the bridge (source of truth: Sparky's workspace / MEMORY.md distillate).
+  This repo never authors Sparky-persona content — no parallel persona on
+  worker2. Playground/dev sessions use a minimal prompt explicitly labeled
+  "dev voice, not Sparky".
+- **Sparky's voice is K's deliberate choice, not a default.** The TTS voice is
+  a config slot (stock voice `DEV0` until decided). Cloning path: K supplies a
+  ~10s clean sample when ready; we generate the voice embedding from it. No
+  cloning of anyone's voice without K saying so.
+
 ## Working rules
 
 - All sparkstation changes on `cascade-voice` only; merge via PR after bench.
