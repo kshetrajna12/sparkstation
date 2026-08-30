@@ -214,6 +214,11 @@ models:
     # table mmapped from NVMe, MTP=3, 262K ctx, port 8010. Weights:
     # ~/models/qfn-ar-{model,table} (materialized, NOT hub symlinks — the
     # container mount needs real files). Rollback: qwen3.8-sglang spec below.
+    # REASONING BUDGET CONTRACT: serve.sh sets server default reasoning_effort
+    # LOW (--default-chat-template-kwargs) — without it, default thinking ate
+    # modest max_tokens budgets before any JSON content (finish_reason=length;
+    # caught by test_structured_output_modest_budget 2026-08-29). Clients
+    # request deeper thinking per-call, same as dsv4/glm.
     name: "qwen-flash-next"   # SERVED name (serve.sh SERVED_NAME)
     backend: "dspark"          # generic script-stack launcher
     model_type: "chat"
