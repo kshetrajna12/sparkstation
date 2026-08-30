@@ -28,6 +28,13 @@ and restorable (`models start voicechat -p voice`).
 STT finalization ~0.5s + brain TTFT (gemma 26ms / qwen ~0.3-1s) + first
 sentence gen (~0.3s gemma) + TTS first chunk (<1s, overlapped) — stretch: ~1.2s.
 
+## First-light results
+
+- STT (kyutai/stt-1b-en_fr, worker2, cu130): **35.4 ms/step vs 80 ms budget**
+  (2.3x real-time headroom) after warmup; first-ever run pays ~20 s of model
+  load + compile. Transcription solid given espeak test audio. Streaming STT
+  on GB10: PROVEN.
+
 ## Placement
 
 Trial on worker2 (free). Production intent: STT+TTS are small (~6GB total) →
