@@ -103,25 +103,37 @@ class KyutaiSTTService(STTService):
                     m.reset_streaming()
             self._post(("ready", None))
 
-            buf = torch.zeros(0)
-            if True:
-                while self._running:
-                    try:
-                        item = self._in_q.get(timeout=0.2)
-                    except queue.Empty:
-                        continue
-                    pcm, in_rate = item
-                    if in_rate != mimi.sample_rate:
-                        # The transport is configured to deliver mimi's rate;
-                        # anything else means a misconfigured pipeline.
-                        self._post(("error", f"expected {mimi.sample_rate} Hz input, got {in_rate}"))
-                        return
-                    audio = torch.from_numpy(
-                        np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-                    )
-                    buf = torch.cat([buf, audio])
-                    while buf.shape[-1] >= frame_size:
-                        chunk, buf = buf[:frame_size], buf[frame_size:]
+            import julius
+
+            # Streaming 16k->24k resample with overlap context: naive per-chunk
+            # resampling destroys the filter state at every boundary and the
+            # model decodes nothing (first-light bug). We resample 80 ms blocks
+            # (1280 @ 16k -> 1920 @ 24k) inside a window padded with 10 ms of
+            # real context on each side, keeping only the center.
+            CTX16, BLK16 = 160, 1280
+            CTX24, BLK24 = 240, 1920
+            assert BLK24 == frame_size, "mimi frame size changed?"
+            buf16 = torch.zeros(CTX16)  # left context primed with silence
+
+            while self._running:
+                try:
+                    item = self._in_q.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+                pcm, in_rate = item
+                if in_rate != 16000:
+                    self._post(("error", f"expected 16000 Hz input, got {in_rate}"))
+                    return
+                audio = torch.from_numpy(
+                    np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+                )
+                buf16 = torch.cat([buf16, audio])
+                while buf16.shape[-1] >= CTX16 + BLK16 + CTX16:
+                    window = buf16[: CTX16 + BLK16 + CTX16]
+                    buf16 = buf16[BLK16:]  # advance one block; contexts overlap
+                    out24 = julius.resample_frac(window, 16000, 24000)
+                    chunk = out24[CTX24: CTX24 + BLK24]
+                    if True:
                         codes = mimi.encode(chunk.to(self._device)[None, None])
                         text_tokens = lm_gen.step(codes)
                         if text_tokens is None:
