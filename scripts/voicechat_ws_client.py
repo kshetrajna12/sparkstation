@@ -13,6 +13,7 @@ Usage: python ws_smoke_client.py [host] [seconds]
 """
 import asyncio
 import json
+import os
 import math
 import struct
 import sys
@@ -108,6 +109,8 @@ async def main():
     print(f"connecting {URL}")
     got: dict[str, int] = {}
     audio_in_bytes = 0
+    wav_done_at = None
+    first_audio_at = None
     bot_ready = asyncio.Event()
     async with websockets.connect(URL, max_size=None) as ws:
         # RTVI handshake: bot answers with bot-ready once the model session is live
@@ -116,10 +119,13 @@ async def main():
         # place before the session's first configuration render.
         if len(sys.argv) > 4:
             specs = json.load(open(sys.argv[4]))
+            d = {"tools": specs}
+            if os.environ.get("SYS_PROMPT"):
+                d["system_instruction"] = os.environ["SYS_PROMPT"]
             await ws.send(encode_message_frame(
                 {"id": "smoke-2", "label": "rtvi-ai", "type": "client-message",
-                 "data": {"t": "register-tools", "d": {"tools": specs}}}))
-            print(f"-> register-tools sent ({len(specs)} tools)")
+                 "data": {"t": "register-tools", "d": d}}))
+            print(f"-> register-tools sent ({len(specs)} tools, sys_prompt={'custom' if 'system_instruction' in d else 'default'})")
         await ws.send(encode_message_frame(
             {"id": "smoke-1", "label": "rtvi-ai", "type": "client-ready",
              "data": {"version": "1.0.0"}}))
@@ -135,17 +141,25 @@ async def main():
                 assert (w.getframerate(), w.getnchannels(), w.getsampwidth()) == (IN_RATE, 1, 2), "need 16kHz mono PCM16 wav"
                 wav_pcm = w.readframes(w.getnframes())
             pos, t = 0, 0
+            nonlocal wav_done_at
             while True:
                 # hold the utterance until the model session is live —
                 # audio sent before bot-ready lands in the warm-up pre-roll
                 if pos < len(wav_pcm) and bot_ready.is_set():
                     pcm = wav_pcm[pos:pos + chunk * 2].ljust(chunk * 2, b"\x00")
                     pos += chunk * 2
+                    if pos >= len(wav_pcm):
+                        wav_done_at = time.monotonic()
                 else:
                     pcm = b"".join(
                         struct.pack("<h", int(3000 * math.sin(2 * math.pi * 220 * (t + i) / IN_RATE)))
                         for i in range(chunk)) if False else b"\x00" * (chunk * 2)
                 t += chunk
+                # MUTE_AFTER_SPEECH=1: emulate a half-duplex bridge that stops
+                # sending mic audio once its utterance is done
+                if os.environ.get("MUTE_AFTER_SPEECH") == "1" and pos >= len(wav_pcm) and wav_pcm:
+                    await asyncio.sleep(0.02)
+                    continue
                 await ws.send(encode_audio_frame(pcm))
                 await asyncio.sleep(0.02)
 
@@ -158,6 +172,8 @@ async def main():
                     print("TEXT-frame(?):", raw[:120]); continue
                 kind, info = decode_frame(raw)
                 if kind == "audio":
+                    if first_audio_at is None:
+                        first_audio_at = time.monotonic()
                     audio_in_bytes += info["bytes"]
                     got["audio"] = got.get("audio", 0) + 1
                 else:
@@ -195,6 +211,8 @@ async def main():
         finally:
             send_task.cancel()
 
+    if wav_done_at and first_audio_at:
+        print(f"RESPONSE LATENCY (end of speech -> first bot audio): {first_audio_at - wav_done_at:.2f}s")
     secs = audio_in_bytes / (24_000 * 2)
     print(f"\nsummary: {got} | bot audio: {audio_in_bytes} bytes (~{secs:.1f}s @24kHz)")
     ok = got.get("message", 0) > 0
