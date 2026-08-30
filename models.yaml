@@ -159,7 +159,7 @@ models:
     # Serve knobs: --max-num-batched-tokens 8192 --max-num-seqs 12
     # (c4 TTFT 3.8s -> 0.6s, agg +7%; ~15% code-c1 cost, accepted).
     # Measured (v12 final, thinking off, temp 0): c1 29.7 prose / 34.1 code,
-    # c4 agg 45/59, TTFT ~0.35s. Tools+thinking-control gate 4/4.
+    # c4 agg 45/59, TTFT ~0.35s. Context 393216 (stress-gated 2026-08-29: 356K single prefill + 2x137K concurrent PASS; pool 476,625 tok, 1.21x headroom — native 1M needs TP4). Tools+thinking-control gate 4/4.
     # Client note: thinking-off leaks a preamble sentence into content (glm45
     # parser only strips proper think-blocks); prefer thinking ON for clean
     # separation. Teardown must kill BOTH ranks before relaunch (stop script
@@ -202,8 +202,38 @@ models:
       max_model_len: 32768
       max_concurrent_requests: 4
 
+  qwen-flash-next:
+    # DAILY DRIVER (2026-08-29) — Qwen3.8-Flash-Next 125B-A6B on ONE Spark
+    # (worker1), replacing qwen3.8-sglang: model a benchmark tier up,
+    # code c1 48.3 tok/s (+13% vs 27B), prose 30.1 (tie), vision native,
+    # tools+thinking 4/4, 2x4K-token long-gen stability verified. Trade-off:
+    # c4 aggregate 50/98 vs 27B's 81/124 (mmap-PLE contention under load).
+    # Stack: Saren-Arterius/qwen3.8-Flash-DGX-AutoRound vLLM fork (worker1
+    # ~/qfn-autoround; serve.sh holds the config): Intel W4A16 AutoRound int4
+    # experts + int8 head + fp8 side layers (~71GB resident), 44GB fp8 PLE
+    # table mmapped from NVMe, MTP=3, 262K ctx, port 8010. Weights:
+    # ~/models/qfn-ar-{model,table} (materialized, NOT hub symlinks — the
+    # container mount needs real files). Rollback: qwen3.8-sglang spec below.
+    name: "qwen-flash-next"   # SERVED name (serve.sh SERVED_NAME)
+    backend: "dspark"          # generic script-stack launcher
+    model_type: "chat"
+    host: worker1
+    quantization: "none"       # stack-managed (AutoRound hybrid)
+    default: true
+    vision_default: true
+    memory_gb: 78              # ~71GB resident + headroom; PLE stays on NVMe
+    auto_suspend_enabled: false
+    extra_args:
+      dspark_dir: "/home/kshetrajna/qfn-ar-deploy"
+      start_script: "start-qfn-ar.sh"
+      stop_script: "stop-qfn-ar.sh"
+      port: 8010
+      launch_timeout_seconds: 1500
+      head_container: "qwen38-flash"
+
   qwen3.8-sglang:
-    # DAILY DRIVER — Qwen3.8-27B on SGLang + DFlash2 speculative decoding.
+    # RETIRED as daily driver 2026-08-29 (see qwen-flash-next above); kept
+    # for rollback. Was: Qwen3.8-27B on SGLang + DFlash2 speculative decoding.
     # Swapped from DSpark 2026-08-21 after a full head-to-head: DFlash2 hits
     # ~66 tok/s net decode C1 on code (vs DSpark ~38) — verified with the
     # recipe's own net-decode bench on worker1. Single-node (second Spark free).
@@ -389,7 +419,7 @@ profiles:
   #                 tuned, 135 tok/s aggregate c=8 — vLLM MTP batches well,
   #                 unlike SGLang-DSpark which poisons batch, proven 08-18).
   generic:
-    qwen3.8-sglang: {}  # DAILY DRIVER chat (SGLang + DFlash2 on worker1, managed; default+vision alias)
+    qwen-flash-next: {} # DAILY DRIVER chat (Flash-Next AutoRound, single Spark on worker1; default+vision alias; swapped from qwen3.8-sglang 2026-08-29)
     bge-m3: {}          # openclaw/memory-search text embeddings
     clip-vit: {}        # image embeddings (cross-modal search)
     face-detect: {}     # gallery recognition
@@ -404,7 +434,7 @@ profiles:
   #                 (generic stays up; voice stack starts on worker2 in ~8min;
   #                  stop with: sparkstation models stop voicechat)
   voice:
-    qwen3.8-sglang: {}
+    qwen-flash-next: {} # daily driver (single Spark, worker1) — leaves worker2 for voicechat
     bge-m3: {}
     clip-vit: {}
     face-detect: {}
