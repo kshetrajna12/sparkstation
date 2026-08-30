@@ -29,6 +29,32 @@ from pipecat.utils.time import time_now_iso8601
 
 FLUSH_AFTER_TURN_S = 0.9  # model text delay (~0.5s) + margin
 
+# Process-global engine: the model loads ONCE per bot process (~19 s) and is
+# reused across sessions (sessions are serial — single-session bot). Without
+# this, the first utterance of every session raced the per-session load and
+# transcribed nothing.
+_ENGINE = {}
+_ENGINE_LOCK = threading.Lock()
+
+
+def preload(device: str = "cuda", hf_repo: str = "kyutai/stt-1b-en_fr"):
+    """Load mimi + LM once per process. Safe to call repeatedly."""
+    with _ENGINE_LOCK:
+        if _ENGINE.get("repo") == hf_repo:
+            return _ENGINE
+        import torch
+        from moshi.models import loaders, LMGen
+
+        logger.info("KyutaiSTT preloading {} ...", hf_repo)
+        info = loaders.CheckpointInfo.from_hf_repo(hf_repo)
+        mimi = info.get_mimi(device=device)
+        tokenizer = info.get_text_tokenizer()
+        lm = info.get_moshi(device=device, dtype=torch.bfloat16)
+        _ENGINE.update(repo=hf_repo, mimi=mimi, tokenizer=tokenizer,
+                       lm_gen=LMGen(lm, temp=0, temp_text=0.0))
+        logger.info("KyutaiSTT ready (frame {} @ {} Hz)", mimi.frame_size, mimi.sample_rate)
+        return _ENGINE
+
 
 class KyutaiSTTService(STTService):
     def __init__(self, *, hf_repo: str = "kyutai/stt-1b-en_fr", device: str = "cuda", **kwargs):
@@ -52,23 +78,18 @@ class KyutaiSTTService(STTService):
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
         # consume decoded pieces
-        self.create_task(self._emit_loop())
+        self._emit_task = self.create_task(self._emit_loop())
 
     def _worker(self):
-        """Owns the model. Feeds 80ms mimi frames, posts decoded text pieces."""
+        """Feeds 80ms mimi frames through the shared engine, posts text pieces."""
         try:
             import julius
             import numpy as np
             import torch
-            from moshi.models import loaders, LMGen
 
-            info = loaders.CheckpointInfo.from_hf_repo(self._hf_repo)
-            mimi = info.get_mimi(device=self._device)
-            tokenizer = info.get_text_tokenizer()
-            lm = info.get_moshi(device=self._device, dtype=torch.bfloat16)
-            lm_gen = LMGen(lm, temp=0, temp_text=0.0)
-            frame_size = mimi.frame_size  # 1920 @ 24k = 80ms
-            logger.info("KyutaiSTT loaded ({}, frame {} @ {}Hz)", self._hf_repo, frame_size, mimi.sample_rate)
+            eng = preload(self._device, self._hf_repo)
+            mimi, tokenizer, lm_gen = eng["mimi"], eng["tokenizer"], eng["lm_gen"]
+            frame_size = mimi.frame_size
             self._post(("ready", None))
 
             buf = torch.zeros(0)
@@ -95,7 +116,7 @@ class KyutaiSTTService(STTService):
                         if tok not in (0, 3):  # EPAD/PAD
                             piece = tokenizer.id_to_piece(tok).replace("▁", " ")
                             self._post(("text", piece))
-        except Exception as exc:  # surface loudly; the service is useless without the model
+        except Exception as exc:
             logger.exception("KyutaiSTT worker died: {}", exc)
             self._post(("error", str(exc)))
 
@@ -130,6 +151,12 @@ class KyutaiSTTService(STTService):
             if self._flush_task:
                 self._flush_task.cancel()
             self._flush_task = self.create_task(self._finalize_turn())
+
+    async def stop(self, frame):
+        self._running = False
+        if getattr(self, "_emit_task", None):
+            await self.cancel_task(self._emit_task)
+        await super().stop(frame)
 
     async def _finalize_turn(self):
         await asyncio.sleep(FLUSH_AFTER_TURN_S)

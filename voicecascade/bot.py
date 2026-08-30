@@ -254,4 +254,8 @@ async def bot(runner_args: RunnerArguments):
 if __name__ == "__main__":
     from pipecat.runner.run import main
 
+    # Load the STT engine before accepting sessions: first-session utterances
+    # must not race a 19 s model load.
+    from .kyutai_stt import preload
+    preload()
     main()
