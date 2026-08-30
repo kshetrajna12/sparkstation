@@ -147,7 +147,7 @@ models:
     # GLM-5.3-Flash (320B-A18B MoE, MIT, 262K ctx) — winner of the 2026-08-28
     # TP2 autoresearch sweep on worker1+worker2: LibertAIDAI NVFP4 + incoai
     # DFlash2 drafter (spec-7) + CUDA graphs + fp8 KV (pinned 4.15GiB), image
-    # radixark/vllm-glm53-flash:sm121-v12-dflash2 (tonyd2wild v1-v8 chain +
+    # radixark/vllm-glm53-flash:sm121-v14-dflash2 (tonyd2wild v1-v8 chain +
     # DFlash2 overlay, plus local patches):
     #   v11 — one-shot reasoning in the glm47 parser: stray mid-content
     #         <think> spans at long ctx fragmented content deltas and broke
@@ -156,6 +156,10 @@ models:
     #   v12 — SM121 kpool top-k routing: stock persistent_topk hard-crashes
     #         decode past ~24K ctx on GB10's 99KB smem (verified crash-free
     #         to 40K after fix; from tonyd2wild 3a2b793).
+    #   v14 — EAGLE drop scoped to the drafter SWA group: stock flags ALL KV
+    #         groups when the model sets no is_eagle_group, evicting prefix
+    #         cache; consecutive-repeat 63K prefill 65s -> 3.9s. Interleaved
+    #         eviction remains (shared vLLM-base bug, repro: A/A/B/A probe).
     # Serve knobs: --max-num-batched-tokens 8192 --max-num-seqs 12
     # (c4 TTFT 3.8s -> 0.6s, agg +7%; ~15% code-c1 cost, accepted).
     # Measured (v12 final, thinking off, temp 0): c1 29.7 prose / 34.1 code,
