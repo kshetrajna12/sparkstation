@@ -1097,6 +1097,23 @@ async def prometheus_targets():
     targets = []
     for model in await registry.list_running():
         backend = model.backend.value if hasattr(model.backend, "value") else str(model.backend)
+        if backend == "voicechat":
+            # The Pipecat bot exports session/latency/tool metrics plus the
+            # model-server frame traces on its own port (extra_args.metrics_port,
+            # default 7861) — not on the runner port.
+            metrics_port = int((model.extra_args or {}).get("metrics_port", 7861))
+            host_ip = model.base_url.split("://", 1)[-1].rsplit(":", 1)[0]
+            targets.append(
+                {
+                    "targets": [f"{host_ip}:{metrics_port}"],
+                    "labels": {
+                        "host": model.host or "primary",
+                        "alias": model.model_alias or model.model_name,
+                        "engine": backend,
+                    },
+                }
+            )
+            continue
         if backend not in ENGINES_WITH_METRICS:
             continue
         # base_url is routable from the supervisor host (QSFP IP for workers),
