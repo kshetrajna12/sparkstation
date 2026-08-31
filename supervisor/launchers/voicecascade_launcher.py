@@ -146,8 +146,10 @@ class VoicecascadeLauncher(ModelLauncher):
                 f"containers must be pre-created on {config.host} — see voicecascade/DESIGN.md"
             )
 
-        # 2) gateway tunnel (worker loopback :tunnel_port -> primary :8000)
-        primary = self._primary_ssh()
+        # 2) gateway tunnel (worker loopback :tunnel_port -> primary :8000).
+        # extra_args.gateway_ssh overrides (QSFP IPs are per-link: worker1
+        # and worker2 see different primary addresses).
+        primary = xa.get("gateway_ssh") or self._primary_ssh()
         tunnel_cmd = (
             f"nc -z 127.0.0.1 {tunnel_port} 2>/dev/null || "
             f"(setsid nohup ssh -o BatchMode=yes -N "
@@ -180,10 +182,19 @@ class VoicecascadeLauncher(ModelLauncher):
                 f"-m voicecascade.bot -t webrtc --host 0.0.0.0 --port {api_port} "
                 f"> /tmp/cascade-bot.log 2>&1 < /dev/null & echo started"
             )
-            result = await self._ssh(target, up_cmd, 30, log_path)
-            if result.returncode != 0:
-                raise LaunchError(
-                    f"voicecascade bot dispatch failed (ssh exit {result.returncode}), see {log_path}"
+            # sshd can hold the channel open past the detached dispatch
+            # (same behavior the voicechat launcher hit) — a hung dispatch is
+            # NOT a failed launch; the readiness poll below is the arbiter.
+            try:
+                result = await self._ssh(target, up_cmd, 30, log_path)
+                if result.returncode != 0:
+                    raise LaunchError(
+                        f"voicecascade bot dispatch failed (ssh exit {result.returncode}), see {log_path}"
+                    )
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    "voicecascade bot dispatch ssh still open after 30s; "
+                    "proceeding to readiness poll"
                 )
 
         deadline = asyncio.get_event_loop().time() + timeout_s
