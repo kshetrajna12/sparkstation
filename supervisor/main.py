@@ -48,6 +48,7 @@ from supervisor.errors import (
 )
 from supervisor import metrics
 from supervisor.voice import router as voice_router
+from supervisor.console_api import router as console_api_router
 
 # Configure logging (stdout + file)
 handlers = [logging.StreamHandler()]
@@ -608,6 +609,7 @@ app = FastAPI(
 # repo's console/ directory; it talks to this same origin. Hostnames never
 # appear in it — exposure (console.<domain>) is a reverse-proxy concern.
 app.include_router(voice_router)
+app.include_router(console_api_router)
 
 CONSOLE_DIR = Path(__file__).resolve().parent.parent / "console"
 

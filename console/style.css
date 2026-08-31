@@ -78,6 +78,29 @@ button.danger { color: var(--bad); }
 .msg.sys { color: var(--muted); font-size: .8rem; align-self: center; }
 .msg.partial { opacity: .6; font-style: italic; }
 
+/* cluster */
+.cards { display: flex; gap: .75rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.cards .card { min-width: 180px; flex: 1; }
+.card .big { font-size: 1.5rem; font-weight: 700; }
+.card .sub { color: var(--muted); font-size: .8rem; }
+.chip { border: 1px solid var(--line); border-radius: 999px; padding: .15rem .7rem; font-size: .8rem; color: var(--muted); }
+.membar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin-top: .4rem; }
+.membar div { height: 100%; background: var(--accent); }
+.membar.hot div { background: var(--warn); }
+table.models { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+table.models th, table.models td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--line); }
+table.models th { font-size: .78rem; color: var(--muted); font-weight: 600; }
+table.models tr:last-child td { border-bottom: 0; }
+.st { font-size: .78rem; border-radius: 999px; padding: .1rem .55rem; border: 1px solid var(--line); white-space: nowrap; }
+.st.running { color: var(--ok); border-color: var(--ok); }
+.st.starting, .st.suspended { color: var(--warn); border-color: var(--warn); }
+.st.failed, .st.stopped { color: var(--bad); border-color: var(--bad); }
+.hb { margin-left: .3rem; }
+
+/* logs */
+.log-view { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .8rem; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; max-height: 75vh; overflow-y: auto; }
+.row.inline { flex-direction: row; font-weight: 400; align-items: center; gap: .3rem; }
+
 /* voices */
 .engine-status { display: flex; gap: .5rem; flex-wrap: wrap; margin: .75rem 0; font-size: .8rem; }
 .engine-status span { border: 1px solid var(--line); border-radius: 999px; padding: .1rem .6rem; }
