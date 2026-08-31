@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sparkstation Console</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>⚡</text></svg>">
-<link rel="stylesheet" href="style.css?v=2">
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
 <div class="shell">
@@ -152,7 +152,7 @@
           <button id="start-btn" class="primary">▶ Start</button>
           <span id="start-msg" class="status-line"></span>
         </div>
-        <p class="hint">Resolved through the selected profile exactly like <code>sparkstation models start &lt;alias&gt; -p &lt;profile&gt;</code>. Chat models on the same node are usually mutually exclusive — the supervisor enforces memory, not intent.</p>
+        <p class="hint">Resolved through the selected profile exactly like <code>sparkstation models start &lt;alias&gt; -p &lt;profile&gt;</code>. Chat models on the same node are usually mutually exclusive — the supervisor checks the target host's free memory before launching (model + 10 GB headroom must fit) and refuses cleanly if it doesn't.</p>
       </div>
     </section>
 
@@ -183,7 +183,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="talk.js?v=2"></script>
-<script src="app.js?v=2"></script>
+<script src="talk.js?v=3"></script>
+<script src="app.js?v=3"></script>
 </body>
 </html>

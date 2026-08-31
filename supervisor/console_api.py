@@ -69,6 +69,8 @@ async def list_profiles_endpoint():
         "default": cfg.default_profile,
         "profiles": profiles,
         "all_aliases": sorted(cfg.models.keys()),
+        # base-spec placement facts so pickers can say where a model would run
+        "aliases": {a: {"host": m.host, "memory_gb": m.memory_gb} for a, m in cfg.models.items()},
     }
 
 

@@ -78,6 +78,8 @@ def test_profiles_lists_yaml_profiles(client):
     assert d["default"] in d["profiles"]
     assert "voice" in d["profiles"] and "voicecascade" in d["profiles"]["voice"]
     assert "qwen-flash-next" in d["all_aliases"]
+    assert d["aliases"]["voicecascade"]["host"] == "worker2"
+    assert d["aliases"]["qwen-flash-next"]["memory_gb"]
     assert d["active"]  # env/default resolution never leaves it empty
 
 

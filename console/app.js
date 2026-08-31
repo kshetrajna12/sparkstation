@@ -429,10 +429,20 @@
     const live = new Set(models.filter((m) => ["running", "starting"].includes(m.status)).map((m) => m.alias));
     const aliasSel = $("#start-alias"), profSel = $("#start-profile");
     const prevA = aliasSel.value, prevP = profSel.value;
-    aliasSel.innerHTML = profilesInfo.all_aliases.map((a) => `<option value="${esc(a)}"${live.has(a) ? " disabled" : ""}>${esc(a)}${live.has(a) ? " (live)" : ""}</option>`).join("");
-    profSel.innerHTML = Object.keys(profilesInfo.profiles).map((p) => `<option value="${esc(p)}"${p === profilesInfo.active ? " selected" : ""}>profile: ${esc(p)}</option>`).join("");
-    if (prevA) aliasSel.value = prevA;
-    if (prevP) profSel.value = prevP;
+    const profile = prevP || profilesInfo.active;
+    const inProfile = new Set(profilesInfo.profiles[profile] || []);
+    const opt = (a) => {
+      const info = (profilesInfo.aliases || {})[a] || {};
+      const where = info.host ? ` — ${info.host}${info.memory_gb ? `, ${info.memory_gb} GB` : ""}` : "";
+      return `<option value="${esc(a)}"${live.has(a) ? " disabled" : ""}>${esc(a)}${esc(where)}${live.has(a) ? " (live)" : ""}</option>`;
+    };
+    const rest = profilesInfo.all_aliases.filter((a) => !inProfile.has(a));
+    aliasSel.innerHTML =
+      `<optgroup label="in profile ${esc(profile)}">${[...inProfile].sort().map(opt).join("")}</optgroup>` +
+      (rest.length ? `<optgroup label="all specs (on-demand)">${rest.map(opt).join("")}</optgroup>` : "");
+    profSel.innerHTML = Object.keys(profilesInfo.profiles).map((p) => `<option value="${esc(p)}"${p === profile ? " selected" : ""}>profile: ${esc(p)}</option>`).join("");
+    if (prevA && Array.from(aliasSel.options).some((o) => o.value === prevA)) aliasSel.value = prevA;
+    profSel.onchange = () => renderStartControls(models);
   }
 
   function bindCluster() {
