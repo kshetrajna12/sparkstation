@@ -19,7 +19,11 @@ from __future__ import annotations
 import os
 import time
 
+import warnings
+
 from loguru import logger
+from pipecat.adapters.schemas.function_schema import FunctionSchema
+from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -40,6 +44,7 @@ from pipecat.runner.types import (
     WebSocketRunnerArguments,
 )
 from pipecat.serializers.protobuf import ProtobufFrameSerializer
+from pipecat.services.llm_service import FunctionCallParams
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from pipecat.transports.websocket.fastapi import (
@@ -198,8 +203,47 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         rtvi_processor=rtvi,
     )
 
+    async def forward_tool_call(params: FunctionCallParams):
+        """Catch-all: every brain tool call is forwarded to the client as an
+        RTVI llm-function-call message (contract v1.1 shapes). Deferred: the
+        client's llm-function-call-result becomes a FunctionCallResultFrame
+        via the RTVI processor, which completes the call and re-runs the LLM."""
+        logger.info("Tool call -> client: {}({}) id={}",
+                    params.function_name, params.arguments, params.tool_call_id)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            await rtvi.handle_function_call(params)
+
+    llm.register_function(None, forward_tool_call)
+
     @rtvi.event_handler("on_client_message")
     async def on_client_message(processor, message):
+        if message.type == "register-tools":
+            d = message.data or {}
+            fns = []
+            try:
+                for t in d.get("tools") or []:
+                    f = t.get("function", t)
+                    p = f.get("parameters") or {}
+                    fns.append(FunctionSchema(
+                        name=f["name"], description=f.get("description", ""),
+                        properties=p.get("properties", {}), required=p.get("required", []),
+                    ))
+            except (KeyError, TypeError, AttributeError) as e:
+                await processor.send_server_message(
+                    {"type": "tools-error", "data": {"error": f"bad tool spec: {e}"}})
+                return
+            # total replacement, same as contract v1.1
+            context.set_tools(ToolsSchema(standard_tools=fns))
+            si = d.get("system_instruction")
+            if isinstance(si, str) and si.strip():
+                context.set_messages([{"role": "system", "content": si.strip()}])
+            logger.info("Tools registered: {} ({})", len(fns), [f.name for f in fns])
+            await processor.send_server_message(
+                {"type": "tools-registered",
+                 "data": {"count": len(fns),
+                          "system_instruction": "custom" if si else "default"}})
+            return
         if message.type != "configure":
             return
         d = message.data or {}
