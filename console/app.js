@@ -368,7 +368,9 @@
       renderModels(det.models || []);
       if (!profilesInfo) { profilesInfo = await api("GET", "/profiles"); renderStartControls(det.models || []); }
       else renderStartControls(det.models || []);
-      $("#profile-chip").textContent = profilesInfo ? `profile: ${profilesInfo.active}` : "";
+      $("#profile-chip").textContent = profilesInfo ? `active profile: ${profilesInfo.active}` : "";
+      renderSwitchControls();
+      api("GET", "/profiles/switch-status").then((st) => { if (st.state === "switching") pollSwitch(); }).catch(() => {});
     } catch (e) { toast("cluster refresh failed: " + e.message, true); }
     if (clusterVisible) clusterTimer = setTimeout(refreshCluster, 10000);
   }
@@ -462,8 +464,63 @@
     profSel.onchange = () => renderStartControls(models);
   }
 
+  function renderSwitchControls() {
+    if (!profilesInfo) return;
+    const sel = $("#switch-profile"); const prev = sel.value;
+    sel.innerHTML = '<option value="" disabled selected>switch to…</option>' +
+      Object.keys(profilesInfo.profiles).filter((p) => p !== profilesInfo.active)
+      .map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("");
+    if (prev && Array.from(sel.options).some((o) => o.value === prev)) sel.value = prev;
+  }
+
+  let switchPolling = false;
+  async function pollSwitch() {
+    if (switchPolling) return;
+    switchPolling = true;
+    const line = $("#switch-status");
+    try {
+      while (true) {
+        const st = await api("GET", "/profiles/switch-status");
+        if (st.state === "idle") break;
+        line.hidden = false;
+        const steps = (st.steps || []).map((x) => `${x.action} ${x.alias}: ${x.status}${x.error ? " (" + x.error + ")" : ""}`).join(" · ");
+        if (st.state === "switching") {
+          line.className = "status-line warn";
+          line.textContent = `switching to ${st.profile}… ${steps}`;
+        } else {
+          line.className = "status-line " + (st.state === "done" ? "ok" : "bad");
+          line.textContent = st.state === "done"
+            ? `switched to ${st.profile} — started models are still warming up (watch the table)`
+            : `switch to ${st.profile} FAILED: ${st.error || ""} · ${steps}`;
+          profilesInfo = null; refreshCluster();
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 2500));
+      }
+    } catch (e) { /* transient poll error; refreshCluster keeps running */ }
+    switchPolling = false;
+  }
+
   function bindCluster() {
     $("#cluster-refresh").onclick = () => { profilesInfo = null; refreshCluster(); };
+    $("#switch-btn").onclick = async () => {
+      const target = $("#switch-profile").value;
+      if (!target) return;
+      let plan;
+      try { plan = await api("GET", `/profiles/${encodeURIComponent(target)}/plan`); }
+      catch (e) { toast("cannot plan switch: " + e.message, true); return; }
+      const msg = `Switch profile ${profilesInfo.active} → ${target}?\n\n` +
+        `STOP:  ${plan.stop.length ? plan.stop.join(", ") : "(nothing)"}\n` +
+        `START: ${plan.start.length ? plan.start.join(", ") : "(nothing)"}\n` +
+        `keep:  ${plan.keep.join(", ") || "(none)"}\n\n` +
+        `Chat will be unavailable while models swap (large models take minutes).`;
+      if (!confirm(msg)) return;
+      try {
+        await api("POST", `/profiles/${encodeURIComponent(target)}/activate`);
+        toast(`switching to ${target}…`);
+        pollSwitch();
+      } catch (e) { toast("switch failed to start: " + e.message, true); }
+    };
     $("#start-btn").onclick = async () => {
       const alias = $("#start-alias").value, profile = $("#start-profile").value;
       if (!alias) return;
