@@ -2215,7 +2215,7 @@
     },
     {
       "type": "row",
-      "title": "Voice (full-duplex speech-to-speech)",
+      "title": "Voice \u2014 cascade (STT \u2192 routed brain \u2192 TTS)",
       "collapsed": true,
       "id": 42,
       "gridPos": {
@@ -2228,17 +2228,16 @@
         {
           "type": "stat",
           "title": "Voice sessions active",
-          "description": "Full-duplex voice model (any alias/host with engine=voicechat). The model allows one session at a time.",
           "datasource": {
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "id": 30,
+          "id": 940,
           "gridPos": {
-            "h": 4,
-            "w": 4,
             "x": 0,
-            "y": 78
+            "y": 78,
+            "w": 4,
+            "h": 4
           },
           "fieldConfig": {
             "defaults": {
@@ -2282,7 +2281,7 @@
                 "type": "prometheus",
                 "uid": "PBFA97CFB590B2093"
               },
-              "expr": "sum by (alias, host) (voicechat_sessions_active{host=~\"$host\", engine=\"voicechat\"}) or vector(0)",
+              "expr": "sum by (alias, host) (cascade_sessions_active{host=~\"$host\"}) or vector(0)",
               "refId": "A",
               "legendFormat": "{{alias}} @ {{host}}"
             }
@@ -2290,18 +2289,17 @@
         },
         {
           "type": "stat",
-          "title": "Busy rejections (1h)",
-          "description": "WS connections closed 4429 while a session was active",
+          "title": "Sessions (24h)",
           "datasource": {
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "id": 31,
+          "id": 941,
           "gridPos": {
-            "h": 4,
-            "w": 4,
             "x": 4,
-            "y": 78
+            "y": 78,
+            "w": 4,
+            "h": 4
           },
           "fieldConfig": {
             "defaults": {
@@ -2317,202 +2315,8 @@
                     "value": null
                   },
                   {
-                    "color": "orange",
+                    "color": "blue",
                     "value": 1
-                  },
-                  {
-                    "color": "red",
-                    "value": 5
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "colorMode": "value",
-            "graphMode": "area",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "values": false,
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": ""
-            },
-            "textMode": "auto"
-          },
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
-              },
-              "expr": "sum(increase(voicechat_busy_rejections_total{host=~\"$host\", engine=\"voicechat\"}[1h])) or vector(0)",
-              "refId": "A"
-            }
-          ]
-        },
-        {
-          "type": "stat",
-          "title": "Tool calls (1h)",
-          "description": "Calls forwarded to the bridge (OpenClaw)",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "id": 32,
-          "gridPos": {
-            "h": 4,
-            "w": 4,
-            "x": 8,
-            "y": 78
-          },
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "thresholds"
-              },
-              "unit": "none",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "colorMode": "value",
-            "graphMode": "area",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "values": false,
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": ""
-            },
-            "textMode": "auto"
-          },
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
-              },
-              "expr": "sum(increase(voicechat_tool_calls_total{host=~\"$host\", engine=\"voicechat\"}[1h])) or vector(0)",
-              "refId": "A"
-            }
-          ]
-        },
-        {
-          "type": "stat",
-          "title": "Frame overruns (1h)",
-          "description": "Model steps slower than the 80ms real-time budget \u2014 audible stutter risk",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "id": 33,
-          "gridPos": {
-            "h": 4,
-            "w": 4,
-            "x": 12,
-            "y": 78
-          },
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "thresholds"
-              },
-              "unit": "none",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "orange",
-                    "value": 10
-                  },
-                  {
-                    "color": "red",
-                    "value": 100
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "colorMode": "value",
-            "graphMode": "area",
-            "justifyMode": "auto",
-            "orientation": "auto",
-            "reduceOptions": {
-              "values": false,
-              "calcs": [
-                "lastNotNull"
-              ],
-              "fields": ""
-            },
-            "textMode": "auto"
-          },
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
-              },
-              "expr": "sum(increase(voicechat_model_step_overruns_total{host=~\"$host\", engine=\"voicechat\"}[1h])) or vector(0)",
-              "refId": "A"
-            }
-          ]
-        },
-        {
-          "type": "stat",
-          "title": "Voice node memory",
-          "description": "Memory of whichever node hosts the voice model (joined on the exporter's host label). ~85GB fresh \u2192 ~110GB aged; restart the voice profile past ~105GB",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "id": 34,
-          "gridPos": {
-            "h": 4,
-            "w": 4,
-            "x": 16,
-            "y": 78
-          },
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "thresholds"
-              },
-              "unit": "bytes",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "orange",
-                    "value": 100000000000.0
-                  },
-                  {
-                    "color": "red",
-                    "value": 110000000000.0
                   }
                 ]
               }
@@ -2539,26 +2343,25 @@
                 "type": "prometheus",
                 "uid": "PBFA97CFB590B2093"
               },
-              "expr": "max by (host) (unified_memory_used_bytes) and on (host) max by (host) (voicechat_sessions_active{host=~\"$host\", engine=\"voicechat\"})",
+              "expr": "sum(increase(cascade_sessions_total{host=~\"$host\"}[24h])) or vector(0)",
               "refId": "A",
-              "legendFormat": "{{host}}"
+              "legendFormat": "sessions"
             }
           ]
         },
         {
           "type": "stat",
-          "title": "Trace tailer",
-          "description": "1 = model-server frame traces are being exported",
+          "title": "Busy rejections (1h)",
           "datasource": {
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "id": 35,
+          "id": 942,
           "gridPos": {
-            "h": 4,
+            "x": 8,
+            "y": 78,
             "w": 4,
-            "x": 20,
-            "y": 78
+            "h": 4
           },
           "fieldConfig": {
             "defaults": {
@@ -2570,11 +2373,11 @@
                 "mode": "absolute",
                 "steps": [
                   {
-                    "color": "red",
+                    "color": "green",
                     "value": null
                   },
                   {
-                    "color": "green",
+                    "color": "blue",
                     "value": 1
                   }
                 ]
@@ -2594,7 +2397,7 @@
               ],
               "fields": ""
             },
-            "textMode": "auto"
+            "textMode": "value_and_name"
           },
           "targets": [
             {
@@ -2602,25 +2405,211 @@
                 "type": "prometheus",
                 "uid": "PBFA97CFB590B2093"
               },
-              "expr": "max(voicechat_model_trace_tailer_up{host=~\"$host\", engine=\"voicechat\"}) or vector(0)",
-              "refId": "A"
+              "expr": "sum(increase(cascade_sessions_rejected_total{host=~\"$host\"}[1h])) or vector(0)",
+              "refId": "A",
+              "legendFormat": "rejected"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "Tool calls (1h)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "id": 943,
+          "gridPos": {
+            "x": 12,
+            "y": 78,
+            "w": 4,
+            "h": 4
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "unit": "none",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "blue",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": {
+              "values": false,
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": ""
+            },
+            "textMode": "value_and_name"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "PBFA97CFB590B2093"
+              },
+              "expr": "sum(increase(cascade_tool_calls_total{host=~\"$host\"}[1h])) or vector(0)",
+              "refId": "A",
+              "legendFormat": "tool calls"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "Think-lane share (1h)",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "id": 944,
+          "gridPos": {
+            "x": 16,
+            "y": 78,
+            "w": 4,
+            "h": 4
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "unit": "none",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "blue",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": {
+              "values": false,
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": ""
+            },
+            "textMode": "value_and_name"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "PBFA97CFB590B2093"
+              },
+              "expr": "100 * sum(increase(cascade_turns_total{host=~\"$host\", lane=\"think\"}[1h])) / clamp_min(sum(increase(cascade_turns_total{host=~\"$host\"}[1h])), 1)",
+              "refId": "A",
+              "legendFormat": "think %"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "Voice node memory",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "id": 945,
+          "gridPos": {
+            "x": 20,
+            "y": 78,
+            "w": 4,
+            "h": 4
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "unit": "bytes",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "blue",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": {
+              "values": false,
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": ""
+            },
+            "textMode": "value_and_name"
+          },
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "PBFA97CFB590B2093"
+              },
+              "expr": "max by (host) (unified_memory_used_bytes) and on (host) max by (host) (cascade_sessions_active{host=~\"$host\"} >= 0)",
+              "refId": "A",
+              "legendFormat": "{{host}}"
             }
           ]
         },
         {
           "type": "timeseries",
-          "title": "Response latency \u2014 speech end \u2192 bot speech (p50/p95)",
-          "description": "The user-facing number: includes endpointing wait + model TTFB + first audio",
+          "title": "Voice-to-voice latency \u2014 speech end \u2192 first bot audio (p50/p95)",
           "datasource": {
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "id": 36,
+          "id": 946,
           "gridPos": {
-            "h": 7,
-            "w": 8,
             "x": 0,
-            "y": 82
+            "y": 82,
+            "w": 12,
+            "h": 8
           },
           "fieldConfig": {
             "defaults": {
@@ -2674,8 +2663,8 @@
                 "type": "prometheus",
                 "uid": "PBFA97CFB590B2093"
               },
-              "expr": "histogram_quantile(0.5, sum by (le, alias) (rate(voicechat_response_latency_seconds_bucket{host=~\"$host\", engine=\"voicechat\"}[10m])))",
-              "legendFormat": "{{alias}} p50",
+              "expr": "histogram_quantile(0.5, sum by (le, alias) (rate(cascade_voice_to_voice_seconds_bucket{host=~\"$host\"}[10m])))",
+              "legendFormat": "p50 {{alias}}",
               "refId": "A"
             },
             {
@@ -2683,126 +2672,25 @@
                 "type": "prometheus",
                 "uid": "PBFA97CFB590B2093"
               },
-              "expr": "histogram_quantile(0.95, sum by (le, alias) (rate(voicechat_response_latency_seconds_bucket{host=~\"$host\", engine=\"voicechat\"}[10m])))",
-              "legendFormat": "{{alias}} p95",
+              "expr": "histogram_quantile(0.95, sum by (le, alias) (rate(cascade_voice_to_voice_seconds_bucket{host=~\"$host\"}[10m])))",
+              "legendFormat": "p95 {{alias}}",
               "refId": "B"
-            },
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
-              },
-              "expr": "histogram_quantile(0.5, sum by (le, alias) (rate(voicechat_llm_ttfb_seconds_bucket{host=~\"$host\", engine=\"voicechat\"}[10m])))",
-              "legendFormat": "{{alias}} service TTFB p50",
-              "refId": "C"
             }
           ]
         },
         {
           "type": "timeseries",
-          "title": "Model frame inference (p50/p95/p99) vs 80ms budget",
-          "description": "Each 80ms input frame is one model step; above the line = real-time falls behind",
+          "title": "Brain TTFB by lane (p50/p95)",
           "datasource": {
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "id": 37,
+          "id": 947,
           "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 8,
-            "y": 82
-          },
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "drawStyle": "line",
-                "lineWidth": 1,
-                "fillOpacity": 10,
-                "showPoints": "never",
-                "spanNulls": true,
-                "thresholdsStyle": {
-                  "mode": "line"
-                }
-              },
-              "unit": "ms",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "red",
-                    "value": 80
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "showLegend": true,
-              "displayMode": "list",
-              "placement": "bottom",
-              "calcs": [
-                "lastNotNull"
-              ]
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "none"
-            }
-          },
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
-              },
-              "expr": "histogram_quantile(0.5, sum by (le, host) (rate(voicechat_model_step_inference_ms_bucket{host=~\"$host\", engine=\"voicechat\"}[5m])))",
-              "legendFormat": "{{host}} p50",
-              "refId": "A"
-            },
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
-              },
-              "expr": "histogram_quantile(0.95, sum by (le, host) (rate(voicechat_model_step_inference_ms_bucket{host=~\"$host\", engine=\"voicechat\"}[5m])))",
-              "legendFormat": "{{host}} p95",
-              "refId": "B"
-            },
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
-              },
-              "expr": "histogram_quantile(0.99, sum by (le, host) (rate(voicechat_model_step_inference_ms_bucket{host=~\"$host\", engine=\"voicechat\"}[5m])))",
-              "legendFormat": "{{host}} p99",
-              "refId": "C"
-            }
-          ]
-        },
-        {
-          "type": "timeseries",
-          "title": "Tool round-trip (dead air) by tool, p50/p95",
-          "description": "llm-function-call \u2192 llm-function-call-result from the bridge (consult latency)",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "id": 38,
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 16,
-            "y": 82
+            "x": 12,
+            "y": 82,
+            "w": 12,
+            "h": 8
           },
           "fieldConfig": {
             "defaults": {
@@ -2829,7 +2717,7 @@
                   },
                   {
                     "color": "red",
-                    "value": 5
+                    "value": 2
                   }
                 ]
               }
@@ -2856,8 +2744,8 @@
                 "type": "prometheus",
                 "uid": "PBFA97CFB590B2093"
               },
-              "expr": "histogram_quantile(0.5, sum by (le, name) (rate(voicechat_tool_result_seconds_bucket{host=~\"$host\", engine=\"voicechat\"}[30m])))",
-              "legendFormat": "{{name}} p50",
+              "expr": "histogram_quantile(0.5, sum by (le, lane) (rate(cascade_llm_ttfb_seconds_bucket{host=~\"$host\"}[10m])))",
+              "legendFormat": "p50 {{lane}}",
               "refId": "A"
             },
             {
@@ -2865,26 +2753,25 @@
                 "type": "prometheus",
                 "uid": "PBFA97CFB590B2093"
               },
-              "expr": "histogram_quantile(0.95, sum by (le, name) (rate(voicechat_tool_result_seconds_bucket{host=~\"$host\", engine=\"voicechat\"}[30m])))",
-              "legendFormat": "{{name}} p95",
+              "expr": "histogram_quantile(0.95, sum by (le, lane) (rate(cascade_llm_ttfb_seconds_bucket{host=~\"$host\"}[10m])))",
+              "legendFormat": "p95 {{lane}}",
               "refId": "B"
             }
           ]
         },
         {
           "type": "timeseries",
-          "title": "Conversation activity",
-          "description": "Turn-taking dynamics of the live session",
+          "title": "TTS time-to-first-audio per sentence (p50/p95)",
           "datasource": {
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "id": 39,
+          "id": 948,
           "gridPos": {
-            "h": 7,
-            "w": 8,
             "x": 0,
-            "y": 89
+            "y": 90,
+            "w": 12,
+            "h": 8
           },
           "fieldConfig": {
             "defaults": {
@@ -2898,16 +2785,20 @@
                 "showPoints": "never",
                 "spanNulls": true,
                 "thresholdsStyle": {
-                  "mode": "off"
+                  "mode": "line"
                 }
               },
-              "unit": "short",
+              "unit": "s",
               "thresholds": {
                 "mode": "absolute",
                 "steps": [
                   {
                     "color": "green",
                     "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 2
                   }
                 ]
               }
@@ -2934,8 +2825,8 @@
                 "type": "prometheus",
                 "uid": "PBFA97CFB590B2093"
               },
-              "expr": "sum(rate(voicechat_user_turns_total{host=~\"$host\", engine=\"voicechat\"}[5m]))*60",
-              "legendFormat": "user turns/min",
+              "expr": "histogram_quantile(0.5, sum by (le) (rate(cascade_tts_ttfb_seconds_bucket{host=~\"$host\"}[10m])))",
+              "legendFormat": "p50",
               "refId": "A"
             },
             {
@@ -2943,44 +2834,25 @@
                 "type": "prometheus",
                 "uid": "PBFA97CFB590B2093"
               },
-              "expr": "sum(rate(voicechat_interruptions_total{host=~\"$host\", engine=\"voicechat\"}[5m]))*60",
-              "legendFormat": "barge-ins/min",
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(cascade_tts_ttfb_seconds_bucket{host=~\"$host\"}[10m])))",
+              "legendFormat": "p95",
               "refId": "B"
-            },
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
-              },
-              "expr": "sum(rate(voicechat_tool_calls_total{host=~\"$host\", engine=\"voicechat\"}[5m]))*60",
-              "legendFormat": "tool calls/min",
-              "refId": "C"
-            },
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
-              },
-              "expr": "sum(rate(voicechat_model_user_eou_total{host=~\"$host\", engine=\"voicechat\"}[5m]))*60",
-              "legendFormat": "model EOU/min",
-              "refId": "D"
             }
           ]
         },
         {
           "type": "timeseries",
-          "title": "Throughput \u2014 the 'tokens' of a speech model",
-          "description": "No prompt/completion tokens exist for full-duplex speech: input frames processed and text tokens emitted are the honest equivalents",
+          "title": "Conversation activity (per min)",
           "datasource": {
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "id": 40,
+          "id": 949,
           "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 8,
-            "y": 89
+            "x": 12,
+            "y": 90,
+            "w": 12,
+            "h": 8
           },
           "fieldConfig": {
             "defaults": {
@@ -2994,16 +2866,20 @@
                 "showPoints": "never",
                 "spanNulls": true,
                 "thresholdsStyle": {
-                  "mode": "off"
+                  "mode": "line"
                 }
               },
-              "unit": "short",
+              "unit": "s",
               "thresholds": {
                 "mode": "absolute",
                 "steps": [
                   {
                     "color": "green",
                     "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 2
                   }
                 ]
               }
@@ -3030,8 +2906,8 @@
                 "type": "prometheus",
                 "uid": "PBFA97CFB590B2093"
               },
-              "expr": "sum(rate(voicechat_model_frames_total{host=~\"$host\", engine=\"voicechat\"}[5m]))",
-              "legendFormat": "input frames/s (80ms audio each; 12.5 = realtime)",
+              "expr": "sum by (lane) (rate(cascade_turns_total{host=~\"$host\"}[5m]))*60",
+              "legendFormat": "turns {{lane}}",
               "refId": "A"
             },
             {
@@ -3039,8 +2915,8 @@
                 "type": "prometheus",
                 "uid": "PBFA97CFB590B2093"
               },
-              "expr": "sum(rate(voicechat_model_text_tokens_total{host=~\"$host\", engine=\"voicechat\"}[5m]))",
-              "legendFormat": "text tokens/s emitted",
+              "expr": "sum(rate(cascade_stt_finals_total{host=~\"$host\"}[5m]))*60",
+              "legendFormat": "transcripts finalized",
               "refId": "B"
             },
             {
@@ -3048,114 +2924,9 @@
                 "type": "prometheus",
                 "uid": "PBFA97CFB590B2093"
               },
-              "expr": "sum(rate(voicechat_bot_audio_seconds_total{host=~\"$host\", engine=\"voicechat\"}[5m]))",
-              "legendFormat": "bot audio s/s (speaking duty)",
+              "expr": "sum(rate(cascade_tool_calls_total{host=~\"$host\"}[5m]))*60",
+              "legendFormat": "tool calls",
               "refId": "C"
-            },
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
-              },
-              "expr": "sum(rate(voicechat_user_transcript_words_total{host=~\"$host\", engine=\"voicechat\"}[5m]))*60",
-              "legendFormat": "user words/min",
-              "refId": "D"
-            }
-          ]
-        },
-        {
-          "type": "timeseries",
-          "title": "Session lifecycle",
-          "description": "Warm-up time, session length, prompt size after register-tools, mic level (-120 = the bridge stopped streaming)",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
-          },
-          "id": 41,
-          "gridPos": {
-            "h": 7,
-            "w": 8,
-            "x": 16,
-            "y": 89
-          },
-          "fieldConfig": {
-            "defaults": {
-              "color": {
-                "mode": "palette-classic"
-              },
-              "custom": {
-                "drawStyle": "line",
-                "lineWidth": 1,
-                "fillOpacity": 10,
-                "showPoints": "never",
-                "spanNulls": true,
-                "thresholdsStyle": {
-                  "mode": "off"
-                }
-              },
-              "unit": "short",
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  }
-                ]
-              }
-            },
-            "overrides": []
-          },
-          "options": {
-            "legend": {
-              "showLegend": true,
-              "displayMode": "list",
-              "placement": "bottom",
-              "calcs": [
-                "lastNotNull"
-              ]
-            },
-            "tooltip": {
-              "mode": "multi",
-              "sort": "none"
-            }
-          },
-          "targets": [
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
-              },
-              "expr": "histogram_quantile(0.5, sum by (le) (rate(voicechat_bot_ready_seconds_bucket{host=~\"$host\", engine=\"voicechat\"}[1h])))",
-              "legendFormat": "connect\u2192bot-ready p50",
-              "refId": "A"
-            },
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
-              },
-              "expr": "histogram_quantile(0.5, sum by (le) (rate(voicechat_session_duration_seconds_bucket{host=~\"$host\", engine=\"voicechat\"}[1h])))",
-              "legendFormat": "session length p50",
-              "refId": "B"
-            },
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
-              },
-              "expr": "max(voicechat_session_prompt_bytes{host=~\"$host\", engine=\"voicechat\"})/1000",
-              "legendFormat": "rendered prompt KB (tools+instruction)",
-              "refId": "C"
-            },
-            {
-              "datasource": {
-                "type": "prometheus",
-                "uid": "PBFA97CFB590B2093"
-              },
-              "expr": "max(voicechat_input_rms_dbfs{host=~\"$host\", engine=\"voicechat\"})",
-              "legendFormat": "input level dBFS",
-              "refId": "D"
             }
           ]
         }
