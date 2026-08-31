@@ -145,6 +145,10 @@ class KyutaiSTTService(STTService):
         self._turn_text: list[str] = []
         self._last_piece_at = 0.0
         self._flush_task: asyncio.Task | None = None
+        # one stable callable per service: the engine compares sink identity
+        # to drop stale-session audio, and bound methods are re-created on
+        # every attribute access (`self._sink is self._sink` -> False!)
+        self._sink_fn = self._sink
 
     def _sink(self, item):
         if self._loop:
@@ -154,7 +158,7 @@ class KyutaiSTTService(STTService):
         await super().start(frame)
         self._loop = asyncio.get_running_loop()
         preload(self._device, self._hf_repo)
-        _ENGINE_IN.put(("reset", self._sink))  # claim the engine for this session
+        _ENGINE_IN.put(("reset", self._sink_fn))  # claim the engine for this session
         self._emit_task = self.create_task(self._emit_loop())
 
     async def stop(self, frame):
@@ -194,5 +198,5 @@ class KyutaiSTTService(STTService):
     async def run_stt(self, audio: bytes):
         if self.sample_rate != 16000:
             await self.push_error(error_msg=f"KyutaiSTT expects 16k input, got {self.sample_rate}", fatal=True)
-        _ENGINE_IN.put(("audio", (audio, self._sink)))
+        _ENGINE_IN.put(("audio", (audio, self._sink_fn)))
         yield None
