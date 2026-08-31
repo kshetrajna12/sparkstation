@@ -5,24 +5,25 @@ This project has access to local LLM models through Sparkstation gateway.
 
 ## Available Models
 
-- `dsv4-flash` - deepseek-v4-flash-0731
-- `qwen3-vl-4b` - cyankiwi/Qwen3-VL-4B-Instruct-AWQ-4bit
-- `bge-m3` - BAAI/bge-m3
-- `clip-vit` - openai/clip-vit-large-patch14
+- `qwen-flash-next` - daily-driver chat+vision (Flash-Next AutoRound, worker1)
+- `gemma4-2b` - small fast chat (Gemma 4 E2B QAT, primary; also audio-capable)
+- `bge-m3` - BAAI/bge-m3 text embeddings
+- `clip-vit` - openai/clip-vit-large-patch14 image embeddings
 - `face-detect` - face-recognition
-- `default` - alias for the loaded profile's default chat model (currently `dsv4-flash`). Prefer this unless you need a specific model.
-- `vision` - alias for the loaded profile's vision model (currently `qwen3-vl-4b`). Use this for any image-understanding request.
+- `default` - alias for the loaded profile's default chat model (currently `qwen-flash-next`). Prefer this unless you need a specific model.
+- `vision` - alias for the loaded profile's vision model (currently `qwen-flash-next`). Use this for any image-understanding request.
+- `voicecascade` - Sparky's voice stack (worker2, `voice` profile). NOT an
+  OpenAI API — WebSocket/WebRTC audio directly on worker2:7860; never appears
+  in `/v1/models`. See homecloud-infra/docs/cascade-voice-runbook.md.
 
 ## Available Profiles
 
-Switch profiles with `sparkstation start -d --profile <name>`:
+Switch profiles with `sparkstation stop && sparkstation start -d --profile <name>` (see models.yaml `profiles:` for ground truth):
 
-- **coding**: dsv4-flash, qwen3-vl-4b, bge-m3, clip-vit, face-detect
-- **dev**: qwen3.8-27b
-- **prod**: qwen3.8-27b
-- **inference**: qwen3.8-27b
-- **openclaw**: qwen3.8-27b, bge-m3
-- **image-indexing**: qwen3.8-27b, bge-m3, clip-vit, species-detect, face-detect
+- **generic**: qwen-flash-next, bge-m3, clip-vit, face-detect, gemma4-2b — daily driver
+- **voice**: generic + voicecascade on worker2 (also on demand: `sparkstation models start voicecascade -p voice`)
+- **deep**: GLM-5.3-Flash 2-node reserve (workers) + aux on primary
+- **image-indexing**: batch photo intake (vLLM+MTP concurrency recipe)
 
 ## API Endpoint
 
@@ -43,7 +44,7 @@ client = OpenAI(
 
 # Make a request
 response = client.chat.completions.create(
-    model="dsv4-flash",
+    model="default",
     messages=[
         {"role": "user", "content": "Hello!"}
     ]
@@ -59,7 +60,7 @@ curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer dummy-key" \
   -d '{
-    "model": "dsv4-flash",
+    "model": "default",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -68,7 +69,7 @@ curl http://localhost:8000/v1/chat/completions \
 
 ```python
 stream = client.chat.completions.create(
-    model="dsv4-flash",
+    model="default",
     messages=[{"role": "user", "content": "Tell me a story"}],
     stream=True
 )
@@ -125,8 +126,8 @@ response = client.chat.completions.create(
 
 ## Reasoning Models & Token Budgets (IMPORTANT)
 
-Chat models on this gateway may be reasoning models (e.g. DeepSeek-V4-Flash,
-Qwen thinking variants). **`max_tokens` caps reasoning + final content
+Chat models on this gateway may be reasoning models (e.g. Qwen thinking
+variants, DeepSeek-V4-Flash when the deep-era specs are revived). **`max_tokens` caps reasoning + final content
 COMBINED.** The server's default reasoning effort is `low`; a complex prompt
 can still spend most of a small budget on reasoning.
 
@@ -149,6 +150,8 @@ response = client.chat.completions.create(
     messages=[...],
     max_tokens=16384,
     extra_body={"chat_template_kwargs": {"thinking": True, "reasoning_effort": "high"}},
+    # NB some models key on a different name: dsv4-flash ignores "thinking"
+    # and obeys {"enable_thinking": False} — verify per model (2026-08-30).
 )
 
 # No reasoning at all (fastest, for simple/structured tasks):
@@ -266,13 +269,14 @@ print(f"Similarity: {similarity}")
 - Models are already running and ready to use
 - Use the gateway endpoint (`http://localhost:8000/v1`) for all requests
 - All models support standard OpenAI APIs:
-  - Chat: `/v1/chat/completions` (dsv4-flash, qwen3-vl-4b)
+  - Chat: `/v1/chat/completions` (qwen-flash-next, gemma4-2b, `default`/`vision` aliases)
   - Embeddings: `/v1/embeddings` (bge-m3, clip-vit)
+  - Voice is NOT here: the `voicecascade` stack speaks WebSocket audio directly on worker2:7860
 
 ### Model-Specific Details
 
 - **Vision Chat** (`vision`):
-  - Profile-following alias — always routes to the loaded profile's vision model
+  - Profile-following alias — always routes to the loaded profile's vision model (currently qwen-flash-next)
   - Supports image analysis via URL or base64
   - Uses standard OpenAI vision format: `{"type": "image_url", "image_url": {"url": "..."}}`
 
