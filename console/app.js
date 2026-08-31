@@ -368,7 +368,7 @@
       renderModels(det.models || []);
       if (!profilesInfo) { profilesInfo = await api("GET", "/profiles"); renderStartControls(det.models || []); }
       else renderStartControls(det.models || []);
-      $("#profile-chip").textContent = profilesInfo ? `profile: ${profilesInfo.active}` : "";
+      $("#profile-chip").textContent = profilesInfo ? `active profile: ${profilesInfo.active}` : "";
       renderSwitchControls();
       api("GET", "/profiles/switch-status").then((st) => { if (st.state === "switching") pollSwitch(); }).catch(() => {});
     } catch (e) { toast("cluster refresh failed: " + e.message, true); }
@@ -467,7 +467,8 @@
   function renderSwitchControls() {
     if (!profilesInfo) return;
     const sel = $("#switch-profile"); const prev = sel.value;
-    sel.innerHTML = Object.keys(profilesInfo.profiles).filter((p) => p !== profilesInfo.active)
+    sel.innerHTML = '<option value="" disabled selected>switch to…</option>' +
+      Object.keys(profilesInfo.profiles).filter((p) => p !== profilesInfo.active)
       .map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("");
     if (prev && Array.from(sel.options).some((o) => o.value === prev)) sel.value = prev;
   }
