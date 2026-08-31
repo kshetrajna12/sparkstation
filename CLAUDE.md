@@ -25,6 +25,16 @@ Switch profiles with `sparkstation stop && sparkstation start -d --profile <name
 - **deep**: GLM-5.3-Flash 2-node reserve (workers) + aux on primary
 - **image-indexing**: batch photo intake (vLLM+MTP concurrency recipe)
 
+## Sparkstation Console
+
+Web control panel served by the supervisor at `http://127.0.0.1:9001/console/`
+(static SPA in `console/`, no build step; see `console/README.md`). Voice
+Studio is live: Talk tab (WebSocket relay `/voice/talk` → cascade bot) and
+Voices tab over the `/voice/*` API (registry of cloned/stock/designed voices,
+samples, default voice, per-voice style). CLI twin: `sparkstation voice …`.
+The voice registry (reference clips, transcripts) lives only on the voice
+role host — never commit it.
+
 ## API Endpoint
 
 - **Base URL**: `http://localhost:8000/v1`

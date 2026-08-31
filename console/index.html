@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sparkstation Console</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>⚡</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="shell">
+  <nav class="sidebar">
+    <div class="brand">⚡ Sparkstation</div>
+    <a class="nav-item active" data-section="voice" href="#voice">🎙️ Voice Studio</a>
+    <a class="nav-item soon" data-section="cluster" href="#cluster">🖥️ Cluster &amp; models <span class="pill">soon</span></a>
+    <a class="nav-item soon" data-section="playground" href="#playground">💬 Playground <span class="pill">soon</span></a>
+    <a class="nav-item soon" data-section="clients" href="#clients">🔑 Clients &amp; usage <span class="pill">soon</span></a>
+    <a class="nav-item soon" data-section="logs" href="#logs">📜 Logs <span class="pill">soon</span></a>
+    <a class="nav-item" id="grafana-link" href="#" target="_blank" rel="noopener" hidden>📈 Metrics (Grafana) ↗</a>
+    <div class="sidebar-foot">
+      <div id="stack-status" class="status-line">checking voice stack…</div>
+      <button id="apikey-btn" class="link-btn" hidden>set API key</button>
+    </div>
+  </nav>
+
+  <main class="content">
+    <section id="section-voice" class="section">
+      <header class="section-head">
+        <h1>Voice Studio</h1>
+        <div class="tabs">
+          <button class="tab active" data-tab="talk">Talk</button>
+          <button class="tab" data-tab="voices">Voices</button>
+        </div>
+      </header>
+
+      <!-- ── Talk ─────────────────────────────────────────────────────── -->
+      <div id="tab-talk" class="tab-panel">
+        <div class="talk-grid">
+          <div class="talk-controls card">
+            <label>Voice
+              <select id="talk-voice"></select>
+            </label>
+            <label>Brain
+              <select id="talk-brain">
+                <option value="auto">auto (router: fast / think)</option>
+                <option value="gemma4-2b">gemma4-2b (fast)</option>
+                <option value="default">default (think)</option>
+              </select>
+            </label>
+            <label>System instruction <span class="muted">(optional, this session only)</span>
+              <textarea id="talk-sysprompt" rows="3" placeholder="Leave empty for the bot's dev persona. Sparky's real persona is OpenClaw-owned."></textarea>
+            </label>
+            <div class="row">
+              <button id="talk-connect" class="primary">🎤 Start talking</button>
+              <button id="talk-stop" hidden>■ Stop</button>
+            </div>
+            <div id="talk-state" class="status-line">idle</div>
+            <div class="meter"><div id="mic-level" class="meter-fill"></div></div>
+            <div id="talk-stats" class="stats"></div>
+            <p class="hint">WebSocket transport (<code>/voice/talk</code> → bot <code>/ws-client</code>), 16 kHz in / 24 kHz out. The mic needs a secure context (localhost or HTTPS). One session at a time — a busy bot closes with 4429.</p>
+          </div>
+          <div class="talk-log card">
+            <div class="row between">
+              <strong>Transcript</strong>
+              <button id="talk-clear" class="link-btn">clear</button>
+            </div>
+            <div id="transcript" class="transcript"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Voices ───────────────────────────────────────────────────── -->
+      <div id="tab-voices" class="tab-panel" hidden>
+        <div class="row between wrap">
+          <div class="row">
+            <input id="sample-text" type="text" size="60" placeholder="Sample text for ▶ play (default: a short Sparky line)">
+          </div>
+          <div class="row">
+            <button id="voices-refresh">↻ refresh</button>
+            <button id="show-design" class="primary">＋ Design from description</button>
+            <button id="show-clone" class="primary">＋ Clone from recording</button>
+          </div>
+        </div>
+        <div id="engine-status" class="engine-status"></div>
+        <div id="voices-list"></div>
+
+        <!-- design form -->
+        <div id="design-form" class="card form" hidden>
+          <h3>Design a voice from a description</h3>
+          <label>Voice id <input id="design-id" type="text" placeholder="sparky_warm_male" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,39}"></label>
+          <label>Description (this <em>is</em> the voice — accent, age, gender, tone, pace)
+            <textarea id="design-instruct" rows="3" placeholder="A warm, friendly adult male voice with a light British accent, calm and articulate, medium pace."></textarea>
+          </label>
+          <label>Language
+            <select id="design-language" class="lang-select"></select>
+          </label>
+          <label>Preview text <input id="design-preview-text" type="text" size="60" placeholder="(default sample line)"></label>
+          <div class="row">
+            <button id="design-preview">▶ Preview (not saved)</button>
+            <button id="design-save" class="primary">Save voice</button>
+            <button id="design-cancel" class="link-btn">cancel</button>
+          </div>
+          <audio id="design-audio" controls hidden></audio>
+          <div id="design-msg" class="status-line"></div>
+        </div>
+
+        <!-- clone form -->
+        <div id="clone-form" class="card form" hidden>
+          <h3>Clone a voice from a reference clip</h3>
+          <p class="hint">Record or upload <strong>8–12 s</strong> of natural speech (max 20 s — longer references make cloned speech choppy) and type its <strong>exact transcript</strong>. The clip is stored only in the voice registry on the voice host, never in git.</p>
+          <label>Voice id <input id="clone-id" type="text" placeholder="K_studio" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,39}"></label>
+          <div class="row wrap">
+            <button id="clone-record">● Record</button>
+            <span id="clone-record-state" class="muted"></span>
+            <span class="muted">or</span>
+            <input id="clone-file" type="file" accept="audio/*,.wav,.webm,.m4a,.mp3,.ogg">
+          </div>
+          <audio id="clone-audio" controls hidden></audio>
+          <label>Transcript (exactly what is said in the clip)
+            <textarea id="clone-text" rows="3" placeholder="Hey Sparky, so this is what I sound like on a pretty normal day…"></textarea>
+          </label>
+          <label>Language
+            <select id="clone-language" class="lang-select"></select>
+          </label>
+          <label>Style instruct <span class="muted">(optional, applied to every line)</span>
+            <input id="clone-instruct" type="text" size="60" placeholder="calm, unhurried, slightly amused">
+          </label>
+          <div class="row">
+            <button id="clone-save" class="primary">Upload &amp; register</button>
+            <button id="clone-cancel" class="link-btn">cancel</button>
+          </div>
+          <div id="clone-msg" class="status-line"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="section-soon" class="section" hidden>
+      <h1 id="soon-title">Coming soon</h1>
+      <p class="muted">This section isn't built yet. The CLI (<code>sparkstation …</code>) remains the authoritative ops tool.</p>
+    </section>
+  </main>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="talk.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

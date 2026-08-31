@@ -376,8 +376,15 @@ models:
       tunnel_port: 18000          # worker-loopback tunnel to primary's gateway
       tts_containers: [qwen3-tts-clone, qwen3-tts-vd, qwen3-tts-cv]
       launch_timeout_seconds: 300
+      # Voice Studio (supervisor /voice/*, console/): the three TTS registries
+      # + clone reference clips live in tts_config_dir on `host` (bind-mounted
+      # at tts_config_mount inside the TTS containers). NOT in git — biometric
+      # data; back it up out-of-band. Defaults shown; tts_engines can override
+      # {clone,stock,design}: {port, container}.
+      tts_config_dir: "~/cascade-tts/config"
+      tts_config_mount: "/config"
       extra_env:
-        CASCADE_VOICE: "K"        # K's cloned voice (registry: worker2 voices.json)
+        CASCADE_VOICE: "K"        # fallback voice when console.json has no default
 
   flux-dev:
     name: "black-forest-labs/FLUX.1-dev"

@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from supervisor.config import settings
 from supervisor.models import (
@@ -46,6 +47,7 @@ from supervisor.errors import (
     handle_exception,
 )
 from supervisor import metrics
+from supervisor.voice import router as voice_router
 
 # Configure logging (stdout + file)
 handlers = [logging.StreamHandler()]
@@ -600,6 +602,32 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# ── Voice Studio API (/voice/*) + the static Console SPA (/console/) ─────────
+# The console is plain HTML/JS with no build step, served straight from the
+# repo's console/ directory; it talks to this same origin. Hostnames never
+# appear in it — exposure (console.<domain>) is a reverse-proxy concern.
+app.include_router(voice_router)
+
+CONSOLE_DIR = Path(__file__).resolve().parent.parent / "console"
+
+
+@app.get("/console/config.json", include_in_schema=False)
+async def console_config():
+    """Runtime knobs the SPA reads at load (kept out of the static bundle)."""
+    return {
+        "grafana_url": settings.console_grafana_url,
+        "auth_required": settings.api_key is not None,
+        "version": app.version,
+    }
+
+
+if settings.console_enabled and CONSOLE_DIR.is_dir():
+    app.mount("/console", StaticFiles(directory=str(CONSOLE_DIR), html=True), name="console")
+
+    @app.get("/", include_in_schema=False)
+    async def root_redirect():
+        return RedirectResponse(url="/console/")
 
 
 # Health check

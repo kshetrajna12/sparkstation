@@ -96,6 +96,12 @@ class Settings(BaseSettings):
     # Security
     api_key: Optional[str] = None  # Shared secret for Supervisor API
 
+    # Sparkstation Console (static SPA at /console/, Voice Studio API at /voice/*)
+    console_enabled: bool = True
+    # Optional link-out for the Metrics section (Grafana is not rebuilt in the
+    # console). Leave unset to hide the link. Set via env: CONSOLE_GRAFANA_URL.
+    console_grafana_url: Optional[str] = None
+
     # Logging
     log_to_file: bool = True  # Also log to file (in addition to stdout)
     log_file_path: str = "./data/sparkstation.log"  # Log file location
