@@ -153,6 +153,11 @@ async def lifespan(app: FastAPI):
             if _surviving.memory_gb and (_surviving.host or "primary") == "primary":
                 resource_manager.model_memory_usage[_surviving.id] = _surviving.memory_gb
     launcher_factory = LauncherFactory()
+    # Script-stack (dspark) boots block for ~10-20 min inside their start
+    # script; these hooks let the launcher show a STARTING row meanwhile.
+    _dspark = launcher_factory.get_launcher(Backend.DSPARK)
+    _dspark.on_starting = registry.create
+    _dspark.on_placeholder_done = registry.delete
     auto_suspend_manager = AutoSuspendManager(registry, launcher_factory, resource_manager)
     from supervisor.models_config import get_default_model_alias, get_vision_model_alias
     default_model_alias = get_default_model_alias(settings.startup_profile)

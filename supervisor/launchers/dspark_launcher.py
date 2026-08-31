@@ -64,6 +64,14 @@ class DsparkLauncher(ModelLauncher):
 
     def __init__(self):
         self.client = httpx.AsyncClient(timeout=30.0)
+        # Optional hooks (set by main.py) so a script-stack boot is visible in
+        # `sparkstation status` as STARTING while the blocking start script
+        # runs — without them the model is invisible for the whole ~12 min
+        # boot and then appears directly as RUNNING (2026-08-29 UX fix).
+        # on_starting(instance) creates the placeholder row; on_placeholder_done
+        # (model_id) removes it (main then creates the real row on success).
+        self.on_starting = None
+        self.on_placeholder_done = None
 
     async def cleanup(self):
         await self.client.aclose()
@@ -131,6 +139,47 @@ class DsparkLauncher(ModelLauncher):
             f"(port {api_port}, timeout {timeout_s}s, log {log_path})"
         )
 
+        placeholder_up = False
+        if self.on_starting is not None:
+            try:
+                await self.on_starting(
+                    ModelInstance(
+                        id=model_id,
+                        model_name=config.model_name,
+                        model_alias=config.model_alias,
+                        backend=Backend.DSPARK,
+                        model_type=config.model_type,
+                        host=config.host,
+                        status=ModelStatus.STARTING,
+                        health_status=HealthStatus.UNKNOWN,
+                        port=api_port,
+                        gpu_ids=[0],
+                        base_url=base_url_for_host(config.host, api_port),
+                        started_at=datetime.now(),
+                        auto_suspend_enabled=False,
+                        idle_timeout_minutes=config.idle_timeout_minutes,
+                        extra_args=config.extra_args,
+                    )
+                )
+                placeholder_up = True
+            except Exception as e:  # cosmetic only — never block a launch on it
+                logger.warning(f"Could not register STARTING placeholder for {model_id}: {e}")
+        try:
+            return await self._launch_stack(
+                config, model_id, api_port, start_script, stop_script,
+                script_args, timeout_s, log_path,
+            )
+        finally:
+            if placeholder_up and self.on_placeholder_done is not None:
+                try:
+                    await self.on_placeholder_done(model_id)
+                except Exception as e:
+                    logger.warning(f"Could not remove STARTING placeholder for {model_id}: {e}")
+
+    async def _launch_stack(
+        self, config, model_id, api_port, start_script, stop_script,
+        script_args, timeout_s, log_path,
+    ) -> ModelInstance:
         for attempt in (1, 2):
             try:
                 result = await self._run_script(
