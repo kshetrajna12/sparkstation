@@ -49,10 +49,28 @@ sentence gen (~0.3s gemma) + TTS first chunk (<1s, overlapped) — stretch: ~1.2
   **first audio chunk 0.46–0.56 s**, streams while generating (7.8 s of audio
   delivered in 4.4 s wall). TTS on GB10: PROVEN. All three cascade components
   now individually proven.
-- Open issue: the VOICE-CLONE server path 500s ("ref_text is required", ICL
-  mode) even with ref_text supplied via file and CLI — a bug in the image's
-  plumbing; not blocking (CustomVoice is the no-cloning default; revisit when
-  K picks Sparky's voice — sample of "Ryan" sent to K 2026-08-30).
+- ~~Open issue: VOICE-CLONE path 500s ("ref_text is required")~~ SOLVED
+  2026-08-30: not an image bug — the server reads the reference transcript
+  only from voices.json (`ref_text` per voice); request/CLI supplies are
+  ignored. With a registry entry carrying ref_audio + exact ref_text, ICL
+  cloning works first try.
+
+## Voice decision (K, 2026-08-30)
+
+All three Qwen3-TTS variants now run side by side on worker2 (each ~2-4 GB,
+same streaming image, per-request voice — no model reload to swap voices):
+
+- :8023 VoiceClone (Base) — ~10-30 s reference clip + transcript per voice
+- :8024 CustomVoice — 9 stock speakers (all vetoed by K; "hesitant laughter"
+  is the TTS model freestyling prosody — tame with the `instruct` style field)
+- :8025 VoiceDesign (1.7B) — voice invented from a prose description;
+  fresh sample per request, pin via the recipe's seed workflow when chosen
+
+**K chose the cloned-K voice as Sparky's voice** (registry entry `K`:
+K_ref.wav 30 s + Kyutai-transcribed ref_text). Bot defaults now point at
+:8023 / voice "K"; per-session override stays available via the `configure`
+message. In-pipeline: TTFB 0.64 s, 2.15 s voice-to-voice. Audition assets:
+worker2 ~/voice-audition (page on loopback :8090), refs in ~/voice-refs.
 
 ## End-to-end first light (2026-08-30)
 

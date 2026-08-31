@@ -58,7 +58,7 @@ from .qwen_tts import QwenTTSService
 from .router_llm import RouterLLMService
 
 GATEWAY = os.environ.get("CASCADE_GATEWAY", "http://192.168.101.10:8000/v1")
-TTS_URL = os.environ.get("CASCADE_TTS", "http://127.0.0.1:8024/v1")
+TTS_URL = os.environ.get("CASCADE_TTS", "http://127.0.0.1:8023/v1")  # VoiceClone server
 FAST_BRAIN = os.environ.get("CASCADE_FAST_BRAIN", "gemma4-2b")
 THINK_BRAIN = os.environ.get("CASCADE_THINK_BRAIN", "default")
 
@@ -146,7 +146,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     )
     tts = QwenTTSService(
         base_url=TTS_URL, api_key="dummy-key",
-        voice=os.environ.get("CASCADE_VOICE", "Ryan"),
+        voice=os.environ.get("CASCADE_VOICE", "K"),  # K's pick 2026-08-30: cloned voice
         model="tts-1", sample_rate=24_000,
     )
     context = LLMContext(
