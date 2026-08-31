@@ -345,7 +345,7 @@ models:
     # built on worker2 (~/gemma4-audio-image). Needed for input_audio requests.
     docker_image: "vllm/vllm-openai:gemma4-cu130-audio"
     extra_args:
-      max_model_len: 8192
+      max_model_len: 32768   # 8192 starved OpenClaw active-memory (4-7K prompts vs 4K budget → 4 failures/turn); E2B supports 32K, 16GB mem fine (2026-08-29)
       max_concurrent_requests: 8
       enable_auto_tool_choice: true   # OpenClaw active-memory sends tools
       tool_call_parser: "gemma4"      # native vLLM parser for Gemma 4

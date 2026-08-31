@@ -134,6 +134,13 @@ class HealthCheckManager:
                 # relaunch whose container died would otherwise sit in
                 # STARTING forever (never health-counted, never restarted).
                 started_at = model.started_at
+                # A row with no container_id is a script-stack (dspark)
+                # STARTING placeholder: the launcher is still blocked in the
+                # start script (its own timeout, up to 45 min for GLM TP2)
+                # and removes the row itself. Never time it out here — a
+                # FAILED flip would make RestartManager stop the stack mid-boot.
+                if not model.container_id:
+                    continue
                 if started_at and (datetime.now() - started_at).total_seconds() > settings.starting_timeout_minutes * 60:
                     logger.error(
                         f"Model {display_name} stuck in STARTING for over "
