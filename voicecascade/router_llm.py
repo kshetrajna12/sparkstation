@@ -15,9 +15,11 @@ from pipecat.services.openai.llm import OpenAILLMService
 
 # Utterances that deserve the big brain: analytical/expository asks, multi-step
 # requests, or anything the user explicitly wants thought through.
+# NB: no bare "how"/"write" — casual voice questions ("how many eggs...")
+# must stay in the fast lane; latency is the product.
 _THINK = re.compile(
-    r"\b(why|how|explain|compare|plan|analy[sz]e|think|debug|design|write|code|"
-    r"summari[sz]e|difference|history|prove|calculate|convert)\b", re.I)
+    r"\b(why|explain|compare|plan|analy[sz]e|think|debug|design|code|"
+    r"summari[sz]e|difference|prove|calculate|step by step|in detail)\b", re.I)
 
 
 class RouterLLMService(OpenAILLMService):
@@ -48,4 +50,8 @@ class RouterLLMService(OpenAILLMService):
         if model != self._settings.model:
             logger.info("Router: {} -> {} ({!r})", self._settings.model, model, text[:60])
             self._settings.model = model  # read per-request by get_chat_completions
+        # Voice is latency-critical: reasoning burns seconds before the first
+        # audible word, so suppress it even on the think lane (the win there
+        # is the bigger model, not chain-of-thought).
+        self._settings.extra = {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}} if model == self._think else {}
         await super()._process_context(context)

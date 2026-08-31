@@ -54,6 +54,36 @@ sentence gen (~0.3s gemma) + TTS first chunk (<1s, overlapped) — stretch: ~1.2
   plumbing; not blocking (CustomVoice is the no-cloning default; revisit when
   K picks Sparky's voice — sample of "Ryan" sent to K 2026-08-30).
 
+## End-to-end first light (2026-08-30)
+
+Full pipeline works over /ws-client on worker2:7860: live STT → router →
+gateway brain → streaming TTS → bot audio. Measured (smoke client, espeak wavs):
+
+- fast lane ("how many eggs..."): **2.24 s** speech-end → first bot audio,
+  gemma TTFB 0.27–0.36 s; multi-turn (3 turns/session) works, warm TTFB ~0.05 s.
+- think lane ("why do seasons change"): **3.02 s**, router escalates to
+  `default` correctly, answer quality good.
+
+Root cause of the day-long "100% PAD" bug: a freshly-reset Kyutai stream
+needs ~1 s of lead-in audio before it can decode speech — an utterance that
+starts within ~100 ms of session start transcribes as nothing. Fix: prime
+each session reset with 2 s of silence (`buf16 = zeros(CTX16 + 32000)`);
+costs ~0.5 s of compute once per session, before anyone speaks. (The multi-day
+red herring: the forensic capture file was appended across sessions and
+re-created late, corrupting the offline "pacing breaks decode" experiments —
+pacing was never a factor.)
+
+Latency knobs learned:
+- `CASCADE_STT_FINAL_GAP` (default 0.7 s) — text-gap finalization after last
+  decoded token; the biggest remaining chunk of the budget (~1.0–1.2 s
+  incl. Kyutai's 0.5 s text delay). Next win: Kyutai semantic-VAD heads.
+- Think-lane reasoning suppression: dsv4-flash ignores
+  `chat_template_kwargs.thinking=false`; the working knob is
+  **`enable_thinking: false`** (or `thinking_token_budget`). Router sends it
+  via `extra_body` on think-lane turns only — reasoning burned 2+ s of TTFB.
+- Router regex must not fire on bare "how"/"write" — casual questions
+  ("how many eggs") belong in the fast lane.
+
 ## Placement
 
 Trial on worker2 (free). Production intent: STT+TTS are small (~6GB total) →
