@@ -1,8 +1,12 @@
 # Cascade Voice — streaming STT → routed brain → streaming TTS
 
-Branch: `cascade-voice` (checkpoint tag: `pre-cascade-voice`). Replaces
-VoiceChat 11B as Sparky's voice IF it wins the bench; VoiceChat stays intact
-and restorable (`models start voicechat -p voice`).
+Branch: `cascade-voice` (checkpoint tag: `pre-cascade-voice`). **WON —
+2026-08-30**: K's call after live testing ("works really well"). VoiceChat
+legacy fully removed the same day (backend/launcher/profile/worker2
+artifacts ~130 GB); recovery path documented in
+homecloud-infra/docs/cascade-voice-runbook.md. The cascade is
+supervisor-managed as backend `voicecascade` (voice profile), with
+cascade_* prometheus metrics and the Grafana "Voice — cascade" row.
 
 ## Decision record (2026-08-30, with K)
 
@@ -142,9 +146,9 @@ for the 2-worker big-model plan.
   ~10s clean sample when ready; we generate the voice embedding from it. No
   cloning of anyone's voice without K saying so.
 
-## Definition of done (K, 2026-08-30: "no legacy stuff")
+## Definition of done (K, 2026-08-30: "no legacy stuff") — ✅ DONE 2026-08-30
 
-If the cascade wins the bench, the merge to main INCLUDES the cleanup:
+Every item below executed the day of the win:
 - Remove the voicechat backend (launcher, enums, gateway/health special-cases,
   autoload bucket), the `voice` profile entry, models.yaml voicechat block.
 - worker2: retire ~/nemotron-voicechat checkout + 65GB bootstrap cache + images
