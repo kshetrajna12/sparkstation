@@ -5,17 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sparkstation Console</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>⚡</text></svg>">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 <div class="shell">
   <nav class="sidebar">
     <div class="brand">⚡ Sparkstation</div>
     <a class="nav-item active" data-section="voice" href="#voice">🎙️ Voice Studio</a>
-    <a class="nav-item soon" data-section="cluster" href="#cluster">🖥️ Cluster &amp; models <span class="pill">soon</span></a>
+    <a class="nav-item" data-section="cluster" href="#cluster">🖥️ Cluster &amp; models</a>
     <a class="nav-item soon" data-section="playground" href="#playground">💬 Playground <span class="pill">soon</span></a>
     <a class="nav-item soon" data-section="clients" href="#clients">🔑 Clients &amp; usage <span class="pill">soon</span></a>
-    <a class="nav-item soon" data-section="logs" href="#logs">📜 Logs <span class="pill">soon</span></a>
+    <a class="nav-item" data-section="logs" href="#logs">📜 Logs</a>
     <a class="nav-item" id="grafana-link" href="#" target="_blank" rel="noopener" hidden>📈 Metrics (Grafana) ↗</a>
     <div class="sidebar-foot">
       <div id="stack-status" class="status-line">checking voice stack…</div>
@@ -134,6 +134,46 @@
       </div>
     </section>
 
+    <section id="section-cluster" class="section" hidden>
+      <header class="section-head">
+        <h1>Cluster &amp; models</h1>
+        <div class="row">
+          <span id="profile-chip" class="chip"></span>
+          <button id="cluster-refresh">↻ refresh</button>
+        </div>
+      </header>
+      <div id="resource-cards" class="cards"></div>
+      <div id="models-table"></div>
+      <div class="card form" id="start-card">
+        <div class="row wrap">
+          <strong>Start a model</strong>
+          <select id="start-alias"></select>
+          <select id="start-profile"></select>
+          <button id="start-btn" class="primary">▶ Start</button>
+          <span id="start-msg" class="status-line"></span>
+        </div>
+        <p class="hint">Resolved through the selected profile exactly like <code>sparkstation models start &lt;alias&gt; -p &lt;profile&gt;</code>. Chat models on the same node are usually mutually exclusive — the supervisor checks the target host's free memory before launching (model + 10 GB headroom must fit) and refuses cleanly if it doesn't.</p>
+      </div>
+    </section>
+
+    <section id="section-logs" class="section" hidden>
+      <header class="section-head">
+        <h1>Logs</h1>
+        <div class="row wrap">
+          <select id="log-source"></select>
+          <select id="log-lines">
+            <option value="100">100 lines</option>
+            <option value="300" selected>300 lines</option>
+            <option value="1000">1000 lines</option>
+            <option value="5000">5000 lines</option>
+          </select>
+          <label class="row inline"><input type="checkbox" id="log-follow" checked> follow</label>
+          <button id="log-refresh">↻</button>
+        </div>
+      </header>
+      <pre id="log-view" class="log-view">loading…</pre>
+    </section>
+
     <section id="section-soon" class="section" hidden>
       <h1 id="soon-title">Coming soon</h1>
       <p class="muted">This section isn't built yet. The CLI (<code>sparkstation …</code>) remains the authoritative ops tool.</p>
@@ -143,7 +183,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="talk.js"></script>
-<script src="app.js"></script>
+<script src="talk.js?v=4"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

@@ -46,12 +46,16 @@
   function fillLangs() { $$(".lang-select").forEach((sel) => { sel.innerHTML = LANGS.map((l) => `<option>${l}</option>`).join(""); }); }
 
   // ── navigation ───────────────────────────────────────────────────────────
+  const BUILT_SECTIONS = { voice: "#section-voice", cluster: "#section-cluster", logs: "#section-logs" };
   function showSection(name) {
     $$(".nav-item[data-section]").forEach((a) => a.classList.toggle("active", a.dataset.section === name));
-    const voice = name === "voice";
-    $("#section-voice").hidden = !voice;
-    $("#section-soon").hidden = voice;
-    if (!voice) $("#soon-title").textContent = ($(`.nav-item[data-section="${name}"]`) || {}).textContent || "Coming soon";
+    for (const sel of Object.values(BUILT_SECTIONS)) $(sel).hidden = BUILT_SECTIONS[name] !== sel;
+    $("#section-soon").hidden = !!BUILT_SECTIONS[name];
+    if (!BUILT_SECTIONS[name]) $("#soon-title").textContent = ($(`.nav-item[data-section="${name}"]`) || {}).textContent || "Coming soon";
+    if (name === "cluster") refreshCluster();
+    if (name === "logs") refreshLogSources();
+    clusterVisible = name === "cluster";
+    logsVisible = name === "logs";
   }
   function showTab(name) {
     $$(".tab").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
@@ -350,6 +354,165 @@
     stop.onclick = () => { if (session) session.stop(); };
   }
 
+  // ── cluster & models ─────────────────────────────────────────────────────
+  let clusterVisible = false, clusterTimer = null, profilesInfo = null;
+
+  async function refreshCluster() {
+    clearTimeout(clusterTimer);
+    try {
+      const [res, det, hosts] = await Promise.all([
+        api("GET", "/resources"), api("GET", "/models/detailed"),
+        api("GET", "/resources/hosts").catch(() => null),
+      ]);
+      renderResources(res, hosts);
+      renderModels(det.models || []);
+      if (!profilesInfo) { profilesInfo = await api("GET", "/profiles"); renderStartControls(det.models || []); }
+      else renderStartControls(det.models || []);
+      $("#profile-chip").textContent = profilesInfo ? `profile: ${profilesInfo.active}` : "";
+    } catch (e) { toast("cluster refresh failed: " + e.message, true); }
+    if (clusterVisible) clusterTimer = setTimeout(refreshCluster, 10000);
+  }
+
+  function hostCard(role, h) {
+    if (!h || !h.ok) return `<div class="card"><div class="big">${esc(role)}</div><div class="sub bad-text">unreachable${h && h.error ? ": " + esc(h.error) : ""}</div></div>`;
+    const usedPct = Math.round(100 * h.mem_used_gb / h.mem_total_gb);
+    const gpu = h.gpu_temp_c != null ? `${h.gpu_temp_c.toFixed(0)}°C · ${h.gpu_power_w.toFixed(0)} W` : "gpu n/a";
+    return `<div class="card">
+      <div class="big">${h.mem_used_gb.toFixed(1)} <span class="sub">/ ${h.mem_total_gb.toFixed(0)} GB</span></div>
+      <div class="sub">${esc(role)}${h.label ? ` (${esc(h.label)})` : ""} · ${esc(gpu)} · ${h.mem_available_gb.toFixed(0)} GB free</div>
+      <div class="membar${usedPct > 80 ? " hot" : ""}"><div style="width:${usedPct}%"></div></div></div>`;
+  }
+
+  function renderResources(r, hosts) {
+    let cards = "";
+    if (hosts && hosts.hosts) {
+      cards = Object.entries(hosts.hosts).map(([role, h]) => hostCard(role, h)).join("");
+    } else {
+      const usedPct = Math.round(100 * r.unified_memory_used_gb / r.unified_memory_gb);
+      cards = `<div class="card"><div class="big">${r.unified_memory_used_gb.toFixed(1)} <span class="sub">/ ${r.unified_memory_gb.toFixed(0)} GB</span></div>
+        <div class="sub">primary unified memory</div>
+        <div class="membar${usedPct > 80 ? " hot" : ""}"><div style="width:${usedPct}%"></div></div></div>`;
+    }
+    cards += `<div class="card"><div class="big">${r.resident_models_count} <span class="sub">/ ${r.max_resident_models}</span></div><div class="sub">resident models (all hosts)</div></div>`;
+    $("#resource-cards").innerHTML = cards;
+  }
+
+  function fmtIdle(sec) {
+    if (sec == null) return "—";
+    if (sec < 90) return Math.round(sec) + "s";
+    if (sec < 5400) return Math.round(sec / 60) + "m";
+    return (sec / 3600).toFixed(1) + "h";
+  }
+
+  function renderModels(models) {
+    const rows = models.map((m) => {
+      const running = m.status === "running", suspended = m.status === "suspended";
+      const hb = m.health_status === "healthy" ? "💚" : m.health_status === "unhealthy" ? "💔" : "";
+      const acts = [
+        running || m.status === "starting" ? `<button data-act="stop" title="stop">■</button>` : "",
+        running && m.model_type === "chat" ? `<button data-act="suspend" title="suspend (free memory, fast resume)">⏸</button>` : "",
+        suspended ? `<button data-act="resume" title="resume">▶</button>` : "",
+      ].join("");
+      return `<tr data-id="${esc(m.id)}" data-alias="${esc(m.alias || m.model_name)}">
+        <td><strong>${esc(m.alias || m.model_name)}</strong>${m.is_default ? '<span class="default-badge">default</span>' : ""}${m.is_vision ? ' 👁' : ""}<div class="muted">${esc(m.backend)} · ${esc(m.model_type)}</div></td>
+        <td>${esc(m.host)}</td>
+        <td><span class="st ${esc(m.status)}">${esc(m.status)}</span><span class="hb">${hb}</span></td>
+        <td>${m.port || "—"}</td>
+        <td>${m.memory_gb != null ? m.memory_gb + " GB" : "—"}</td>
+        <td>${fmtIdle(m.idle_seconds)}</td>
+        <td class="actions">${acts}</td></tr>`;
+    }).join("");
+    $("#models-table").innerHTML = models.length
+      ? `<table class="models"><thead><tr><th>Model</th><th>Host</th><th>Status</th><th>Port</th><th>Memory</th><th>Idle</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+      : '<p class="muted">no models in the registry</p>';
+    $$("#models-table [data-act]").forEach((b) => { b.onclick = () => modelAction(b.closest("tr"), b.dataset.act); });
+  }
+
+  async function modelAction(tr, act) {
+    const id = tr.dataset.id, alias = tr.dataset.alias;
+    const warn = { stop: `Stop ${alias}? Clients using it will fail until it's started again.`,
+                   suspend: `Suspend ${alias}? First request after resume pays the reload.`,
+                   resume: null }[act];
+    if (warn && !confirm(warn)) return;
+    try {
+      await api("POST", `/models/${encodeURIComponent(id)}/${act}`);
+      toast(`${act} requested for ${alias}`);
+      refreshCluster();
+    } catch (e) { toast(`${act} ${alias} failed: ` + e.message, true); }
+  }
+
+  function renderStartControls(models) {
+    if (!profilesInfo) return;
+    const live = new Set(models.filter((m) => ["running", "starting"].includes(m.status)).map((m) => m.alias));
+    const aliasSel = $("#start-alias"), profSel = $("#start-profile");
+    const prevA = aliasSel.value, prevP = profSel.value;
+    const profile = prevP || profilesInfo.active;
+    const inProfile = new Set(profilesInfo.profiles[profile] || []);
+    const opt = (a) => {
+      const info = (profilesInfo.aliases || {})[a] || {};
+      const where = info.host ? ` — ${info.host}${info.memory_gb ? `, ${info.memory_gb} GB` : ""}` : "";
+      return `<option value="${esc(a)}"${live.has(a) ? " disabled" : ""}>${esc(a)}${esc(where)}${live.has(a) ? " (live)" : ""}</option>`;
+    };
+    const rest = profilesInfo.all_aliases.filter((a) => !inProfile.has(a));
+    aliasSel.innerHTML =
+      `<optgroup label="in profile ${esc(profile)}">${[...inProfile].sort().map(opt).join("")}</optgroup>` +
+      (rest.length ? `<optgroup label="all specs (on-demand)">${rest.map(opt).join("")}</optgroup>` : "");
+    profSel.innerHTML = Object.keys(profilesInfo.profiles).map((p) => `<option value="${esc(p)}"${p === profile ? " selected" : ""}>profile: ${esc(p)}</option>`).join("");
+    if (prevA && Array.from(aliasSel.options).some((o) => o.value === prevA)) aliasSel.value = prevA;
+    profSel.onchange = () => renderStartControls(models);
+  }
+
+  function bindCluster() {
+    $("#cluster-refresh").onclick = () => { profilesInfo = null; refreshCluster(); };
+    $("#start-btn").onclick = async () => {
+      const alias = $("#start-alias").value, profile = $("#start-profile").value;
+      if (!alias) return;
+      if (!confirm(`Start ${alias} (profile ${profile})? Large models can take minutes and lots of memory.`)) return;
+      const msg = $("#start-msg");
+      msg.textContent = `starting ${alias}…`; msg.className = "status-line";
+      try {
+        await api("POST", `/models/${encodeURIComponent(alias)}/start-by-alias?profile=${encodeURIComponent(profile)}`);
+        msg.textContent = `${alias} launching — watch its status above`; msg.className = "status-line ok";
+        refreshCluster();
+      } catch (e) { msg.textContent = "start failed: " + e.message; msg.className = "status-line bad"; }
+    };
+  }
+
+  // ── logs ─────────────────────────────────────────────────────────────────
+  let logsVisible = false, logTimer = null;
+
+  async function refreshLogSources() {
+    try {
+      const d = await api("GET", "/logs");
+      const sel = $("#log-source"); const prev = sel.value;
+      sel.innerHTML = d.sources.map((src) => `<option value="${esc(src.id)}">${esc(src.label)}${src.status ? ` (${esc(src.status)})` : ""}</option>`).join("");
+      if (prev && Array.from(sel.options).some((o) => o.value === prev)) sel.value = prev;
+    } catch (e) { toast("cannot list logs: " + e.message, true); }
+    refreshLog();
+  }
+
+  async function refreshLog() {
+    clearTimeout(logTimer);
+    const src = $("#log-source").value;
+    if (src) {
+      try {
+        const r = await api("GET", `/logs/${encodeURIComponent(src)}?lines=${$("#log-lines").value}`, undefined, { raw: true });
+        if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+        const view = $("#log-view");
+        view.textContent = await r.text();
+        view.scrollTop = view.scrollHeight;
+      } catch (e) { $("#log-view").textContent = "error: " + e.message; }
+    }
+    if (logsVisible && $("#log-follow").checked) logTimer = setTimeout(refreshLog, 4000);
+  }
+
+  function bindLogs() {
+    $("#log-refresh").onclick = refreshLog;
+    $("#log-source").onchange = refreshLog;
+    $("#log-lines").onchange = refreshLog;
+    $("#log-follow").onchange = refreshLog;
+  }
+
   // ── api key (only when the supervisor enforces one) ──────────────────────
   function bindApiKey() {
     const btn = $("#apikey-btn");
@@ -366,7 +529,7 @@
     $$(".tab").forEach((b) => { b.onclick = () => showTab(b.dataset.tab); });
     window.addEventListener("hashchange", route);
     route();
-    bindDesignForm(); bindCloneForm(); bindTalk(); bindApiKey();
+    bindDesignForm(); bindCloneForm(); bindTalk(); bindApiKey(); bindCluster(); bindLogs();
     $("#voices-refresh").onclick = () => { loadVoices(); refreshStatus(); };
     try {
       config = await (await fetch("/console/config.json")).json();
