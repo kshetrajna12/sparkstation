@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Smoke-test client for the Nemotron VoiceChat plain-WebSocket transport.
+"""Smoke-test client for the cascade voice bot plain-WebSocket transport.
+
+(Originally written for Nemotron VoiceChat; the cascade keeps the same
+wire contract, so this client tests both eras — the VoiceChat runtime is
+retired.)
 
 Connects to ws://HOST:7860/ws-client, performs the RTVI client-ready
 handshake, streams mic-format audio (16 kHz mono PCM16 — here a quiet tone),

@@ -215,32 +215,13 @@ async def lifespan(app: FastAPI):
             # workers) launch first so a ~20 min stack boot doesn't hold up
             # 1-minute loads elsewhere (2026-08-28: deep profile moved all
             # non-chat models to primary).
-            # voicechat joins phase 1 LAST: its Nano engine sizes off free
-            # memory at init (0.42 of total), so every other model on its host
-            # must have reserved first.
-            vllm_sglang_models = [m for m in autoload_models if m.backend in ("dspark", "vllm", "sglang", "voicechat")]
+            # voicecascade has fixed-size components (STT 1B + TTS containers
+            # + bot) — unlike the old voicechat Nano engine it does NOT size
+            # off free memory, so it needs no launch-order special-casing.
+            vllm_sglang_models = [m for m in autoload_models if m.backend in ("dspark", "vllm", "sglang", "voicecascade")]
             _dspark_hosts = {m.host for m in vllm_sglang_models if m.backend == "dspark"}
 
-            # voicechat's Nano engine sizes off FREE memory at init, so models
-            # on ITS host must reserve first — but only its host: when nothing
-            # else runs there (e.g. voice profile: chat on worker1, voicechat
-            # alone on worker2) it launches immediately instead of waiting out
-            # a ~12 min chat-stack boot (2026-08-29, same host-scoping as the
-            # dspark rule above). CAVEAT: dspark stacks may implicitly span
-            # hosts beyond their configured `host` (e.g. GLM TP2's second rank
-            # on worker2) — if a profile ever pairs such a stack with
-            # voicechat, this check under-counts; declare the extra host on
-            # the spec or keep voicechat out of that profile.
-            _voice_hosts = {m.host for m in vllm_sglang_models if m.backend == "voicechat"}
-            _shared_voice_host = any(
-                m.host in _voice_hosts
-                for m in vllm_sglang_models
-                if m.backend != "voicechat"
-            )
-
             def _phase1_key(m):
-                if m.backend == "voicechat":
-                    return 3 if _shared_voice_host else 0
                 if m.backend == "dspark":
                     return 1
                 return 2 if m.host in _dspark_hosts else 0
@@ -1097,10 +1078,10 @@ async def prometheus_targets():
     targets = []
     for model in await registry.list_running():
         backend = model.backend.value if hasattr(model.backend, "value") else str(model.backend)
-        if backend == "voicechat":
-            # The Pipecat bot exports session/latency/tool metrics plus the
-            # model-server frame traces on its own port (extra_args.metrics_port,
-            # default 7861) — not on the runner port.
+        if backend == "voicecascade":
+            # The Pipecat bot exports cascade_* session/latency/tool metrics
+            # on its own port (extra_args.metrics_port, default 7861) — not
+            # on the runner port.
             metrics_port = int((model.extra_args or {}).get("metrics_port", 7861))
             host_ip = model.base_url.split("://", 1)[-1].rsplit(":", 1)[0]
             targets.append(

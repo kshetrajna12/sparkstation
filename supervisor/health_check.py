@@ -19,11 +19,11 @@ def _health_path(model: ModelInstance) -> str:
     """Liveness probe path for a model's server.
 
     Backends speaking the OpenAI-ish HTTP surface all serve /health. The
-    voicechat backend is a Pipecat runner: no /health route (404, which kept
+    voicecascade backend is a Pipecat runner: no /health route (404, which kept
     it stuck in STARTING forever, 2026-08-25) — its playground page /client/
     is the lightweight always-200 route.
     """
-    return "/client/" if model.backend == Backend.VOICECHAT else "/health"
+    return "/client/" if model.backend == Backend.VOICECASCADE else "/health"
 
 logger = logging.getLogger(__name__)
 
