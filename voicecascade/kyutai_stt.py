@@ -34,35 +34,105 @@ TEXT_GAP_FINAL_S = 1.1     # no new pieces for this long (with text pending) => 
 # reused across sessions (sessions are serial — single-session bot). Without
 # this, the first utterance of every session raced the per-session load and
 # transcribed nothing.
-_ENGINE = {}
 _ENGINE_LOCK = threading.Lock()
+_ENGINE_IN: "queue.Queue|None" = None      # (kind, payload): ("audio", (bytes, sink)), ("reset", sink)
+_ENGINE_STARTED = threading.Event()
 
 
 def preload(device: str = "cuda", hf_repo: str = "kyutai/stt-1b-en_fr"):
-    """Load mimi + LM once per process. Safe to call repeatedly."""
+    """Start the single global engine thread (loads model, owns ALL GPU calls).
+
+    Every mimi/LM call for the life of the process happens on this one thread:
+    load, boot self-test, and every session's stepping. This removes any
+    thread-affinity questions (streaming state, cuda graphs, streams) that a
+    per-session worker thread raised — sessions only exchange queues with it.
+    """
+    global _ENGINE_IN
     with _ENGINE_LOCK:
-        if _ENGINE.get("repo") == hf_repo:
-            return _ENGINE
-        import contextlib
+        if _ENGINE_IN is not None:
+            return
+        _ENGINE_IN = queue.Queue()
+        threading.Thread(target=_engine_main, args=(device, hf_repo), daemon=True).start()
+    _ENGINE_STARTED.wait(timeout=300)
 
-        import torch
-        from moshi.models import loaders, LMGen
 
-        logger.info("KyutaiSTT preloading {} ...", hf_repo)
-        info = loaders.CheckpointInfo.from_hf_repo(hf_repo)
-        mimi = info.get_mimi(device=device)
-        tokenizer = info.get_text_tokenizer()
-        lm = info.get_moshi(device=device, dtype=torch.bfloat16)
-        lm_gen = LMGen(lm, temp=0, temp_text=0.0)
-        # Streaming contexts stay open for the life of the process (entering
-        # twice raises "already streaming"); sessions reset state instead.
-        es = contextlib.ExitStack()
-        es.enter_context(mimi.streaming(1))
-        es.enter_context(lm_gen.streaming(1))
-        _ENGINE.update(repo=hf_repo, mimi=mimi, tokenizer=tokenizer,
-                       lm_gen=lm_gen, _es=es)
-        logger.info("KyutaiSTT ready (frame {} @ {} Hz)", mimi.frame_size, mimi.sample_rate)
-        return _ENGINE
+def _engine_main(device: str, hf_repo: str):
+    import julius
+    import numpy as np
+    import torch
+    from moshi.models import loaders, LMGen
+
+    logger.info("KyutaiSTT engine thread: loading {} ...", hf_repo)
+    info = loaders.CheckpointInfo.from_hf_repo(hf_repo)
+    mimi = info.get_mimi(device=device)
+    tokenizer = info.get_text_tokenizer()
+    lm = info.get_moshi(device=device, dtype=torch.bfloat16)
+    lm_gen = LMGen(lm, temp=0, temp_text=0.0)
+    CTX16, BLK16, CTX24, BLK24 = 160, 1280, 240, 1920
+    assert BLK24 == mimi.frame_size
+
+    def _reset():
+        for m in (mimi, lm_gen):
+            if hasattr(m, "reset_streaming"):
+                m.reset_streaming()
+
+    with mimi.streaming(1), lm_gen.streaming(1):
+        # boot self-test on THIS thread — the same thread sessions will use
+        try:
+            import os as _os
+            import wave
+            if _os.path.exists("/tmp/eggs16k.wav"):
+                w = wave.open("/tmp/eggs16k.wav")
+                pcm = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
+                pcm = np.concatenate([np.zeros(16000, dtype=np.float32), pcm, np.zeros(48000, dtype=np.float32)])
+                buf = torch.cat([torch.zeros(CTX16), torch.from_numpy(pcm)]); out = []
+                while buf.shape[-1] >= CTX16 + BLK16 + CTX16:
+                    win = buf[: CTX16 + BLK16 + CTX16]; buf = buf[BLK16:]
+                    chunk = julius.resample_frac(win, 16000, 24000)[CTX24: CTX24 + BLK24]
+                    t = lm_gen.step(mimi.encode(chunk.to(device)[None, None]))
+                    if t is not None and t[0, 0, 0].item() not in (0, 3):
+                        out.append(tokenizer.id_to_piece(t[0, 0, 0].item()).replace("▁", " "))
+                logger.info("KyutaiSTT engine self-test: {!r}", "".join(out).strip())
+                _reset()
+        except Exception:
+            logger.exception("engine self-test failed")
+        logger.info("KyutaiSTT ready (engine thread)")
+        _ENGINE_STARTED.set()
+
+        buf16 = torch.zeros(CTX16)
+        sink = None
+        nstat = {"n": 0, "pad": 0, "tok": 0, "cmax": 0.0}
+        while True:
+            kind, payload = _ENGINE_IN.get()
+            if kind == "reset":
+                _reset()
+                buf16 = torch.zeros(CTX16)
+                sink = payload
+                continue
+            pcm, s_sink = payload
+            if s_sink is not sink:
+                continue  # stale session audio
+            audio = torch.from_numpy(np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0)
+            buf16 = torch.cat([buf16, audio])
+            while buf16.shape[-1] >= CTX16 + BLK16 + CTX16:
+                win = buf16[: CTX16 + BLK16 + CTX16]; buf16 = buf16[BLK16:]
+                chunk = julius.resample_frac(win, 16000, 24000)[CTX24: CTX24 + BLK24]
+                t = lm_gen.step(mimi.encode(chunk.to(device)[None, None]))
+                nstat["n"] += 1; nstat["cmax"] = max(nstat["cmax"], float(chunk.abs().max()))
+                if t is None:
+                    continue
+                v = t[0, 0, 0].item()
+                if v in (0, 3):
+                    nstat["pad"] += 1
+                else:
+                    nstat["tok"] += 1
+                    piece = tokenizer.id_to_piece(v).replace("▁", " ")
+                    if sink is not None:
+                        sink(("text", piece))
+                if nstat["n"] % 100 == 0:
+                    logger.debug("KyutaiSTT engine steps {}: pad={} tok={} max24k={:.3f}",
+                                 nstat["n"], nstat["pad"], nstat["tok"], nstat["cmax"])
+                    nstat.update(pad=0, tok=0, cmax=0.0)
 
 
 class KyutaiSTTService(STTService):
@@ -70,98 +140,33 @@ class KyutaiSTTService(STTService):
         super().__init__(audio_passthrough=True, **kwargs)
         self._hf_repo = hf_repo
         self._device = device
-        self._in_q: queue.Queue = queue.Queue()
         self._out_q: asyncio.Queue = asyncio.Queue()
-        self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._running = False
         self._turn_text: list[str] = []
         self._last_piece_at = 0.0
         self._flush_task: asyncio.Task | None = None
 
-    async def start(self, frame: StartFrame):
-        await super().start(frame)
-        if self._thread:
-            return
-        self._loop = asyncio.get_running_loop()
-        self._running = True
-        self._thread = threading.Thread(target=self._worker, daemon=True)
-        self._thread.start()
-        # consume decoded pieces
-        self._emit_task = self.create_task(self._emit_loop())
-
-    def _worker(self):
-        """Feeds 80ms mimi frames through the shared engine, posts text pieces."""
-        try:
-            import numpy as np
-            import torch
-
-            eng = preload(self._device, self._hf_repo)
-            mimi, tokenizer, lm_gen = eng["mimi"], eng["tokenizer"], eng["lm_gen"]
-            frame_size = mimi.frame_size
-            # fresh recurrent state for this session
-            for m in (mimi, lm_gen):
-                if hasattr(m, "reset_streaming"):
-                    m.reset_streaming()
-            self._post(("ready", None))
-
-            import julius
-
-            # Streaming 16k->24k resample with overlap context: naive per-chunk
-            # resampling destroys the filter state at every boundary and the
-            # model decodes nothing (first-light bug). We resample 80 ms blocks
-            # (1280 @ 16k -> 1920 @ 24k) inside a window padded with 10 ms of
-            # real context on each side, keeping only the center.
-            CTX16, BLK16 = 160, 1280
-            CTX24, BLK24 = 240, 1920
-            assert BLK24 == frame_size, "mimi frame size changed?"
-            buf16 = torch.zeros(CTX16)  # left context primed with silence
-
-            while self._running:
-                try:
-                    item = self._in_q.get(timeout=0.2)
-                except queue.Empty:
-                    continue
-                pcm, in_rate = item
-                if in_rate != 16000:
-                    self._post(("error", f"expected 16000 Hz input, got {in_rate}"))
-                    return
-                audio = torch.from_numpy(
-                    np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-                )
-                buf16 = torch.cat([buf16, audio])
-                while buf16.shape[-1] >= CTX16 + BLK16 + CTX16:
-                    window = buf16[: CTX16 + BLK16 + CTX16]
-                    buf16 = buf16[BLK16:]  # advance one block; contexts overlap
-                    out24 = julius.resample_frac(window, 16000, 24000)
-                    chunk = out24[CTX24: CTX24 + BLK24]
-                    if True:
-                        codes = mimi.encode(chunk.to(self._device)[None, None])
-                        text_tokens = lm_gen.step(codes)
-                        if text_tokens is None:
-                            continue
-                        self._steps = getattr(self, "_steps", 0) + 1
-                        if self._steps % 50 == 1:
-                            logger.debug("KyutaiSTT worker step #{}", self._steps)
-                        tok = text_tokens[0, 0, 0].item()
-                        if tok not in (0, 3):  # EPAD/PAD
-                            piece = tokenizer.id_to_piece(tok).replace("▁", " ")
-                            self._post(("text", piece))
-        except Exception as exc:
-            logger.exception("KyutaiSTT worker died: {}", exc)
-            self._post(("error", str(exc)))
-
-    def _post(self, item):
+    def _sink(self, item):
         if self._loop:
             self._loop.call_soon_threadsafe(self._out_q.put_nowait, item)
+
+    async def start(self, frame: StartFrame):
+        await super().start(frame)
+        self._loop = asyncio.get_running_loop()
+        preload(self._device, self._hf_repo)
+        _ENGINE_IN.put(("reset", self._sink))  # claim the engine for this session
+        self._emit_task = self.create_task(self._emit_loop())
+
+    async def stop(self, frame):
+        if getattr(self, "_emit_task", None):
+            await self.cancel_task(self._emit_task)
+        await super().stop(frame)
 
     async def _emit_loop(self):
         while True:
             try:
                 kind, payload = await asyncio.wait_for(self._out_q.get(), timeout=0.25)
             except asyncio.TimeoutError:
-                # text-gap finalization: the model has been quiet for a while
-                # after producing words -> the utterance is complete
                 if self._turn_text and time.monotonic() - self._last_piece_at > TEXT_GAP_FINAL_S:
                     await self._emit_final()
                 continue
@@ -176,8 +181,6 @@ class KyutaiSTTService(STTService):
                         user_id="user", timestamp=time_now_iso8601(),
                     )
                 )
-            elif kind == "error":
-                await self.push_error(error_msg=f"KyutaiSTT: {payload}", fatal=True)
 
     async def _emit_final(self):
         text = "".join(self._turn_text).strip()
@@ -189,29 +192,7 @@ class KyutaiSTTService(STTService):
             )
 
     async def run_stt(self, audio: bytes):
-        # Called once per InputAudioRawFrame (continuous mode): enqueue for the
-        # worker; results surface via _emit_loop.
-        self._in_q.put((audio, self.sample_rate))
-        self._rx = getattr(self, "_rx", 0) + 1
-        if self._rx % 100 == 1:
-            logger.debug("KyutaiSTT rx frame #{} ({} bytes @ {})", self._rx, len(audio), self.sample_rate)
+        if self.sample_rate != 16000:
+            await self.push_error(error_msg=f"KyutaiSTT expects 16k input, got {self.sample_rate}", fatal=True)
+        _ENGINE_IN.put(("audio", (audio, self._sink)))
         yield None
-
-    async def process_frame(self, frame: Frame, direction: FrameDirection):
-        await super().process_frame(frame, direction)
-        if isinstance(frame, UserStoppedSpeakingFrame):
-            # let the model's text delay drain, then finalize the turn
-            if self._flush_task:
-                self._flush_task.cancel()
-            self._flush_task = self.create_task(self._finalize_turn())
-
-    async def stop(self, frame):
-        self._running = False
-        if getattr(self, "_emit_task", None):
-            await self.cancel_task(self._emit_task)
-        await super().stop(frame)
-
-    async def _finalize_turn(self):
-        # belt-and-braces: if a stop frame ever does reach us, flush then too
-        await asyncio.sleep(FLUSH_AFTER_TURN_S)
-        await self._emit_final()
