@@ -624,8 +624,20 @@ async def console_config():
     }
 
 
+class _ConsoleStatic(StaticFiles):
+    """StaticFiles that forbids freshness caching. Cloudflare's default edge
+    cache holds .js/.css by extension when the origin sends no Cache-Control,
+    which left console.<domain> serving stale bundles after deploys. no-cache
+    still allows conditional revalidation (ETag), so repeat loads stay cheap."""
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 if settings.console_enabled and CONSOLE_DIR.is_dir():
-    app.mount("/console", StaticFiles(directory=str(CONSOLE_DIR), html=True), name="console")
+    app.mount("/console", _ConsoleStatic(directory=str(CONSOLE_DIR), html=True), name="console")
 
     @app.get("/", include_in_schema=False)
     async def root_redirect():
