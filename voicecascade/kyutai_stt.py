@@ -11,6 +11,7 @@ final TranscriptionFrame for the turn.
 from __future__ import annotations
 
 import asyncio
+import os
 import queue
 import threading
 import time
@@ -28,7 +29,7 @@ from pipecat.services.stt_service import STTService
 from pipecat.utils.time import time_now_iso8601
 
 FLUSH_AFTER_TURN_S = 0.9   # model text delay (~0.5s) + margin
-TEXT_GAP_FINAL_S = 1.1     # no new pieces for this long (with text pending) => final
+TEXT_GAP_FINAL_S = float(os.environ.get("CASCADE_STT_FINAL_GAP", "0.7"))     # no new pieces for this long (with text pending) => final
 
 # Process-global engine: the model loads ONCE per bot process (~19 s) and is
 # reused across sessions (sessions are serial — single-session bot). Without
@@ -106,7 +107,10 @@ def _engine_main(device: str, hf_repo: str):
             kind, payload = _ENGINE_IN.get()
             if kind == "reset":
                 _reset()
-                buf16 = torch.zeros(CTX16)
+                # Kyutai's stream needs ~1s of lead-in before it can decode
+                # speech; prime with 2s of silence so an utterance that
+                # arrives immediately after connect still transcribes.
+                buf16 = torch.zeros(CTX16 + 32000)
                 sink = payload
                 continue
             pcm, s_sink = payload
