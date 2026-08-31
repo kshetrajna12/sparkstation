@@ -37,9 +37,10 @@
     return data;
   }
 
-  function toast(msg, bad) {
-    const t = $("#toast"); t.textContent = msg; t.hidden = false; t.classList.toggle("bad", !!bad);
-    clearTimeout(t._h); t._h = setTimeout(() => { t.hidden = true; }, bad ? 6000 : 3000);
+  function toast(msg, bad, warn) {
+    const t = $("#toast"); t.textContent = msg; t.hidden = false;
+    t.classList.toggle("bad", !!bad); t.classList.toggle("warn", !bad && !!warn);
+    clearTimeout(t._h); t._h = setTimeout(() => { t.hidden = true; }, bad || warn ? 7000 : 3000);
   }
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
   function fillLangs() { $$(".lang-select").forEach((sel) => { sel.innerHTML = LANGS.map((l) => `<option>${l}</option>`).join(""); }); }
@@ -274,7 +275,7 @@
       $("#clone-save").disabled = true;
       try {
         const res = await api("POST", "/voice/voices/clone", fd);
-        toast(`clone voice ${res.voice} registered (${res.duration_seconds}s clip)` + (res.warning ? " — " + res.warning : ""), !!res.warning);
+        toast(`✓ clone voice ${res.voice} registered (${res.duration_seconds}s clip)` + (res.warning ? " — note: " + res.warning : ""), false, !!res.warning);
         form.hidden = true; recordedBlob = null; $("#clone-id").value = ""; $("#clone-text").value = ""; $("#clone-audio").hidden = true;
         await loadVoices(); refreshStatus();
       } catch (e) { msg.textContent = "failed: " + e.message; msg.className = "status-line bad"; }
