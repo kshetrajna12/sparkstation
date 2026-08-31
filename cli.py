@@ -344,6 +344,10 @@ def _write_gateway_yaml():
     for m in data.get("models", []):
         if m["status"] != "running":
             continue
+        # Voice models speak WebSocket/WebRTC audio, not the OpenAI API — a
+        # LiteLLM route would just 404/502 (mirrors gateway_sync exclusion).
+        if (m.get("model_type") or "chat") == "voice":
+            continue
         alias = m.get("alias") or m["model_name"].split("/")[-1]
         # Use base_url from supervisor rather than hardcoding 127.0.0.1 — for
         # models on remote cluster hosts (e.g. `host: worker1`) the URL is
