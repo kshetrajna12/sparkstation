@@ -1248,5 +1248,155 @@ def cleanup(ctx, force):
     click.secho("✓ Cleanup complete", fg="green")
 
 
+# ─── voice: Voice Studio over the supervisor's /voice/* API ──────────────────
+# Same endpoints the Console uses (supervisor/voice.py). The registry lives on
+# the voice role (worker2 ~/cascade-tts/config), never in git.
+
+
+def _voice_api(ctx, method: str, path: str, timeout: float = 30.0, **kwargs):
+    supervisor_url = ctx.obj["supervisor_url"]
+    try:
+        r = httpx.request(method, f"{supervisor_url}{path}", timeout=timeout, **kwargs)
+    except httpx.HTTPError as e:
+        click.secho(f"Error: cannot reach supervisor ({e})", fg="red")
+        sys.exit(1)
+    if r.status_code >= 400:
+        try:
+            detail = r.json().get("detail", r.text)
+        except ValueError:
+            detail = r.text
+        click.secho(f"Error {r.status_code}: {detail}", fg="red")
+        sys.exit(1)
+    return r
+
+
+@cli.group()
+def voice():
+    """Voice Studio: Sparky's voice registry (clone / design / stock)."""
+    pass
+
+
+@voice.command("status")
+@click.pass_context
+def voice_status(ctx):
+    """Bot + TTS engine health and the default voice."""
+    st = _voice_api(ctx, "GET", "/voice/status").json()
+    bot = "up" if st["bot"]["ok"] else "DOWN"
+    click.echo(f"voice stack on {st['role']}: bot {bot} (:{st['bot']['port']})")
+    for name, e in st["engines"].items():
+        state = "ready" if e["ok"] else "down"
+        if e.get("apply") and e["apply"]["state"] == "restarting":
+            state = "restarting"
+        elif e.get("apply") and e["apply"]["state"] == "error":
+            state = f"restart failed: {e['apply']['error']}"
+        click.echo(f"  {name:<7} :{e['port']}  {state}")
+    d = st.get("default")
+    click.echo(f"default: {d['voice']} ({d['engine']})" if d else "default: (none set — bot uses CASCADE_VOICE)")
+
+
+@voice.command("list")
+@click.option("--json", "output_json", is_flag=True, help="Raw JSON")
+@click.pass_context
+def voice_list(ctx, output_json):
+    """List every registered voice across the three engines."""
+    r = _voice_api(ctx, "GET", "/voice/voices")
+    if output_json:
+        click.echo(r.text)
+        return
+    for v in r.json():
+        star = "★" if v["is_default"] else " "
+        detail = v.get("instruct") or (v.get("ref_text") or "")[:60]
+        click.echo(f" {star} {v['id']:<24} {v['engine']:<7} {v['language']:<9} {detail}")
+
+
+@voice.command("default")
+@click.argument("voice_id")
+@click.option("--engine", type=click.Choice(["clone", "stock", "design"]), help="Needed if the id exists in more than one engine")
+@click.pass_context
+def voice_default(ctx, voice_id, engine):
+    """Make VOICE_ID the voice Sparky speaks in (new sessions)."""
+    if engine is None:
+        matches = [v for v in _voice_api(ctx, "GET", "/voice/voices").json() if v["id"] == voice_id]
+        if not matches:
+            click.secho(f"Error: no voice {voice_id!r}", fg="red"); sys.exit(1)
+        if len(matches) > 1:
+            click.secho(f"Error: {voice_id!r} exists in {[m['engine'] for m in matches]} — pass --engine", fg="red"); sys.exit(1)
+        engine = matches[0]["engine"]
+    d = _voice_api(ctx, "POST", f"/voice/voices/{engine}/{voice_id}/default").json()["default"]
+    click.secho(f"✓ default voice: {d['voice']} ({d['engine']})", fg="green")
+
+
+@voice.command("design")
+@click.argument("voice_id")
+@click.argument("description")
+@click.option("--language", default="English", show_default=True)
+@click.pass_context
+def voice_design(ctx, voice_id, description, language):
+    """Create a designed voice from a text DESCRIPTION (live immediately)."""
+    _voice_api(ctx, "POST", "/voice/voices/design", json={"id": voice_id, "instruct": description, "language": language})
+    click.secho(f"✓ designed voice {voice_id} saved", fg="green")
+
+
+@voice.command("clone")
+@click.argument("voice_id")
+@click.argument("clip", type=click.Path(exists=True, dir_okay=False))
+@click.option("--transcript", required=True, help="Exact transcript of the clip (required by the cloner)")
+@click.option("--language", default="English", show_default=True)
+@click.option("--instruct", default="", help="Optional style direction applied to every line")
+@click.pass_context
+def voice_clone(ctx, voice_id, clip, transcript, language, instruct):
+    """Register a cloned voice from an 8-12 s reference CLIP (restarts the clone engine, ~45 s)."""
+    with open(clip, "rb") as f:
+        r = _voice_api(ctx, "POST", "/voice/voices/clone", timeout=180,
+                       data={"id": voice_id, "ref_text": transcript, "language": language, "instruct": instruct},
+                       files={"file": (os.path.basename(clip), f)})
+    body = r.json()
+    click.secho(f"✓ clone voice {voice_id} registered ({body['duration_seconds']}s clip); clone engine restarting", fg="green")
+    if body.get("warning"):
+        click.secho(f"  warning: {body['warning']}", fg="yellow")
+
+
+@voice.command("instruct")
+@click.argument("engine", type=click.Choice(["clone", "stock", "design"]))
+@click.argument("voice_id")
+@click.argument("text")
+@click.pass_context
+def voice_instruct(ctx, engine, voice_id, text):
+    """Set a voice's style instruct (design: its identity). Empty TEXT clears it."""
+    body = _voice_api(ctx, "PATCH", f"/voice/voices/{engine}/{voice_id}", json={"instruct": text}).json()
+    click.secho("✓ saved" + (" — engine restarting (~45 s)" if body.get("applying") else ""), fg="green")
+
+
+@voice.command("delete")
+@click.argument("engine", type=click.Choice(["clone", "design"]))
+@click.argument("voice_id")
+@click.confirmation_option(prompt="Delete this voice (and its reference clip, for clones)?")
+@click.pass_context
+def voice_delete(ctx, engine, voice_id):
+    """Remove a cloned or designed voice."""
+    body = _voice_api(ctx, "DELETE", f"/voice/voices/{engine}/{voice_id}").json()
+    click.secho("✓ deleted" + (" — engine restarting (~45 s)" if body.get("applying") else ""), fg="green")
+
+
+@voice.command("sample")
+@click.argument("voice_id")
+@click.option("--text", default=None, help="What to say (default: a short Sparky line)")
+@click.option("--instruct", default=None, help="Per-line direction (stock/design)")
+@click.option("-o", "--output", default=None, help="WAV path (default: ./<voice_id>.wav)")
+@click.pass_context
+def voice_sample(ctx, voice_id, text, instruct, output):
+    """Synthesize a WAV sample with a registered voice."""
+    body = {"voice": voice_id}
+    if text:
+        body["text"] = text
+    if instruct:
+        body["instruct"] = instruct
+    r = _voice_api(ctx, "POST", "/voice/speak", timeout=120, json=body)
+    out = output or f"{voice_id}.wav"
+    with open(out, "wb") as f:
+        f.write(r.content)
+    click.secho(f"✓ wrote {out} ({len(r.content) // 1024} KB)", fg="green")
+
+
 if __name__ == "__main__":
     cli(obj={})

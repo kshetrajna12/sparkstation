@@ -12,6 +12,8 @@ license = { file = "LICENSE" }
 dependencies = [
     # Core web framework
     "fastapi>=0.110.0",
+    "python-multipart>=0.0.9",  # /voice/voices/clone multipart upload
+    "websockets>=13.0",         # /voice/talk relay to the cascade bot
     "uvicorn[standard]>=0.29.0",
     "httpx>=0.27.0",
     "pydantic>=2.6.4",
@@ -71,6 +73,9 @@ packages = ["supervisor", "gateway"]
 [tool.hatch.build.targets.wheel.force-include]
 "cli.py" = "cli.py"
 "cli_init.py" = "cli_init.py"
+# The Console SPA is static files next to the packages; the supervisor mounts
+# <repo>/console at /console/.
+"console" = "console"
 
 [dependency-groups]
 dev = [

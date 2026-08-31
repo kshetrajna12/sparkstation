@@ -11,8 +11,14 @@ Run: .venv/bin/python -m voicecascade.bot -t webrtc --host 0.0.0.0 --port 7860
 Session config (RTVI client-message, BEFORE client-ready, all optional):
   {"t": "configure", "d": {"system_instruction": "...",   # OpenClaw-owned
                             "voice": "Ryan",              # TTS voice slot
+                            "engine": "clone"|"stock"|"design",  # which TTS server
                             "brain": "auto"|"gemma4-2b"|"default"}}
 Ack: server-message {"type": "configured", "data": {...}}.
+
+Default voice: the Console writes {"default": {"voice", "engine"}} to
+<CASCADE_VOICE_CONFIG_DIR>/console.json (the TTS registry dir); it is read at
+every session start, falling back to CASCADE_VOICE / the clone engine. Engine
+URLs: CASCADE_TTS_CLONE / CASCADE_TTS_STOCK / CASCADE_TTS_DESIGN.
 """
 from __future__ import annotations
 
@@ -65,6 +71,30 @@ from .router_llm import RouterLLMService
 
 GATEWAY = os.environ.get("CASCADE_GATEWAY", "http://192.168.101.10:8000/v1")
 TTS_URL = os.environ.get("CASCADE_TTS", "http://127.0.0.1:8023/v1")  # VoiceClone server
+# The three Qwen3-TTS servers side by side (see voice.py in the supervisor for
+# the engine table). A voice id is only meaningful together with its engine.
+TTS_ENGINES = {
+    "clone": os.environ.get("CASCADE_TTS_CLONE", TTS_URL),
+    "stock": os.environ.get("CASCADE_TTS_STOCK", "http://127.0.0.1:8024/v1"),
+    "design": os.environ.get("CASCADE_TTS_DESIGN", "http://127.0.0.1:8025/v1"),
+}
+VOICE_CONFIG_DIR = os.path.expanduser(os.environ.get("CASCADE_VOICE_CONFIG_DIR", "~/cascade-tts/config"))
+
+
+def default_voice() -> tuple[str, str]:
+    """(voice, engine) for a new session: console.json (written by the
+    Sparkstation Console's Voice Studio) else CASCADE_VOICE on the clone engine."""
+    fallback = (os.environ.get("CASCADE_VOICE", "K"), "clone")
+    try:
+        import json
+        with open(os.path.join(VOICE_CONFIG_DIR, "console.json")) as f:
+            d = (json.load(f) or {}).get("default") or {}
+        voice, engine = d.get("voice"), d.get("engine", "clone")
+        if isinstance(voice, str) and voice.strip() and engine in TTS_ENGINES:
+            return voice.strip(), engine
+    except (OSError, ValueError):
+        pass
+    return fallback
 FAST_BRAIN = os.environ.get("CASCADE_FAST_BRAIN", "gemma4-2b")
 THINK_BRAIN = os.environ.get("CASCADE_THINK_BRAIN", "default")
 
@@ -163,10 +193,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         fast_model=FAST_BRAIN, think_model=THINK_BRAIN,
         base_url=GATEWAY, api_key="dummy-key",
     )
+    voice, engine = default_voice()  # K's pick 2026-08-30: cloned voice "K"
     tts = QwenTTSService(
-        base_url=TTS_URL, api_key="dummy-key",
-        voice=os.environ.get("CASCADE_VOICE", "K"),  # K's pick 2026-08-30: cloned voice
-        model="tts-1", sample_rate=24_000,
+        base_url=TTS_ENGINES[engine], api_key="dummy-key",
+        voice=voice, model="tts-1", sample_rate=24_000,
     )
     context = LLMContext(
         messages=[{"role": "system", "content": DEV_SYSTEM_INSTRUCTION}]
@@ -272,6 +302,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         if isinstance(v, str) and v.strip():
             tts._settings.voice = v.strip()
             applied["voice"] = v.strip()
+        eng = d.get("engine")
+        if isinstance(eng, str) and eng in TTS_ENGINES:
+            # swap the TTS server for this session (openai client base_url is settable)
+            tts._client.base_url = TTS_ENGINES[eng]
+            applied["engine"] = eng
         b = d.get("brain")
         if isinstance(b, str) and b.strip() and b != "auto":
             llm._fast = llm._think = b.strip()
@@ -281,8 +316,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(_t, _c):
-        logger.info("cascade client connected (brains: {}/{}, tts voice {})",
-                    FAST_BRAIN, THINK_BRAIN, tts._settings.voice)
+        logger.info("cascade client connected (brains: {}/{}, tts voice {} @ {})",
+                    FAST_BRAIN, THINK_BRAIN, tts._settings.voice, tts._client.base_url)
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(_t, _c):
