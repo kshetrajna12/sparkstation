@@ -25,6 +25,7 @@ import asyncio
 import logging
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -112,6 +113,81 @@ async def start_by_alias(alias: str, profile: Optional[str] = Query(None)):
         volumes=cfg.get("volumes") or [],
     )
     return await start_model(req)
+
+
+# ── per-host resources ───────────────────────────────────────────────────────
+# /resources only reads the local machine (nvidia-smi + /proc/meminfo on the
+# supervisor host). The console's Cluster section wants the workers too, so
+# this probes every cluster role over the same SSH the launchers use. Probes
+# run in parallel and the result is cached briefly — the SPA polls every 10 s.
+
+_HOST_PROBE_CMD = (
+    "cat /proc/meminfo; "
+    "nvidia-smi --query-gpu=temperature.gpu,power.draw --format=csv,noheader,nounits 2>/dev/null"
+)
+_hosts_cache: dict = {"at": 0.0, "data": None}
+_HOSTS_CACHE_S = 8.0
+
+
+def _parse_host_probe(text: str) -> dict:
+    mem = {}
+    gpu_temp = gpu_power = None
+    for line in text.splitlines():
+        if line.startswith(("MemTotal:", "MemAvailable:")):
+            key = line.split(":")[0]
+            try:
+                mem[key] = int(line.split()[1]) / (1024.0 ** 2)  # kB → GB
+            except (IndexError, ValueError):
+                pass
+        elif "," in line and "kB" not in line:
+            parts = [p.strip() for p in line.split(",")]
+            try:
+                gpu_temp, gpu_power = float(parts[0]), float(parts[1])
+            except (IndexError, ValueError):
+                pass
+    total, avail = mem.get("MemTotal"), mem.get("MemAvailable")
+    return {
+        "ok": total is not None,
+        "mem_total_gb": total,
+        "mem_available_gb": avail,
+        "mem_used_gb": (total - avail) if total is not None and avail is not None else None,
+        "gpu_temp_c": gpu_temp,
+        "gpu_power_w": gpu_power,
+    }
+
+
+def _probe_host(role: str) -> dict:
+    from supervisor.models_config import get_cluster_config
+    cluster = get_cluster_config()
+    entry = cluster.hosts.get(role)
+    local = entry is None or entry.ip is None or entry.ip in ("127.0.0.1", "localhost", "::1")
+    if not local and not entry.ssh_user:
+        return {"ok": False, "error": "no ssh_user configured"}
+    argv = ["bash", "-c", _HOST_PROBE_CMD] if local else         ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", f"{entry.ssh_user}@{entry.ip}", _HOST_PROBE_CMD]
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=12)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return {"ok": False, "error": str(e)[:120]}
+    if r.returncode != 0 and "MemTotal" not in r.stdout:
+        return {"ok": False, "error": r.stderr.strip()[:120] or f"exit {r.returncode}"}
+    out = _parse_host_probe(r.stdout)
+    if entry is not None and entry.label:
+        out["label"] = entry.label
+    return out
+
+
+@router.get("/resources/hosts")
+async def resources_per_host():
+    """Memory + GPU snapshot for every cluster role (briefly cached)."""
+    now = time.monotonic()
+    if _hosts_cache["data"] is not None and now - _hosts_cache["at"] < _HOSTS_CACHE_S:
+        return _hosts_cache["data"]
+    from supervisor.models_config import get_cluster_config
+    roles = list(get_cluster_config().hosts.keys())
+    results = await asyncio.gather(*(asyncio.to_thread(_probe_host, r) for r in roles))
+    data = {"hosts": dict(zip(roles, results))}
+    _hosts_cache.update(at=now, data=data)
+    return data
 
 
 # ── logs ─────────────────────────────────────────────────────────────────────

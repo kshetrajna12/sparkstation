@@ -360,8 +360,11 @@
   async function refreshCluster() {
     clearTimeout(clusterTimer);
     try {
-      const [res, det] = await Promise.all([api("GET", "/resources"), api("GET", "/models/detailed")]);
-      renderResources(res);
+      const [res, det, hosts] = await Promise.all([
+        api("GET", "/resources"), api("GET", "/models/detailed"),
+        api("GET", "/resources/hosts").catch(() => null),
+      ]);
+      renderResources(res, hosts);
       renderModels(det.models || []);
       if (!profilesInfo) { profilesInfo = await api("GET", "/profiles"); renderStartControls(det.models || []); }
       else renderStartControls(det.models || []);
@@ -370,14 +373,28 @@
     if (clusterVisible) clusterTimer = setTimeout(refreshCluster, 10000);
   }
 
-  function renderResources(r) {
-    const usedPct = Math.round(100 * r.unified_memory_used_gb / r.unified_memory_gb);
-    $("#resource-cards").innerHTML = `
-      <div class="card"><div class="big">${r.unified_memory_used_gb.toFixed(1)} <span class="sub">/ ${r.unified_memory_gb.toFixed(0)} GB</span></div>
-        <div class="sub">primary unified memory (limit ${r.unified_memory_limit_gb.toFixed(0)} GB)</div>
-        <div class="membar${usedPct > 80 ? " hot" : ""}"><div style="width:${usedPct}%"></div></div></div>
-      <div class="card"><div class="big">${r.gpu_temperature_c.toFixed(0)}°C</div><div class="sub">GPU temp · ${r.gpu_power_draw_w.toFixed(0)} W draw</div></div>
-      <div class="card"><div class="big">${r.resident_models_count} <span class="sub">/ ${r.max_resident_models}</span></div><div class="sub">resident models (all hosts)</div></div>`;
+  function hostCard(role, h) {
+    if (!h || !h.ok) return `<div class="card"><div class="big">${esc(role)}</div><div class="sub bad-text">unreachable${h && h.error ? ": " + esc(h.error) : ""}</div></div>`;
+    const usedPct = Math.round(100 * h.mem_used_gb / h.mem_total_gb);
+    const gpu = h.gpu_temp_c != null ? `${h.gpu_temp_c.toFixed(0)}°C · ${h.gpu_power_w.toFixed(0)} W` : "gpu n/a";
+    return `<div class="card">
+      <div class="big">${h.mem_used_gb.toFixed(1)} <span class="sub">/ ${h.mem_total_gb.toFixed(0)} GB</span></div>
+      <div class="sub">${esc(role)}${h.label ? ` (${esc(h.label)})` : ""} · ${esc(gpu)} · ${h.mem_available_gb.toFixed(0)} GB free</div>
+      <div class="membar${usedPct > 80 ? " hot" : ""}"><div style="width:${usedPct}%"></div></div></div>`;
+  }
+
+  function renderResources(r, hosts) {
+    let cards = "";
+    if (hosts && hosts.hosts) {
+      cards = Object.entries(hosts.hosts).map(([role, h]) => hostCard(role, h)).join("");
+    } else {
+      const usedPct = Math.round(100 * r.unified_memory_used_gb / r.unified_memory_gb);
+      cards = `<div class="card"><div class="big">${r.unified_memory_used_gb.toFixed(1)} <span class="sub">/ ${r.unified_memory_gb.toFixed(0)} GB</span></div>
+        <div class="sub">primary unified memory</div>
+        <div class="membar${usedPct > 80 ? " hot" : ""}"><div style="width:${usedPct}%"></div></div></div>`;
+    }
+    cards += `<div class="card"><div class="big">${r.resident_models_count} <span class="sub">/ ${r.max_resident_models}</span></div><div class="sub">resident models (all hosts)</div></div>`;
+    $("#resource-cards").innerHTML = cards;
   }
 
   function fmtIdle(sec) {

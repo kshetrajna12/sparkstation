@@ -83,6 +83,7 @@ button.danger { color: var(--bad); }
 .cards .card { min-width: 180px; flex: 1; }
 .card .big { font-size: 1.5rem; font-weight: 700; }
 .card .sub { color: var(--muted); font-size: .8rem; }
+.bad-text { color: var(--bad); }
 .chip { border: 1px solid var(--line); border-radius: 999px; padding: .15rem .7rem; font-size: .8rem; color: var(--muted); }
 .membar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin-top: .4rem; }
 .membar div { height: 100%; background: var(--accent); }

@@ -150,3 +150,25 @@ def test_tail_container_falls_back_to_file_when_docker_fails(client, monkeypatch
     monkeypatch.setattr(console_api.subprocess, "run", fake_run)
     r = client.get("/logs/m-1")
     assert r.status_code == 200 and "launcher output" in r.text
+
+
+# ── per-host resources ───────────────────────────────────────────────────────
+
+def test_parse_host_probe():
+    from supervisor.console_api import _parse_host_probe
+    out = _parse_host_probe("MemTotal:       125000000 kB\nMemAvailable:    80000000 kB\n55, 12.34\n")
+    assert out["ok"] and 118 < out["mem_total_gb"] < 120
+    assert out["gpu_temp_c"] == 55 and out["gpu_power_w"] == 12.34
+    assert abs(out["mem_used_gb"] - (out["mem_total_gb"] - out["mem_available_gb"])) < 1e-9
+    # no nvidia-smi line → memory still parses
+    out = _parse_host_probe("MemTotal: 1000000 kB\nMemAvailable: 400000 kB\n")
+    assert out["ok"] and out["gpu_temp_c"] is None
+
+
+def test_resources_hosts_lists_cluster_roles(client, monkeypatch):
+    monkeypatch.setattr(console_api, "_probe_host", lambda role: {"ok": True, "mem_total_gb": 1.0,
+        "mem_available_gb": 0.5, "mem_used_gb": 0.5, "gpu_temp_c": None, "gpu_power_w": None})
+    console_api._hosts_cache.update(at=0.0, data=None)
+    d = client.get("/resources/hosts").json()
+    assert set(d["hosts"]) >= {"primary", "worker1", "worker2"}
+    console_api._hosts_cache.update(at=0.0, data=None)
