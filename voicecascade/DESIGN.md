@@ -66,6 +66,27 @@ same streaming image, per-request voice — no model reload to swap voices):
 - :8025 VoiceDesign (1.7B) — voice invented from a prose description;
   fresh sample per request, pin via the recipe's seed workflow when chosen
 
+## Tool calling (built + verified 2026-08-30)
+
+Contract v1.1 shapes, unchanged for the bridge: RTVI client-message
+`{"t":"register-tools","d":{"tools":[OpenAI fn specs],"system_instruction":...}}`
+(total replacement) -> ack `tools-registered`; brain tool calls forward as
+`llm-function-call` (via a catch-all register_function(None) that defers —
+never calls result_callback); client answers `llm-function-call-result`,
+which the RTVIProcessor turns into a FunctionCallResultFrame that completes
+the call and re-runs the brain. Verified: battery question -> gemma (fast
+lane!) called get_battery_level -> spoken answer in 4.55 s end-to-end.
+
+## Clone-TTS choppiness (K report 2026-08-30, fixed)
+
+Symptom: browser session "extremely choppy, keeps cutting". Cause: clone
+generation at 1.05x realtime with the 30 s reference — every request
+re-processes the full ICL reference (the server's embedding-precompute cache
+path is broken in this image: `_load_voice_clone_prompt` missing). Fixes
+measured: trim ref to 12.5 s (1.28x) + chunk_size 16 (1.45x). Registry now:
+`K` = K_ref12.wav + chunk 16 (prod), `K_full` = 30 s ref kept for fidelity
+comparisons. Sentence-gap pauses shrink with the same headroom.
+
 **K chose the cloned-K voice as Sparky's voice** (registry entry `K`:
 K_ref.wav 30 s + Kyutai-transcribed ref_text). Bot defaults now point at
 :8023 / voice "K"; per-session override stays available via the `configure`
