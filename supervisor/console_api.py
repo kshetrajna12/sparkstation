@@ -383,14 +383,19 @@ async def playground_chat(request: Request):
     return StreamingResponse(
         body_iter(),
         status_code=resp.status_code,
-        # exact "text/event-stream": some edges only enter SSE pass-through
-        # mode on an exact match; LiteLLM appends "; charset=utf-8".
-        media_type="text/event-stream" if "text/event-stream" in resp.headers.get("content-type", "")
-        else resp.headers.get("content-type", "application/json"),
+        # exact "text/event-stream" via raw header: some edges only enter SSE
+        # pass-through mode on an exact match, and Starlette's media_type
+        # parameter re-appends "; charset=utf-8" to any text/* type.
         # no-transform: without it the Cloudflare edge runs the stream through
         # its compression/transform layer, which coalesces SSE into ~KB flushes
         # (browser saw 3-4 sentences at a time; localhost was per-token).
-        headers={"Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no"},
+        headers={
+            "Content-Type": "text/event-stream"
+            if "text/event-stream" in resp.headers.get("content-type", "")
+            else resp.headers.get("content-type", "application/json"),
+            "Cache-Control": "no-store, no-transform",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
