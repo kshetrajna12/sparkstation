@@ -172,3 +172,103 @@ def test_resources_hosts_lists_cluster_roles(client, monkeypatch):
     d = client.get("/resources/hosts").json()
     assert set(d["hosts"]) >= {"primary", "worker1", "worker2"}
     console_api._hosts_cache.update(at=0.0, data=None)
+
+
+# ── profile switch ───────────────────────────────────────────────────────────
+
+def _live(alias, status="running"):
+    m = _model(id=f"{alias}-1", alias=alias, status=status)
+    return m
+
+
+@pytest.fixture
+def switch_client(client, monkeypatch):
+    # live set: voice-profile-ish minus voicecascade, plus a straggler
+    client.registry.models = [_live("qwen-flash-next"), _live("bge-m3"),
+                              _live("clip-vit"), _live("face-detect"),
+                              _live("gemma4-2b"), _live("flux-dev")]
+    console_api._switch_state.clear(); console_api._switch_state.update(state="idle")
+    console_api._switch_task = None
+    return client
+
+
+def test_switch_plan(switch_client):
+    d = switch_client.get("/profiles/voice/plan").json()
+    assert d["stop"] == ["flux-dev"]
+    assert d["start"] == ["voicecascade"]
+    assert "qwen-flash-next" in d["keep"]
+    assert switch_client.get("/profiles/nope/plan").status_code == 404
+
+
+def test_switch_activate_runs_plan_and_repoints(switch_client, monkeypatch, tmp_path):
+    import supervisor.main as main_mod
+    from supervisor.config import settings
+
+    calls = []
+
+    async def fake_stop(model_id):
+        calls.append(("stop", model_id))
+        for m in switch_client.registry.models:
+            if m.id == model_id:
+                m.status = "stopped"
+        return {"ok": True}
+
+    async def fake_start(req):
+        calls.append(("start", req.model_alias))
+        return {"model_id": "new", "status": "starting"}
+
+    class FakeGW:
+        default_model_alias = vision_model_alias = None
+        async def sync_models(self):
+            calls.append(("sync", None))
+
+    monkeypatch.setattr(main_mod, "stop_model", fake_stop)
+    monkeypatch.setattr(main_mod, "start_model", fake_start)
+    monkeypatch.setattr(main_mod, "gateway_sync", FakeGW())
+    monkeypatch.setattr(console_api, "LAST_PROFILE_FILE", tmp_path / "last_profile")
+    old_profile = settings.startup_profile
+
+    r = switch_client.post("/profiles/voice/activate")
+    assert r.status_code == 200
+    assert r.json()["plan"]["stop"] == ["flux-dev"]
+    # TestClient runs the loop to completion, so the background task is done
+    st = switch_client.get("/profiles/switch-status").json()
+    assert st["state"] == "done", st
+    assert ("stop", "flux-dev-1") in calls
+    assert ("start", "voicecascade") in calls and ("sync", None) in calls
+    assert (tmp_path / "last_profile").read_text() == "voice"
+    assert settings.startup_profile == "voice"
+    assert main_mod.default_model_alias  # repointed for the new profile
+    settings.startup_profile = old_profile
+
+
+def test_switch_rejects_concurrent(switch_client, monkeypatch):
+    import asyncio as aio
+    console_api._switch_state.update(state="switching", profile="deep")
+    class FakeTask:
+        def done(self): return False
+    monkeypatch.setattr(console_api, "_switch_task", FakeTask())
+    assert switch_client.post("/profiles/voice/activate").status_code == 409
+
+
+def test_switch_step_failure_marks_error(switch_client, monkeypatch):
+    import supervisor.main as main_mod
+
+    async def boom(model_id):
+        raise RuntimeError("docker exploded")
+
+    async def fake_start(req):
+        return {"ok": True}
+
+    monkeypatch.setattr(main_mod, "stop_model", boom)
+    monkeypatch.setattr(main_mod, "start_model", fake_start)
+    monkeypatch.setattr(console_api, "LAST_PROFILE_FILE", pathlib_Path("/nonexistent/never"))
+    r = switch_client.post("/profiles/voice/activate")
+    assert r.status_code == 200
+    st = switch_client.get("/profiles/switch-status").json()
+    assert st["state"] == "error"
+    bad = next(x for x in st["steps"] if x["alias"] == "flux-dev")
+    assert bad["status"] == "error" and "docker exploded" in bad["error"]
+
+
+from pathlib import Path as pathlib_Path

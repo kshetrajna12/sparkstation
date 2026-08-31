@@ -190,6 +190,135 @@ async def resources_per_host():
     return data
 
 
+# ── profile switching ────────────────────────────────────────────────────────
+# The CLI's full switch is `sparkstation stop && start -d --profile X` (kills
+# the supervisor too). This is the lighter, supervisor-resident version: stop
+# the live models the target profile doesn't include, start the ones it lacks,
+# then repoint everything that carries "the active profile" at runtime —
+# settings.startup_profile, main.default_model_alias / vision_model_alias,
+# gateway_sync's copies — and the CLI's sticky file (data/last_profile), so a
+# later plain `sparkstation start` resumes the same profile. One switch at a
+# time; progress is polled via GET /profiles/switch-status.
+
+LAST_PROFILE_FILE = Path("data/last_profile")
+LIVE_STATUSES = ("running", "starting", "suspended")
+
+_switch_state: dict = {"state": "idle"}
+_switch_task: Optional[asyncio.Task] = None
+
+
+async def _profile_plan(profile: str) -> dict:
+    from supervisor import main
+    from supervisor.models_config import get_profile_models
+
+    target = {m.alias: m for m in get_profile_models(profile)}
+    live = {}
+    for m in await main.registry.list_all():
+        if str(m.status) in LIVE_STATUSES:
+            live[m.model_alias or m.model_name] = m
+    return {
+        "profile": profile,
+        "stop": sorted(a for a in live if a not in target),
+        "start": sorted(a for a in target if a not in live),
+        "keep": sorted(a for a in live if a in target),
+    }
+
+
+@router.get("/profiles/{profile}/plan")
+async def profile_switch_plan(profile: str, request: Request):
+    _registry(request)
+    cfg = load_models_config()
+    if profile not in cfg.profiles:
+        raise HTTPException(404, f"no profile {profile!r}")
+    return await _profile_plan(profile)
+
+
+async def _run_switch(profile: str) -> None:
+    from supervisor import main
+    from supervisor.models_config import get_default_model_alias, get_vision_model_alias
+
+    steps = []
+    _switch_state.update(state="switching", profile=profile, steps=steps, error=None,
+                         started_at=time.strftime("%H:%M:%S"))
+
+    async def step(action, alias, coro):
+        entry = {"action": action, "alias": alias, "status": "running"}
+        steps.append(entry)
+        try:
+            await coro
+            entry["status"] = "done"
+        except Exception as e:
+            detail = getattr(e, "detail", None) or str(e)
+            entry["status"] = "error"
+            entry["error"] = str(detail)[:200]
+            logger.error(f"profile switch {profile}: {action} {alias} failed: {detail}")
+            return False
+        return True
+
+    try:
+        plan = await _profile_plan(profile)
+        ok = True
+        # stops first: free the memory the incoming models need
+        for alias in plan["stop"]:
+            m = next((x for x in await main.registry.list_all()
+                      if (x.model_alias or x.model_name) == alias and str(x.status) in LIVE_STATUSES), None)
+            if m is not None:
+                ok = await step("stop", alias, main.stop_model(m.id)) and ok
+        for alias in plan["start"]:
+            ok = await step("start", alias, start_by_alias(alias, profile=profile)) and ok
+
+        if not ok:
+            _switch_state.update(state="error", error="one or more steps failed (see steps)")
+            return
+
+        # repoint runtime + sticky profile state
+        from supervisor.config import settings as live_settings
+        live_settings.startup_profile = profile
+        main.default_model_alias = get_default_model_alias(profile)
+        main.vision_model_alias = get_vision_model_alias(profile)
+        if main.gateway_sync is not None:
+            main.gateway_sync.default_model_alias = main.default_model_alias
+            main.gateway_sync.vision_model_alias = main.vision_model_alias
+            try:
+                await main.gateway_sync.sync_models()  # don't wait for the 60 s pass
+            except Exception as e:
+                logger.warning(f"post-switch gateway sync failed (periodic sync will retry): {e}")
+        try:
+            LAST_PROFILE_FILE.write_text(profile)
+        except OSError as e:
+            logger.warning(f"could not persist sticky profile: {e}")
+        _switch_state.update(state="done")
+        logger.info(f"profile switch complete: {profile} "
+                    f"(default={main.default_model_alias}, vision={main.vision_model_alias})")
+    except Exception as e:
+        logger.exception(f"profile switch to {profile} crashed")
+        _switch_state.update(state="error", error=str(e)[:300])
+
+
+@router.post("/profiles/{profile}/activate", dependencies=[Depends(require_api_key)])
+async def activate_profile(profile: str, request: Request):
+    """Switch the running system to `profile` (background; poll /profiles/switch-status).
+
+    Stops models outside the profile, starts the missing ones (through the
+    normal start path, so per-host memory gates still apply), updates the
+    default/vision aliases + gateway, and persists the sticky profile."""
+    global _switch_task
+    _registry(request)
+    cfg = load_models_config()
+    if profile not in cfg.profiles:
+        raise HTTPException(404, f"no profile {profile!r}")
+    if _switch_task is not None and not _switch_task.done():
+        raise HTTPException(409, f"a profile switch is already running ({_switch_state.get('profile')})")
+    plan = await _profile_plan(profile)
+    _switch_task = asyncio.create_task(_run_switch(profile))
+    return {"ok": True, "profile": profile, "plan": plan, "status_url": "/profiles/switch-status"}
+
+
+@router.get("/profiles/switch-status")
+async def switch_status():
+    return _switch_state
+
+
 # ── logs ─────────────────────────────────────────────────────────────────────
 
 @router.get("/logs")
