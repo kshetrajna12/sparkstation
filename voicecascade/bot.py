@@ -58,6 +58,7 @@ from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
+from . import metrics
 from .kyutai_stt import KyutaiSTTService
 from .qwen_tts import QwenTTSService
 from .router_llm import RouterLLMService
@@ -116,6 +117,19 @@ class IngressPacer(FrameProcessor):
                         logger.warning("IngressPacer: dropping silent frames (client ahead of real time)")
                         self._warned = True
                     return
+        await self.push_frame(frame, direction)
+
+
+class CascadeMetricsTap(FrameProcessor):
+    """Pass-through that feeds every frame to the prometheus tap."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._tap = metrics.MetricsTap()
+
+    async def process_frame(self, frame, direction):
+        await super().process_frame(frame, direction)
+        self._tap.on_frame(frame)
         await self.push_frame(frame, direction)
 
 
@@ -186,6 +200,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         user_agg,
         llm,
         tts,
+        CascadeMetricsTap(),
         transport.output(),
         assistant_agg,
     ])
@@ -210,6 +225,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         via the RTVI processor, which completes the call and re-runs the LLM."""
         logger.info("Tool call -> client: {}({}) id={}",
                     params.function_name, params.arguments, params.tool_call_id)
+        metrics.tool_call(params.function_name)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
             await rtvi.handle_function_call(params)
@@ -285,14 +301,17 @@ async def bot(runner_args: RunnerArguments):
     global _active
     if isinstance(runner_args, WebSocketRunnerArguments) and _active > 0:
         logger.warning("Rejecting WS connection: session active (4429)")
+        metrics.session_started(rejected=True)
         await runner_args.websocket.close(code=WS_CLOSE_BUSY, reason="session-busy; retry")
         return
     transport = create_transport(runner_args)
     _active += 1
+    metrics.session_started()
     try:
         await run_bot(transport, runner_args)
     finally:
         _active -= 1
+        metrics.session_ended()
 
 
 if __name__ == "__main__":
@@ -302,4 +321,5 @@ if __name__ == "__main__":
     # must not race a 19 s model load.
     from .kyutai_stt import preload
     preload()
+    metrics.start_metrics_server()
     main()

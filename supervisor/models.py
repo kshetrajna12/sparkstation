@@ -40,7 +40,7 @@ class Backend(str, Enum):
     FACE = "face"
     TRT_LLM = "trt-llm"  # Future support
     DSPARK = "dspark"  # Anemll DSpark multi-node compose stack (2x GB10 TP=2)
-    VOICECHAT = "voicechat"  # pipecat nemotron-voicechat runtime (speech-to-speech)
+    VOICECASCADE = "voicecascade"  # cascade voice stack: Kyutai STT -> routed brain -> Qwen3-TTS (pipecat)
 
 
 class ModelType(str, Enum):

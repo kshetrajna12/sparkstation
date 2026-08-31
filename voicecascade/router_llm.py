@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 
 from loguru import logger
+
+from . import metrics
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.openai.llm import OpenAILLMService
 
@@ -54,4 +56,5 @@ class RouterLLMService(OpenAILLMService):
         # audible word, so suppress it even on the think lane (the win there
         # is the bigger model, not chain-of-thought).
         self._settings.extra = {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}} if model == self._think else {}
+        metrics.turn_routed("think" if model == self._think else "fast")
         await super()._process_context(context)

@@ -9,7 +9,7 @@ from supervisor.launchers.clip_launcher import CLIPLauncher
 from supervisor.launchers.species_launcher import SpeciesLauncher
 from supervisor.launchers.face_launcher import FaceLauncher
 from supervisor.launchers.dspark_launcher import DsparkLauncher
-from supervisor.launchers.voicechat_launcher import VoicechatLauncher
+from supervisor.launchers.voicecascade_launcher import VoicecascadeLauncher
 from supervisor.models import Backend
 
 
@@ -25,7 +25,7 @@ class LauncherFactory:
             Backend.SPECIES: SpeciesLauncher(),
             Backend.FACE: FaceLauncher(),
             Backend.DSPARK: DsparkLauncher(),
-            Backend.VOICECHAT: VoicechatLauncher(),
+            Backend.VOICECASCADE: VoicecascadeLauncher(),
             # Backend.TRT_LLM: TRTLLMLauncher(),  # TODO: Implement
         }
 

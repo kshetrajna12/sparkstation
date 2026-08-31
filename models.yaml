@@ -350,48 +350,34 @@ models:
       enable_auto_tool_choice: true   # OpenClaw active-memory sends tools
       tool_call_parser: "gemma4"      # native vLLM parser for Gemma 4
 
-  voicechat:
-    # NVIDIA NemotronLabs VoiceChat 11B — end-to-end speech-to-speech,
-    # full-duplex, tool-calling — via the pipecat DGX Spark runtime
-    # (github.com/pipecat-ai/nemotron-voicechat-dgx-spark, checkout at
-    # ~/nemotron-voicechat on worker2; bootstrap cache ~65 GiB in
-    # ~/.cache/nemotron-voicechat). Quant: community GPTQ W8A16 (Nano LLM) +
-    # W8 EarTTS, qualified for GB10. NOTE: qualification pins driver 580.142 /
-    # kernel 6.17.0-1014-nvidia — worker2 runs newer (580.173.02 / 1031);
-    # works in practice, but on weirdness suspect the version skew first.
+  voicecascade:
+    # Cascade voice stack for Sparky/Reachy: Kyutai STT-1B (streaming) ->
+    # per-turn routed brain via the gateway (gemma4-2b fast / default think)
+    # -> Qwen3-TTS streaming (VoiceClone server, voice "K"). Replaced Nemotron
+    # VoiceChat 11B 2026-08-30 (decision record: voicecascade/DESIGN.md;
+    # runtime checkout worker2:~/cascade-bot, module `voicecascade`).
     # NOT an OpenAI API — WebSocket/WebRTC audio on :7860 (gateway_sync
     # excludes model_type "voice" from LiteLLM). Clients connect directly:
-    # http://<worker2>:7860/client/ (browser needs HTTPS for mic unless
-    # loopback; Python/pipecat clients — e.g. the Reachy Mini bridge — don't).
-    name: "pipecat-ai/NVIDIA-NemotronLabs-VoiceChat-11B-Spark"
-    backend: "voicechat"
+    # browser playground http://<worker2>:7860/ (mic needs loopback/HTTPS —
+    # tunnel), bridges ws://<worker2>:7860/ws-client (protobuf frames, RTVI).
+    name: "voicecascade (kyutai-stt-1b + routed brain + qwen3-tts)"
+    backend: "voicecascade"
     model_type: "voice"
     host: worker2
-    quantization: "none"  # runtime-managed (pre-quantized release artifacts)
-    # Measured: ~85GB fresh, drifting to ~110GB with session aging — matches
-    # NVIDIA's official 80GB-class GPU requirement for this model family.
-    # Effectively owns worker2; nothing else fits beside it.
-    memory_gb: 105
+    quantization: "none"
+    # STT ~5GB + three Qwen3-TTS servers ~12GB + bot/CUDA overhead. Leaves
+    # worker2 room for a co-resident model, unlike the 105GB VoiceChat.
+    memory_gb: 24
     auto_suspend_enabled: false
     extra_args:
-      voicechat_dir: "/home/kshetrajna/nemotron-voicechat"
+      cascade_dir: "/home/kshetrajna/cascade-bot"
       port: 7860
-      launch_timeout_seconds: 900
-      # Client-executed tool schemas (OpenAI function format, path on worker2):
-      # advertised to the model; calls are forwarded to the connected RTVI/WS
-      # client as llm-function-call and answered with llm-function-call-result.
-      client_tools_file: "/home/kshetrajna/nemotron-voicechat/config/client-tools.json"
-      # NOTE (memory-squeeze finding, 2026-08-27): the container's env is
-      # FROZEN in the runtime's qualified config (config/*.toml +
-      # provenance.py constants) — VOICECHAT_VLLM_* knobs set here reach only
-      # the host CLI/bot, NOT the model server. Real footprint: ~85GB fresh,
-      # drifting to ~110GB with session aging (periodic restart reclaims it).
-      # Tuning the engine pools means forking the frozen candidate — don't.
+      metrics_port: 7861          # prometheus cascade_* metrics (http_sd)
+      tunnel_port: 18000          # worker-loopback tunnel to primary's gateway
+      tts_containers: [qwen3-tts-clone, qwen3-tts-vd, qwen3-tts-cv]
+      launch_timeout_seconds: 300
       extra_env:
-        # Dev iteration: skip the image/checkout provenance match so bot-source
-        # edits don't force a ~20min no-op image rebuild on cold `up` (our
-        # cli.py escape hatch). REMOVE for blessed runs and re-bootstrap.
-        VOICECHAT_DEV_BOT: "1"
+        CASCADE_VOICE: "K"        # K's cloned voice (registry: worker2 voices.json)
 
   flux-dev:
     name: "black-forest-labs/FLUX.1-dev"
@@ -434,21 +420,20 @@ profiles:
     face-detect: {}     # gallery recognition
     gemma4-2b: {}       # small fast chat on primary (Gemma 4 E2B QAT w4a16)
 
-  # voice: the generic stack + Nemotron VoiceChat 11B on worker2 (Reachy/
-  # Sparky voice). Deliberately NOT part of generic — voice owns worker2
-  # (~85GB fresh, drifts to ~110GB aged) and shouldn't ride every daily-
-  # driver restart. Two ways to run it:
+  # voice: the generic stack + the cascade voice stack on worker2 (Reachy/
+  # Sparky voice; replaced Nemotron VoiceChat 2026-08-30). Kept out of
+  # generic so the daily driver doesn't drag voice restarts. Two ways:
   #   full switch:  sparkstation stop && sparkstation start -d --profile voice
-  #   on demand:    sparkstation models start voicechat -p voice
-  #                 (generic stays up; voice stack starts on worker2 in ~8min;
-  #                  stop with: sparkstation models stop voicechat)
+  #   on demand:    sparkstation models start voicecascade -p voice
+  #                 (~2 min: STT preload + TTS container warmups;
+  #                  stop with: sparkstation models stop voicecascade)
   voice:
-    qwen-flash-next: {} # daily driver (single Spark, worker1) — leaves worker2 for voicechat
+    qwen-flash-next: {} # daily driver (single Spark, worker1)
     bge-m3: {}
     clip-vit: {}
     face-detect: {}
     gemma4-2b: {}
-    voicechat: {}
+    voicecascade: {}
 
   # deep: GLM-5.3-Flash 2-node reserve on worker1+worker2 (swapped from
   # DSV4-Flash 2026-08-28 after the TP2 autoresearch sweep — better agentic
