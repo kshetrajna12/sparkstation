@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sparkstation Console</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>⚡</text></svg>">
-<link rel="stylesheet" href="style.css?v=6">
+<link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
 <div class="shell">
@@ -13,7 +13,7 @@
     <div class="brand">⚡ Sparkstation</div>
     <a class="nav-item active" data-section="voice" href="#voice">🎙️ Voice Studio</a>
     <a class="nav-item" data-section="cluster" href="#cluster">🖥️ Cluster &amp; models</a>
-    <a class="nav-item soon" data-section="playground" href="#playground">💬 Playground <span class="pill">soon</span></a>
+    <a class="nav-item" data-section="playground" href="#playground">💬 Playground</a>
     <a class="nav-item soon" data-section="clients" href="#clients">🔑 Clients &amp; usage <span class="pill">soon</span></a>
     <a class="nav-item" data-section="logs" href="#logs">📜 Logs</a>
     <a class="nav-item" id="grafana-link" href="#" target="_blank" rel="noopener" hidden>📈 Metrics (Grafana) ↗</a>
@@ -177,6 +177,35 @@
       <pre id="log-view" class="log-view">loading…</pre>
     </section>
 
+    <section id="section-playground" class="section" hidden>
+      <header class="section-head">
+        <h1>Playground</h1>
+        <div class="row wrap">
+          <select id="pg-model"></select>
+          <select id="pg-reasoning" title="reasoning controls (thinking models)">
+            <option value="default" selected>reasoning: server default</option>
+            <option value="off">reasoning: off (fastest)</option>
+            <option value="bounded">reasoning: bounded (2K budget)</option>
+            <option value="high">reasoning: high (16K max_tokens)</option>
+          </select>
+          <button id="pg-clear" class="link-btn">clear chat</button>
+        </div>
+      </header>
+      <input id="pg-system" type="text" placeholder="System prompt (optional, applies to the whole conversation)">
+      <div id="pg-chat" class="transcript pg-chat"></div>
+      <div id="pg-stats" class="stats"></div>
+      <div id="pg-attachments" class="row wrap"></div>
+      <div class="row">
+        <textarea id="pg-input" rows="2" placeholder="Message… (Enter to send, Shift+Enter for newline; paste or attach images for vision)"></textarea>
+        <div class="col">
+          <button id="pg-send" class="primary">Send</button>
+          <button id="pg-stop" hidden>■ Stop</button>
+          <label class="attach-btn" title="attach image">🖼<input id="pg-file" type="file" accept="image/*" multiple hidden></label>
+        </div>
+      </div>
+      <p class="hint">Requests go through the supervisor to the local gateway (<code>/playground/chat</code> → <code>:8000/v1/chat/completions</code>). Pick <code>vision</code> for image questions.</p>
+    </section>
+
     <section id="section-soon" class="section" hidden>
       <h1 id="soon-title">Coming soon</h1>
       <p class="muted">This section isn't built yet. The CLI (<code>sparkstation …</code>) remains the authoritative ops tool.</p>
@@ -186,7 +215,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="talk.js?v=6"></script>
-<script src="app.js?v=6"></script>
+<script src="talk.js?v=7"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

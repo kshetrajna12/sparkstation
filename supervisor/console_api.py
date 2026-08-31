@@ -26,6 +26,8 @@ import logging
 import os
 import subprocess
 import time
+
+import httpx
 from pathlib import Path
 from typing import Optional
 
@@ -317,6 +319,73 @@ async def activate_profile(profile: str, request: Request):
 @router.get("/profiles/switch-status")
 async def switch_status():
     return _switch_state
+
+
+# ── playground (gateway proxy) ───────────────────────────────────────────────
+# The gateway binds loopback on primary, so a browser on console.<domain>
+# can't reach it directly; these two endpoints proxy it through the
+# supervisor. Chat is a byte-for-byte passthrough (SSE streaming included) —
+# the SPA speaks plain OpenAI chat-completions shapes.
+
+_gw = httpx.AsyncClient(timeout=httpx.Timeout(15.0, read=600.0))
+
+
+def _gateway_base() -> str:
+    return settings.litellm_admin_url.rstrip("/")
+
+
+@router.get("/playground/models")
+async def playground_models():
+    """Chat-capable model ids the gateway currently serves."""
+    try:
+        r = await _gw.get(f"{_gateway_base()}/v1/models", headers={"Authorization": "Bearer console"})
+        r.raise_for_status()
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"gateway unreachable: {e}")
+    ids = [m.get("id") for m in r.json().get("data", [])]
+    # embeddings/detection aliases aren't chattable; the registry knows types
+    from supervisor import main
+    non_chat = set()
+    if main.registry is not None:
+        for m in await main.registry.list_all():
+            if str(getattr(m, "model_type", "chat")) != "chat":
+                non_chat.add(m.model_alias or m.model_name)
+    chat_ids = [i for i in ids if i and i not in non_chat]
+    # stable, default-first ordering
+    chat_ids.sort(key=lambda i: (i not in ("default", "vision"), i))
+    return {"models": chat_ids}
+
+
+@router.post("/playground/chat")
+async def playground_chat(request: Request):
+    """Proxy a chat-completions request to the gateway, streaming the reply."""
+    body = await request.body()
+    if len(body) > 30 * 1024 * 1024:
+        raise HTTPException(413, "request too large")
+    upstream = _gw.build_request(
+        "POST", f"{_gateway_base()}/v1/chat/completions",
+        content=body,
+        headers={"Authorization": "Bearer console", "Content-Type": "application/json"},
+    )
+    try:
+        resp = await _gw.send(upstream, stream=True)
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"gateway unreachable: {e}")
+
+    async def body_iter():
+        try:
+            async for chunk in resp.aiter_bytes(8192):
+                yield chunk
+        finally:
+            await resp.aclose()
+
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(
+        body_iter(),
+        status_code=resp.status_code,
+        media_type=resp.headers.get("content-type", "application/json"),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # ── logs ─────────────────────────────────────────────────────────────────────
