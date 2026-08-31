@@ -384,7 +384,10 @@ async def playground_chat(request: Request):
         body_iter(),
         status_code=resp.status_code,
         media_type=resp.headers.get("content-type", "application/json"),
-        headers={"Cache-Control": "no-store"},
+        # no-transform: without it the Cloudflare edge runs the stream through
+        # its compression/transform layer, which coalesces SSE into ~KB flushes
+        # (browser saw 3-4 sentences at a time; localhost was per-token).
+        headers={"Cache-Control": "no-store, no-transform", "X-Accel-Buffering": "no"},
     )
 
 
