@@ -24,7 +24,7 @@ Config expectations (models.yaml):
   backend: dspark
   host: primary            # head node; worker comes from the stack's .env.dspark
   extra_args:
-    dspark_dir: /home/kshetrajna/dsv4-2xspark   # stack checkout (default)
+    dspark_dir: ~/dsv4-2xspark                  # stack checkout (default)
     port: 8888                                  # fixed API port (NOT from the
                                                 # supervisor's 8001+ pool)
     launch_timeout_seconds: 2700                # cold load + MoE repack budget

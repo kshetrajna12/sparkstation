@@ -5,7 +5,7 @@ description = "Profile-driven model fleet management for NVIDIA DGX Spark"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    { name = "Kshetrajna Raghavan", email = "hello@kshetrajna.ai" }
+    { name = "kshetrajna12" }
 ]
 license = { file = "LICENSE" }
 

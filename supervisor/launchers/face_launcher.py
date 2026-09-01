@@ -49,9 +49,11 @@ class FaceLauncher(ModelLauncher):
                     )
 
                 # Gallery path — check extra_args first, then default location
-                gallery_host_path = config.extra_args.get("gallery_path", "")
+                gallery_host_path = str(Path(config.extra_args.get("gallery_path", "")).expanduser()) if config.extra_args.get("gallery_path") else ""
                 if not gallery_host_path or not Path(gallery_host_path).exists():
-                    default_gallery = Path.home() / ".openclaw" / "workspace" / "agents" / "whatsapp-schoolfriends-group" / "gallery.json"
+                    # no hardcoded fallback: set extra_args.gallery_path (real
+                    # per-machine path belongs in .sparkstation.local.yaml)
+                    default_gallery = Path.home() / "face-gallery.json"
                     if default_gallery.exists():
                         gallery_host_path = str(default_gallery)
                     else:

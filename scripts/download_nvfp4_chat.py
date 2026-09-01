@@ -2,7 +2,7 @@
 
 Run in a tmux session so the download survives SSH disconnects:
 
-    tmux new -d -s nvfp4 'cd /home/kshetrajna/src/github.com/sparkstation && \
+    tmux new -d -s nvfp4 'cd ~/src/github.com/sparkstation && \
         .venv/bin/python scripts/download_nvfp4_chat.py 2>&1 | tee data/nvfp4_download.log'
 
 To monitor:

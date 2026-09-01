@@ -1,12 +1,13 @@
+# Template: replace USER and /home/USER with your deploy user/paths.
 [Unit]
 Description=Sparkstation Daily Maintenance
 After=network.target
 
 [Service]
 Type=oneshot
-User=kshetrajna
-WorkingDirectory=/home/kshetrajna/src/github.com/sparkstation
-ExecStart=/home/kshetrajna/src/github.com/sparkstation/.venv/bin/python scripts/maintenance.py
+User=USER
+WorkingDirectory=/home/USER/src/github.com/sparkstation
+ExecStart=/home/USER/src/github.com/sparkstation/.venv/bin/python scripts/maintenance.py
 
 # Security hardening
 NoNewPrivileges=true

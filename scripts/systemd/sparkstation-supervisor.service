@@ -1,16 +1,17 @@
+# Template: replace USER and /home/USER with your deploy user/paths.
 [Unit]
 Description=Sparkstation Supervisor - LLM Model Lifecycle Management
 After=network.target
 
 [Service]
 Type=simple
-User=kshetrajna
-Group=kshetrajna
-WorkingDirectory=/home/kshetrajna/src/github.com/sparkstation
-Environment="PATH=/home/kshetrajna/src/github.com/sparkstation/.venv/bin:/usr/local/bin:/usr/bin:/bin"
-EnvironmentFile=/home/kshetrajna/src/github.com/sparkstation/.env
+User=USER
+Group=USER
+WorkingDirectory=/home/USER/src/github.com/sparkstation
+Environment="PATH=/home/USER/src/github.com/sparkstation/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/home/USER/src/github.com/sparkstation/.env
 
-ExecStart=/home/kshetrajna/src/github.com/sparkstation/.venv/bin/uvicorn supervisor.main:app --host 127.0.0.1 --port 9001
+ExecStart=/home/USER/src/github.com/sparkstation/.venv/bin/uvicorn supervisor.main:app --host 127.0.0.1 --port 9001
 
 # Restart policy
 Restart=on-failure
@@ -28,7 +29,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/kshetrajna/src/github.com/sparkstation/data
+ReadWritePaths=/home/USER/src/github.com/sparkstation/data
 
 [Install]
 WantedBy=multi-user.target

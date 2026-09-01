@@ -1,3 +1,4 @@
+# Template: replace USER and /home/USER with your deploy user/paths.
 [Unit]
 Description=Sparkstation Gateway - LiteLLM OpenAI-compatible API
 After=network.target sparkstation-supervisor.service
@@ -5,13 +6,13 @@ Requires=sparkstation-supervisor.service
 
 [Service]
 Type=simple
-User=kshetrajna
-Group=kshetrajna
-WorkingDirectory=/home/kshetrajna/src/github.com/sparkstation
-Environment="PATH=/home/kshetrajna/src/github.com/sparkstation/.venv/bin:/usr/local/bin:/usr/bin:/bin"
-EnvironmentFile=/home/kshetrajna/src/github.com/sparkstation/.env
+User=USER
+Group=USER
+WorkingDirectory=/home/USER/src/github.com/sparkstation
+Environment="PATH=/home/USER/src/github.com/sparkstation/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+EnvironmentFile=/home/USER/src/github.com/sparkstation/.env
 
-ExecStart=/home/kshetrajna/src/github.com/sparkstation/.venv/bin/litellm --config gateway/litellm.yaml --host 127.0.0.1 --port 8000 --detailed_debug
+ExecStart=/home/USER/src/github.com/sparkstation/.venv/bin/litellm --config gateway/litellm.yaml --host 127.0.0.1 --port 8000 --detailed_debug
 
 # Restart policy
 Restart=on-failure
@@ -29,8 +30,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/kshetrajna/src/github.com/sparkstation/data
-ReadWritePaths=/home/kshetrajna/src/github.com/sparkstation/gateway
+ReadWritePaths=/home/USER/src/github.com/sparkstation/data
+ReadWritePaths=/home/USER/src/github.com/sparkstation/gateway
 
 [Install]
 WantedBy=multi-user.target

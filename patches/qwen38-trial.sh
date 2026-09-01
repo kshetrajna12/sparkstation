@@ -12,7 +12,7 @@ docker run -d \
   --shm-size 32g \
   --ipc=host \
   -p 8213:8213 \
-  -v /home/kshetrajna/.cache/huggingface:/root/.cache/huggingface \
+  -v $HOME/.cache/huggingface:/root/.cache/huggingface \
   --entrypoint vllm \
   --name qwen38-trial \
   vllm/vllm-openai:muse-glimmer-arm64-cu130 \

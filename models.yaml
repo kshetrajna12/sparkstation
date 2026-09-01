@@ -113,7 +113,7 @@ models:
       # pre-reorg workspace layout, so the 2026-07-02 supervisor relaunch came
       # up with no /gallery mount and recognition silently returned
       # num_recognized=0 until 2026-08-09.
-      gallery_path: "/home/kshetrajna/.openclaw/workspace/agents/whatsapp-schoolfriends-group/gallery.json"
+      gallery_path: "~/face-gallery.json"  # real path per machine in .sparkstation.local.yaml
 
   dsv4-flash:
     # DeepSeek-V4-Flash-0731 on the Anemll DSpark 2-node TP=2 stack (both
@@ -138,7 +138,7 @@ models:
     memory_gb: 94  # head-node share; worker1's rank holds a similar amount
     auto_suspend_enabled: false
     extra_args:
-      dspark_dir: "/home/kshetrajna/dsv4-2xspark"
+      dspark_dir: "~/dsv4-2xspark"      # absolute per-machine path in .sparkstation.local.yaml
       port: 8888
       launch_timeout_seconds: 2700
       head_container: "deepseek-v4-flash-vllm-dspark-1"
@@ -177,7 +177,7 @@ models:
     memory_gb: 60            # head-rank share; worker2's rank holds similar
     auto_suspend_enabled: false
     extra_args:
-      dspark_dir: "/home/kshetrajna/glm53-deploy"
+      dspark_dir: "~/glm53-deploy"      # absolute per-machine path in .sparkstation.local.yaml
       start_script: "start-glm53-2xspark.sh"
       stop_script: "stop-glm53-2xspark.sh"
       port: 8009
@@ -233,7 +233,7 @@ models:
     memory_gb: 78              # ~71GB resident + headroom; PLE stays on NVMe
     auto_suspend_enabled: false
     extra_args:
-      dspark_dir: "/home/kshetrajna/qfn-ar-deploy"
+      dspark_dir: "~/qfn-ar-deploy"     # absolute per-machine path in .sparkstation.local.yaml
       start_script: "start-qfn-ar.sh"
       stop_script: "stop-qfn-ar.sh"
       port: 8010
@@ -370,7 +370,7 @@ models:
     memory_gb: 24
     auto_suspend_enabled: false
     extra_args:
-      cascade_dir: "/home/kshetrajna/cascade-bot"
+      cascade_dir: "~/cascade-bot"      # absolute per-machine path in .sparkstation.local.yaml
       port: 7860
       metrics_port: 7861          # prometheus cascade_* metrics (http_sd)
       tunnel_port: 18000          # worker-loopback tunnel to primary's gateway

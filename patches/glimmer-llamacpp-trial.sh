@@ -4,10 +4,10 @@
 # CRITICAL flags: --spec-type draft-dflash (defaults off) + --swa-full (SWA layers
 # otherwise silently disable speculation).
 set -euo pipefail
-exec /tmp/claude-1000/-home-kshetrajna-src-github-com-sparkstation/ebb02b44-0d76-42c9-b364-1cd494d8e2ba/scratchpad/llama.cpp/build/bin/llama-server \
-  -m /home/kshetrajna/.cache/huggingface/hub/models--meta-models--Muse-Glimmer-30B-GGUF/snapshots/a0532f7263ee67f1e0a5f5c5fdcd50dd62fc9aa4/muse-glimmer-30B-kquant-17gb.gguf \
-  --mmproj /home/kshetrajna/.cache/huggingface/hub/models--meta-models--Muse-Glimmer-30B-GGUF/snapshots/a0532f7263ee67f1e0a5f5c5fdcd50dd62fc9aa4/mmproj-kquant.gguf \
-  --model-draft /home/kshetrajna/.cache/huggingface/hub/models--meta-models--Muse-Glimmer-30B-GGUF/snapshots/a0532f7263ee67f1e0a5f5c5fdcd50dd62fc9aa4/dflash-kquant.gguf \
+exec "$LLAMA_CPP_BUILD/bin/llama-server"  # point at your llama.cpp build \
+  -m $HOME/.cache/huggingface/hub/models--meta-models--Muse-Glimmer-30B-GGUF/snapshots/a0532f7263ee67f1e0a5f5c5fdcd50dd62fc9aa4/muse-glimmer-30B-kquant-17gb.gguf \
+  --mmproj $HOME/.cache/huggingface/hub/models--meta-models--Muse-Glimmer-30B-GGUF/snapshots/a0532f7263ee67f1e0a5f5c5fdcd50dd62fc9aa4/mmproj-kquant.gguf \
+  --model-draft $HOME/.cache/huggingface/hub/models--meta-models--Muse-Glimmer-30B-GGUF/snapshots/a0532f7263ee67f1e0a5f5c5fdcd50dd62fc9aa4/dflash-kquant.gguf \
   --gpu-layers 999 --gpu-layers-draft 999 \
   --spec-draft-n-max 16 --spec-draft-n-min 0 \
   --spec-type draft-dflash \

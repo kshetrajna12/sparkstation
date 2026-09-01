@@ -14,7 +14,7 @@ docker run -d \
   --ipc=host \
   --ulimit memlock=-1 --ulimit stack=67108864 \
   -p 8214:30000 \
-  -v /home/kshetrajna/.cache/huggingface:/root/.cache/huggingface \
+  -v $HOME/.cache/huggingface:/root/.cache/huggingface \
   --name qwen38-sglang-trial \
   lmsysorg/sglang:nightly-dev-cu13-20260813-273d978b \
   python3 -m sglang.launch_server \
