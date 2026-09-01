@@ -130,6 +130,13 @@ async def main():
                 {"id": "smoke-2", "label": "rtvi-ai", "type": "client-message",
                  "data": {"t": "register-tools", "d": d}}))
             print(f"-> register-tools sent ({len(specs)} tools, sys_prompt={'custom' if 'system_instruction' in d else 'default'})")
+        # CONFIGURE='{"brain":"default","voice":"K"}': per-session config
+        # (contract: RTVI client-message {"t":"configure","d":{...}})
+        if os.environ.get("CONFIGURE"):
+            await ws.send(encode_message_frame(
+                {"id": "smoke-0", "label": "rtvi-ai", "type": "client-message",
+                 "data": {"t": "configure", "d": json.loads(os.environ["CONFIGURE"])}}))
+            print(f"-> configure sent: {os.environ['CONFIGURE']}")
         await ws.send(encode_message_frame(
             {"id": "smoke-1", "label": "rtvi-ai", "type": "client-ready",
              "data": {"version": "1.0.0"}}))
@@ -188,7 +195,7 @@ async def main():
                     label = info.get("type") if kind == "message" else info
                     if kind == "message" and info.get("type") == "bot-ready":
                         bot_ready.set()
-                    if kind == "message" and info.get("type") in ("tools-registered", "tools-error", "server-message"):
+                    if kind == "message" and info.get("type") in ("tools-registered", "tools-error", "server-message", "configured"):
                         print(f"<- {info.get('type')}: {info.get('data')}")
                     if kind == "message" and info.get("type") == "llm-function-call":
                         d = info.get("data", {})
