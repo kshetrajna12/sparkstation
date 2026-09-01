@@ -297,14 +297,18 @@
   }
   function addMsg(cls, text, partialKey) {
     const box = $("#transcript");
+    const follow = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
     if (partialKey) {
       let el = box.querySelector(`[data-partial="${partialKey}"]`);
       if (!el) { el = document.createElement("div"); el.dataset.partial = partialKey; box.appendChild(el); }
       el.className = "msg " + cls; el.textContent = text;
-      box.scrollTop = box.scrollHeight; return el;
+      if (follow) box.scrollTop = box.scrollHeight;
+      return el;
     }
     const el = document.createElement("div"); el.className = "msg " + cls; el.textContent = text;
-    box.appendChild(el); box.scrollTop = box.scrollHeight; return el;
+    box.appendChild(el);
+    if (follow) box.scrollTop = box.scrollHeight;
+    return el;
   }
   function finalizePartial(key) { const el = $("#transcript").querySelector(`[data-partial="${key}"]`); if (el) { el.removeAttribute("data-partial"); el.classList.remove("partial"); } }
 
@@ -572,6 +576,10 @@
   }
 
   // ── playground ───────────────────────────────────────────────────────────
+  function stickToBottom(el) {
+    // only follow the stream when the user is already at (or near) the bottom
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  }
   const pg = { history: [], images: [], abort: null, modelsLoaded: false };
 
   async function initPlayground() {
@@ -600,11 +608,13 @@
   }
 
   function pgRender(role, node) {
+    const box = $("#pg-chat");
+    const follow = stickToBottom(box);
     const el = document.createElement("div");
     el.className = "msg " + (role === "user" ? "user" : "assistant");
     if (typeof node === "string") el.textContent = node; else el.appendChild(node);
-    $("#pg-chat").appendChild(el);
-    $("#pg-chat").scrollTop = $("#pg-chat").scrollHeight;
+    box.appendChild(el);
+    if (follow) box.scrollTop = box.scrollHeight;
     return el;
   }
 
@@ -681,8 +691,10 @@
           if (delta.reasoning_content) { reasoning += delta.reasoning_content; det.hidden = false; det.querySelector("pre").textContent = reasoning; }
           if (delta.content) {
             if (ttfb === null) ttfb = performance.now() - t0;
+            const box = $("#pg-chat");
+            const follow = stickToBottom(box);
             answer += delta.content; ans.textContent = answer;
-            $("#pg-chat").scrollTop = $("#pg-chat").scrollHeight;
+            if (follow) box.scrollTop = box.scrollHeight;
           }
         }
       }
