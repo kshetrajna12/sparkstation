@@ -60,6 +60,30 @@ Remaining budget (fast lane 0.67 s): endpoint ~0.2 + flush 0.25 + brain TTFT
 0.1–0.3 + TTS 0.35, partly overlapped. Next lever if wanted: speculative brain
 start at VAD-stop (hides brain TTFT and the think-lane thinking).
 
+## Echo robustness (2026-09-01, after K's OpenClaw session cut mid-sentence)
+
+Root cause in the log: the bot's own speech came back through the client's
+mic (no AEC), `VADUserTurnStartStrategy` fired an interruption on the echo
+energy, and Kyutai transcribed the echo ("It has a", "population") as a user
+turn the brain then answered. Bot-side defence (client-side AEC is still the
+right fix — Reachy's XVF3800 needs bot playback routed as its reference):
+
+- Turn start = `MinWordsUserTurnStartStrategy(min_words=3)`: while the bot
+  speaks, a barge-in needs 3 transcribed words; when silent, 1. Bare VAD
+  energy can no longer cut the bot. (`CASCADE_TURN_START=vad` restores.)
+- `EchoGuard` between STT and the aggregator drops transcripts matching what
+  the bot said in the last 12 s (bag-of-words with possessives stripped and
+  4-char-prefix fuzzy matching; ratio ≥0.5 while speaking / within 1.5 s of
+  stopping, ≥0.85 with ≥3 words otherwise). Bot text is recorded at TTS
+  synthesis start (`QwenTTSService.run_tts`) — `TTSTextFrame` arrives too
+  late for the first echoed fragment. Metric `cascade_echo_suppressed_total`.
+- Semantic endpoint needs 2 consecutive steps over threshold
+  (`CASCADE_STT_VAD_CONSEC`) so "Hey… Sparky" doesn't split into two turns.
+- Test harness: `ECHO=0.5 scripts/cascade_ws_client.py …` mixes received bot
+  audio back into the mic (150 ms delay). Result at gain 0.5 and 0.9: full
+  answers, 55–61 fragments suppressed, 0 echo interruptions. Latency cost of
+  the whole package ≈0.1–0.3 s (fast 0.80 s, think 1.43 s, tool 3.29 s).
+
 ## Latency budget (original target ≤1.5s speech-end → first audio)
 
 STT finalization ~0.5s + brain TTFT (gemma 26ms / qwen ~0.3-1s) + first

@@ -38,6 +38,9 @@ if _ENABLED:
         "cascade_voice_to_voice_seconds", "User speech end -> first bot audio",
         buckets=(1, 1.5, 2, 2.5, 3, 4, 6, 10))
     STT_FINALS = Counter("cascade_stt_finals_total", "Finalized user transcripts")
+    ECHO_SUPPRESSED = Counter(
+        "cascade_echo_suppressed_total",
+        "Transcripts dropped by the EchoGuard as the bot's own speech")
 
 
 def start_metrics_server() -> None:
@@ -77,6 +80,12 @@ def turn_routed(lane: str) -> None:
 def tool_call(function_name: str) -> None:
     if _ENABLED:
         TOOL_CALLS.labels(function=function_name).inc()
+
+
+def echo_suppressed() -> None:
+    """One transcript dropped by voicecascade.echo_guard.EchoGuard."""
+    if _ENABLED:
+        ECHO_SUPPRESSED.inc()
 
 
 class MetricsTap:

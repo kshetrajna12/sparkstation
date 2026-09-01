@@ -14,7 +14,11 @@ PRIMARY trigger: the model's semantic-VAD "pause prediction" heads
 (`lm_gen.step_with_extra_heads` -> `(text_tokens, extra_heads)`), softmax over
 6 classes with class 0 = "speaker finished", for pauses of 0.5/1.0/2.0/3.0 s
 (head 0..3; lower index = more aggressive). We watch head VAD_HEAD (default
-2, as Kyutai's Unmute does) and endpoint on `p(class 0) > VAD_THRESH` (0.6).
+2, as Kyutai's Unmute does) and endpoint on `p(class 0) > VAD_THRESH` (0.6)
+sustained over VAD_CONSEC (default 2) consecutive 80 ms steps — a single step
+over threshold used to fire mid-phrase, splitting "Hey, / Sparky," into two
+turns. The counter resets on any step below threshold, on every emitted text
+token, and after a flush.
 Measured on a real utterance: ~1.0 during pre-speech silence — which is why
 the `spoke` gate is essential, not optional — 0.0 while speaking, a brief
 mid-sentence wobble to ~0.55, then 0.98 within ~0.2 s of speech end.
@@ -57,6 +61,7 @@ Env knobs:
   CASCADE_STT_VAD_REPO      (default "kyutai/stt-1b-en_fr-candle") head weights
   CASCADE_STT_VAD_HEAD      (default "2")     which pause head to watch
   CASCADE_STT_VAD_THRESH    (default "0.6")   p(finished) threshold
+  CASCADE_STT_VAD_CONSEC    (default "2")     steps over threshold to endpoint
   CASCADE_STT_FINAL_GAP     (default "1.0")   text-gap fallback, safety net
 """
 from __future__ import annotations
@@ -91,6 +96,7 @@ SILENCE_STEPS = max(1, math.ceil(SILENCE_MS / 80.0))                        # 80
 VAD_REPO = os.environ.get("CASCADE_STT_VAD_REPO", "kyutai/stt-1b-en_fr-candle")
 VAD_HEAD = int(os.environ.get("CASCADE_STT_VAD_HEAD", "2"))
 VAD_THRESH = float(os.environ.get("CASCADE_STT_VAD_THRESH", "0.6"))
+VAD_CONSEC = max(1, int(os.environ.get("CASCADE_STT_VAD_CONSEC", "2")))     # consecutive steps over VAD_THRESH
 VAD_WARMUP_STEPS = 12      # ignore endpointing right after a stream reset
 FLUSH_FRAMES = 7           # ceil(0.5 s text delay / 80 ms) + 1
 
@@ -213,6 +219,7 @@ def _engine_main(device: str, hf_repo: str):
         spoke = False        # a real (non-pad) token since the last finalize
         flushed = False      # a flush already fired for this utterance
         silent_steps = 0     # consecutive quiet 80 ms blocks since the last token
+        pr_hits = 0          # consecutive steps with pr > VAD_THRESH (hysteresis)
         nstat = {"n": 0, "pad": 0, "tok": 0, "cmax": 0.0}
         while True:
             kind, payload = _ENGINE_IN.get()
@@ -227,6 +234,7 @@ def _engine_main(device: str, hf_repo: str):
                 spoke = False
                 flushed = False
                 silent_steps = 0
+                pr_hits = 0
                 continue
             pcm, s_sink = payload
             if s_sink is not sink:
@@ -254,6 +262,7 @@ def _engine_main(device: str, hf_repo: str):
                         # count silence only from AFTER the last text token,
                         # so a mid-word gap cannot endpoint the turn
                         silent_steps = 0
+                        pr_hits = 0
                         if sink is not None:
                             sink(("text", piece))
                 if pr is not None:
@@ -273,13 +282,18 @@ def _engine_main(device: str, hf_repo: str):
                                  silmax=0, peakmax=0.0, peakmin=1e9)
 
                 # --- endpoint (semantic head primary, energy silence fallback) + flush trick ---
-                by_head = has_heads and pr is not None and pr > VAD_THRESH
+                # hysteresis: VAD_CONSEC steps in a row over the threshold. One
+                # step is not enough — a brief mid-phrase pause spikes the head
+                # and used to split a single utterance into two turns.
+                if has_heads and pr is not None:
+                    pr_hits = pr_hits + 1 if pr > VAD_THRESH else 0
+                by_head = has_heads and pr is not None and pr_hits >= VAD_CONSEC
                 by_silence = silent_steps >= SILENCE_STEPS
                 if (spoke and not flushed and steps_since_reset >= VAD_WARMUP_STEPS
                         and (by_head or by_silence)):
                     if by_head:
-                        logger.info("KyutaiSTT endpoint: pr={:.2f} after {} steps, flushed {} frames",
-                                    pr, steps_since_reset, FLUSH_FRAMES)
+                        logger.info("KyutaiSTT endpoint: pr={:.2f} x{} after {} steps, flushed {} frames",
+                                    pr, pr_hits, steps_since_reset, FLUSH_FRAMES)
                     else:
                         logger.info("KyutaiSTT endpoint: silence {} ms after {} steps, flushed {} frames",
                                     int(silent_steps * 80), steps_since_reset, FLUSH_FRAMES)
@@ -301,6 +315,7 @@ def _engine_main(device: str, hf_repo: str):
                     flushed = True
                     spoke = False
                     silent_steps = 0
+                    pr_hits = 0
 
 
 class KyutaiSTTService(STTService):

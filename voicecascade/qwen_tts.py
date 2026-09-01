@@ -15,6 +15,8 @@ from collections.abc import AsyncIterator
 
 from loguru import logger
 from pipecat.frames.frames import ErrorFrame, TTSAudioRawFrame, TTSStartedFrame, TTSStoppedFrame
+
+from .echo_guard import RecentBotText
 from pipecat.services.openai.tts import OpenAITTSService
 from pipecat.utils.text.base_text_aggregator import Aggregation, AggregationType
 from pipecat.utils.text.simple_text_aggregator import SimpleTextAggregator
@@ -116,6 +118,11 @@ class FirstClauseAggregator(SimpleTextAggregator):
 
 class QwenTTSService(OpenAITTSService):
     async def run_tts(self, text: str, context_id: str):
+        # Echo guard learns the bot's words HERE, at synthesis start: this is
+        # >=0.6 s ahead of any acoustic echo of them (TTS first audio 0.35 s +
+        # speaker->mic path + Kyutai's 0.5 s text delay). TTSTextFrame is
+        # emitted too late for the first fragment.
+        RecentBotText.record(text)
         voice = self._settings.voice or "Ryan"
         try:
             await self.start_ttfb_metrics()
