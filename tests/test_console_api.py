@@ -272,3 +272,26 @@ def test_switch_step_failure_marks_error(switch_client, monkeypatch):
 
 
 from pathlib import Path as pathlib_Path
+
+
+# ── playground proxy ─────────────────────────────────────────────────────────
+
+def test_playground_models_filters_non_chat(client, monkeypatch):
+    class FakeResp:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self): return {"data": [{"id": "default"}, {"id": "qwen"}, {"id": "bge-m3"}, {"id": "vision"}]}
+
+    async def fake_get(url, **kw): return FakeResp()
+    monkeypatch.setattr(console_api._gw, "get", fake_get)
+    client.registry.models = [_model(id="e1", alias="bge-m3")]
+    client.registry.models[0].model_type = "embedding"
+    d = client.get("/playground/models").json()
+    assert d["models"][0] == "default" and "bge-m3" not in d["models"] and "qwen" in d["models"]
+
+
+def test_playground_models_gateway_down(client, monkeypatch):
+    import httpx as _httpx
+    async def fake_get(url, **kw): raise _httpx.ConnectError("nope")
+    monkeypatch.setattr(console_api._gw, "get", fake_get)
+    assert client.get("/playground/models").status_code == 502

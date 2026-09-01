@@ -26,6 +26,8 @@ import logging
 import os
 import subprocess
 import time
+
+import httpx
 from pathlib import Path
 from typing import Optional
 
@@ -317,6 +319,91 @@ async def activate_profile(profile: str, request: Request):
 @router.get("/profiles/switch-status")
 async def switch_status():
     return _switch_state
+
+
+# ── playground (gateway proxy) ───────────────────────────────────────────────
+# The gateway binds loopback on primary, so a browser on console.<domain>
+# can't reach it directly; these two endpoints proxy it through the
+# supervisor. Chat is a byte-for-byte passthrough (SSE streaming included) —
+# the SPA speaks plain OpenAI chat-completions shapes.
+
+_gw = httpx.AsyncClient(timeout=httpx.Timeout(15.0, read=600.0))
+
+
+def _gateway_base() -> str:
+    return settings.litellm_admin_url.rstrip("/")
+
+
+@router.get("/playground/models")
+async def playground_models():
+    """Chat-capable model ids the gateway currently serves."""
+    try:
+        r = await _gw.get(f"{_gateway_base()}/v1/models", headers={"Authorization": "Bearer console"})
+        r.raise_for_status()
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"gateway unreachable: {e}")
+    ids = [m.get("id") for m in r.json().get("data", [])]
+    # embeddings/detection aliases aren't chattable; the registry knows types
+    from supervisor import main
+    non_chat = set()
+    if main.registry is not None:
+        for m in await main.registry.list_all():
+            if str(getattr(m, "model_type", "chat")) != "chat":
+                non_chat.add(m.model_alias or m.model_name)
+    chat_ids = [i for i in ids if i and i not in non_chat]
+    # stable, default-first ordering
+    chat_ids.sort(key=lambda i: (i not in ("default", "vision"), i))
+    return {"models": chat_ids}
+
+
+@router.post("/playground/chat")
+async def playground_chat(request: Request):
+    """Proxy a chat-completions request to the gateway, streaming the reply."""
+    body = await request.body()
+    if len(body) > 30 * 1024 * 1024:
+        raise HTTPException(413, "request too large")
+    upstream = _gw.build_request(
+        "POST", f"{_gateway_base()}/v1/chat/completions",
+        content=body,
+        # identity: httpx advertises gzip by default and LiteLLM then
+        # compresses the SSE stream — the gzip flush windows turn per-token
+        # chunks into multi-KB sentence-sized bursts at the browser.
+        headers={"Authorization": "Bearer console", "Content-Type": "application/json",
+                 "Accept-Encoding": "identity"},
+    )
+    try:
+        resp = await _gw.send(upstream, stream=True)
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"gateway unreachable: {e}")
+
+    async def body_iter():
+        try:
+            # no chunk size: aiter_raw(N) is an EXACT-size chunker that waits
+            # to fill N bytes — at ~37 tok/s that turned per-token SSE into
+            # 8 KB blobs ~3 s apart. Bare aiter_raw() yields per network read.
+            async for chunk in resp.aiter_raw():
+                yield chunk
+        finally:
+            await resp.aclose()
+
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(
+        body_iter(),
+        status_code=resp.status_code,
+        # exact "text/event-stream" via raw header: some edges only enter SSE
+        # pass-through mode on an exact match, and Starlette's media_type
+        # parameter re-appends "; charset=utf-8" to any text/* type.
+        # no-transform: without it the Cloudflare edge runs the stream through
+        # its compression/transform layer, which coalesces SSE into ~KB flushes
+        # (browser saw 3-4 sentences at a time; localhost was per-token).
+        headers={
+            "Content-Type": "text/event-stream"
+            if "text/event-stream" in resp.headers.get("content-type", "")
+            else resp.headers.get("content-type", "application/json"),
+            "Cache-Control": "no-store, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ── logs ─────────────────────────────────────────────────────────────────────

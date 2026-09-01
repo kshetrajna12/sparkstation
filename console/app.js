@@ -46,7 +46,7 @@
   function fillLangs() { $$(".lang-select").forEach((sel) => { sel.innerHTML = LANGS.map((l) => `<option>${l}</option>`).join(""); }); }
 
   // ── navigation ───────────────────────────────────────────────────────────
-  const BUILT_SECTIONS = { voice: "#section-voice", cluster: "#section-cluster", logs: "#section-logs" };
+  const BUILT_SECTIONS = { voice: "#section-voice", cluster: "#section-cluster", logs: "#section-logs", playground: "#section-playground" };
   function showSection(name) {
     $$(".nav-item[data-section]").forEach((a) => a.classList.toggle("active", a.dataset.section === name));
     for (const sel of Object.values(BUILT_SECTIONS)) $(sel).hidden = BUILT_SECTIONS[name] !== sel;
@@ -54,6 +54,7 @@
     if (!BUILT_SECTIONS[name]) $("#soon-title").textContent = ($(`.nav-item[data-section="${name}"]`) || {}).textContent || "Coming soon";
     if (name === "cluster") refreshCluster();
     if (name === "logs") refreshLogSources();
+    if (name === "playground") initPlayground();
     clusterVisible = name === "cluster";
     logsVisible = name === "logs";
   }
@@ -296,14 +297,18 @@
   }
   function addMsg(cls, text, partialKey) {
     const box = $("#transcript");
+    const follow = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
     if (partialKey) {
       let el = box.querySelector(`[data-partial="${partialKey}"]`);
       if (!el) { el = document.createElement("div"); el.dataset.partial = partialKey; box.appendChild(el); }
       el.className = "msg " + cls; el.textContent = text;
-      box.scrollTop = box.scrollHeight; return el;
+      if (follow) box.scrollTop = box.scrollHeight;
+      return el;
     }
     const el = document.createElement("div"); el.className = "msg " + cls; el.textContent = text;
-    box.appendChild(el); box.scrollTop = box.scrollHeight; return el;
+    box.appendChild(el);
+    if (follow) box.scrollTop = box.scrollHeight;
+    return el;
   }
   function finalizePartial(key) { const el = $("#transcript").querySelector(`[data-partial="${key}"]`); if (el) { el.removeAttribute("data-partial"); el.classList.remove("partial"); } }
 
@@ -570,6 +575,160 @@
     $("#log-follow").onchange = refreshLog;
   }
 
+  // ── playground ───────────────────────────────────────────────────────────
+  function stickToBottom(el) {
+    // only follow the stream when the user is already at (or near) the bottom
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  }
+  const pg = { history: [], images: [], abort: null, modelsLoaded: false };
+
+  async function initPlayground() {
+    if (pg.modelsLoaded) return;
+    try {
+      const d = await api("GET", "/playground/models");
+      $("#pg-model").innerHTML = d.models.map((m) => `<option>${esc(m)}</option>`).join("");
+      pg.modelsLoaded = true;
+    } catch (e) { toast("gateway models: " + e.message, true); }
+  }
+
+  function pgAddAttachment(dataUrl, name) {
+    pg.images.push(dataUrl);
+    const chip = document.createElement("span");
+    chip.className = "att-chip";
+    chip.innerHTML = `<img src="${dataUrl}" alt=""> ${esc(name || "image")} <button class="link-btn">✕</button>`;
+    chip.querySelector("button").onclick = () => { pg.images.splice(pg.images.indexOf(dataUrl), 1); chip.remove(); };
+    $("#pg-attachments").appendChild(chip);
+  }
+
+  function pgFileToAttachment(file) {
+    if (!file.type.startsWith("image/")) return;
+    const rd = new FileReader();
+    rd.onload = () => pgAddAttachment(rd.result, file.name);
+    rd.readAsDataURL(file);
+  }
+
+  function pgRender(role, node) {
+    const box = $("#pg-chat");
+    const follow = stickToBottom(box);
+    const el = document.createElement("div");
+    el.className = "msg " + (role === "user" ? "user" : "assistant");
+    if (typeof node === "string") el.textContent = node; else el.appendChild(node);
+    box.appendChild(el);
+    if (follow) box.scrollTop = box.scrollHeight;
+    return el;
+  }
+
+  function pgReasoningExtras() {
+    switch ($("#pg-reasoning").value) {
+      case "off": return { max_tokens: 4096, chat_template_kwargs: { thinking: false } };
+      case "bounded": return { max_tokens: 4096, thinking_token_budget: 2048 };
+      case "high": return { max_tokens: 16384, chat_template_kwargs: { thinking: true, reasoning_effort: "high" } };
+      default: return { max_tokens: 4096 };
+    }
+  }
+
+  async function pgSend() {
+    const text = $("#pg-input").value.trim();
+    if (!text && !pg.images.length) return;
+    if (pg.abort) return;
+
+    // user message: plain string, or parts when images ride along
+    let content = text;
+    if (pg.images.length) {
+      content = text ? [{ type: "text", text }] : [];
+      pg.images.forEach((u) => content.push({ type: "image_url", image_url: { url: u } }));
+    }
+    pg.history.push({ role: "user", content });
+    const userNode = document.createElement("div");
+    userNode.textContent = text || "(image)";
+    pg.images.forEach((u) => { const im = document.createElement("img"); im.src = u; im.className = "sent"; userNode.appendChild(im); });
+    pgRender("user", userNode);
+    $("#pg-input").value = ""; pg.images = []; $("#pg-attachments").innerHTML = "";
+
+    const messages = [];
+    const sys = $("#pg-system").value.trim();
+    if (sys) messages.push({ role: "system", content: sys });
+    messages.push(...pg.history);
+
+    const body = { model: $("#pg-model").value, messages, stream: true,
+                   stream_options: { include_usage: true }, ...pgReasoningExtras() };
+
+    // assistant bubble: optional collapsed reasoning + streaming answer
+    const node = document.createElement("div");
+    const det = document.createElement("details");
+    det.innerHTML = "<summary>reasoning</summary><pre></pre>"; det.hidden = true;
+    const ans = document.createElement("div");
+    node.appendChild(det); node.appendChild(ans);
+    pgRender("assistant", node);
+
+    $("#pg-send").hidden = true; $("#pg-stop").hidden = false;
+    pg.abort = new AbortController();
+    const t0 = performance.now();
+    let ttfb = null, answer = "", reasoning = "", usage = null, finish = null;
+    try {
+      const r = await fetch("/playground/chat", {
+        method: "POST", signal: pg.abort.signal,
+        headers: headers({ "Content-Type": "application/json" }),
+        body: JSON.stringify(body),
+      });
+      if (!r.ok || !r.body) throw new Error((await r.text()).slice(0, 300) || r.statusText);
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split("\n"); buf = lines.pop();
+        for (const ln of lines) {
+          const m = ln.match(/^data: ?(.*)$/); if (!m || m[1] === "[DONE]") continue;
+          let d; try { d = JSON.parse(m[1]); } catch (e) { continue; }
+          if (d.usage) usage = d.usage;
+          const ch = d.choices && d.choices[0];
+          if (!ch) continue;
+          if (ch.finish_reason) finish = ch.finish_reason;
+          const delta = ch.delta || {};
+          if (delta.reasoning_content) { reasoning += delta.reasoning_content; det.hidden = false; det.querySelector("pre").textContent = reasoning; }
+          if (delta.content) {
+            if (ttfb === null) ttfb = performance.now() - t0;
+            const box = $("#pg-chat");
+            const follow = stickToBottom(box);
+            answer += delta.content; ans.textContent = answer;
+            if (follow) box.scrollTop = box.scrollHeight;
+          }
+        }
+      }
+      if (!answer && reasoning && finish === "length") ans.textContent = "⚠ ran out of tokens during reasoning — raise max_tokens or set reasoning: bounded/off";
+      pg.history.push({ role: "assistant", content: answer });
+      const secs = (performance.now() - t0) / 1000;
+      const toks = usage && usage.completion_tokens;
+      $("#pg-stats").innerHTML = [
+        ttfb !== null ? `TTFB ${(ttfb / 1000).toFixed(2)} s` : null,
+        toks ? `${toks} tok · ${(toks / secs).toFixed(1)} tok/s` : `${answer.length} chars in ${secs.toFixed(1)} s`,
+        usage ? `prompt ${usage.prompt_tokens} tok` : null,
+        finish && finish !== "stop" ? `finish: ${finish}` : null,
+      ].filter(Boolean).map((x) => `<span>${esc(x)}</span>`).join("");
+    } catch (e) {
+      if (e.name === "AbortError") { ans.textContent = answer + " ⏹"; pg.history.push({ role: "assistant", content: answer }); }
+      else { ans.textContent = "error: " + e.message; pg.history.pop(); }
+    } finally {
+      pg.abort = null; $("#pg-send").hidden = false; $("#pg-stop").hidden = true;
+    }
+  }
+
+  function bindPlayground() {
+    $("#pg-send").onclick = pgSend;
+    $("#pg-stop").onclick = () => { if (pg.abort) pg.abort.abort(); };
+    $("#pg-clear").onclick = () => { pg.history = []; $("#pg-chat").innerHTML = ""; $("#pg-stats").innerHTML = ""; };
+    $("#pg-input").onkeydown = (ev) => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); pgSend(); } };
+    $("#pg-file").onchange = () => { Array.from($("#pg-file").files).forEach(pgFileToAttachment); $("#pg-file").value = ""; };
+    $("#pg-input").onpaste = (ev) => {
+      for (const item of ev.clipboardData.items) {
+        if (item.type.startsWith("image/")) { pgFileToAttachment(item.getAsFile()); ev.preventDefault(); }
+      }
+    };
+  }
+
   // ── api key (only when the supervisor enforces one) ──────────────────────
   function bindApiKey() {
     const btn = $("#apikey-btn");
@@ -586,7 +745,7 @@
     $$(".tab").forEach((b) => { b.onclick = () => showTab(b.dataset.tab); });
     window.addEventListener("hashchange", route);
     route();
-    bindDesignForm(); bindCloneForm(); bindTalk(); bindApiKey(); bindCluster(); bindLogs();
+    bindDesignForm(); bindCloneForm(); bindTalk(); bindApiKey(); bindCluster(); bindLogs(); bindPlayground();
     $("#voices-refresh").onclick = () => { loadVoices(); refreshStatus(); };
     try {
       config = await (await fetch("/console/config.json")).json();
