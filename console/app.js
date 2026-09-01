@@ -42,6 +42,7 @@
     t.classList.toggle("bad", !!bad); t.classList.toggle("warn", !bad && !!warn);
     clearTimeout(t._h); t._h = setTimeout(() => { t.hidden = true; }, bad || warn ? 7000 : 3000);
   }
+  const ic = (name) => `<svg class="ic"><use href="#i-${name}"/></svg>`;
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
   function fillLangs() { $$(".lang-select").forEach((sel) => { sel.innerHTML = LANGS.map((l) => `<option>${l}</option>`).join(""); }); }
 
@@ -114,50 +115,50 @@
   }
   function sampleText() { return $("#sample-text").value.trim(); }
 
+  let voiceFilter = "all";
   function renderVoices() {
     const list = $("#voices-list");
     list.innerHTML = "";
-    for (const engine of ENGINE_ORDER) {
-      const vs = voices.filter((v) => v.engine === engine);
-      const group = document.createElement("div");
-      group.className = "group";
-      group.innerHTML = `<h3>${esc(ENGINE_LABEL[engine])} · ${vs.length}</h3>`;
-      if (!vs.length) { group.innerHTML += `<p class="muted">none yet</p>`; list.appendChild(group); continue; }
-      const table = document.createElement("table");
-      table.className = "voices";
-      table.innerHTML = `<thead><tr><th>Voice</th><th>Language</th><th>${engine === "design" ? "Description (identity)" : "Style instruct"}</th>${engine === "clone" ? "<th>Reference transcript</th>" : ""}<th></th></tr></thead>`;
-      const tbody = document.createElement("tbody");
-      for (const v of vs) tbody.appendChild(voiceRow(v));
-      table.appendChild(tbody);
-      group.appendChild(table);
-      list.appendChild(group);
+    const vs = voices.filter((v) => voiceFilter === "all" || v.engine === voiceFilter);
+    if (!vs.length) {
+      list.innerHTML = '<div class="empty-state"><p>No voices here yet.<br><span class="muted">Design one from a description, or clone one from a recording.</span></p></div>';
+      return;
     }
+    for (const v of vs) list.appendChild(voiceCard(v));
   }
 
-  function voiceRow(v) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td><strong>${esc(v.id)}</strong>${v.is_default ? '<span class="default-badge">default</span>' : ""}${v.speaker && v.speaker !== v.id ? `<div class="muted">speaker ${esc(v.speaker)}</div>` : ""}</td>
-      <td>${esc(v.language)}</td>
-      <td class="instruct-cell"><div class="instruct-view">${v.instruct ? esc(v.instruct) : '<span class="muted">—</span>'}</div></td>
-      ${v.engine === "clone" ? `<td class="instruct-cell">${esc(v.ref_text || "")}</td>` : ""}
-      <td class="actions">
-        <button data-act="play" title="synthesize the sample text with this voice">▶</button>
-        <button data-act="edit" title="edit ${v.engine === "design" ? "description" : "style instruct"}">✎</button>
-        ${v.is_default ? "" : `<button data-act="default" title="make this Sparky's voice">★</button>`}
-        ${v.engine === "stock" || v.is_default ? "" : `<button data-act="delete" class="danger" title="delete">🗑</button>`}
-      </td>`;
-    tr.querySelector('[data-act="play"]').onclick = (ev) => playVoice(v, ev.currentTarget);
-    tr.querySelector('[data-act="edit"]').onclick = () => editVoice(v, tr);
-    const d = tr.querySelector('[data-act="default"]'); if (d) d.onclick = () => setDefault(v);
-    const x = tr.querySelector('[data-act="delete"]'); if (x) x.onclick = () => deleteVoice(v);
-    return tr;
+  const ENGINE_TAG = { clone: "Cloned", design: "Designed", stock: "Stock" };
+  function voiceCard(v) {
+    const card = document.createElement("div");
+    card.className = "voice-card" + (v.is_default ? " is-default" : "");
+    const desc = v.engine === "clone"
+      ? (v.instruct ? esc(v.instruct) : `<span class="muted">“${esc((v.ref_text || "").slice(0, 110))}${(v.ref_text || "").length > 110 ? "…" : ""}”</span>`)
+      : (v.instruct ? esc(v.instruct) : '<span class="muted">No style instruct — speaks neutrally.</span>');
+    card.innerHTML = `
+      <div class="vc-head">
+        <span class="vc-name">${esc(v.id)}</span>
+        ${v.is_default ? '<span class="default-badge">Sparky</span>' : ""}
+      </div>
+      <div class="vc-meta"><span class="engine-tag ${esc(v.engine)}">${ENGINE_TAG[v.engine] || esc(v.engine)}</span><span class="muted">${esc(v.language)}</span>${v.speaker && v.speaker !== v.id ? `<span class="muted">· ${esc(v.speaker)}</span>` : ""}</div>
+      <div class="vc-desc">${desc}</div>
+      <div class="vc-actions">
+        <button data-act="play" class="vc-play" title="audition this voice">${ic("play")}<span>Play</span></button>
+        <span class="vc-spacer"></span>
+        <button data-act="edit" class="icon-btn" title="edit ${v.engine === "design" ? "description" : "style instruct"}">${ic("pencil")}</button>
+        ${v.is_default ? "" : `<button data-act="default" class="icon-btn" title="make this Sparky's voice">${ic("star")}</button>`}
+        ${v.engine === "stock" || v.is_default ? "" : `<button data-act="delete" class="icon-btn danger" title="delete">${ic("trash")}</button>`}
+      </div>`;
+    card.querySelector('[data-act="play"]').onclick = (ev) => playVoice(v, ev.currentTarget);
+    card.querySelector('[data-act="edit"]').onclick = () => editVoice(v, card);
+    const d = card.querySelector('[data-act="default"]'); if (d) d.onclick = () => setDefault(v);
+    const x = card.querySelector('[data-act="delete"]'); if (x) x.onclick = () => deleteVoice(v);
+    return card;
   }
 
   let currentAudio = null;
   async function playVoice(v, btn) {
     try {
-      btn.disabled = true; btn.textContent = "…";
+      btn.disabled = true; btn.classList.add("spin"); btn.innerHTML = ic("refresh") + "<span>Playing</span>";
       const body = { voice: v.id, engine: v.engine };
       if (sampleText()) body.text = sampleText();
       const r = await api("POST", "/voice/speak", body, { raw: true });
@@ -167,16 +168,17 @@
       currentAudio = new Audio(URL.createObjectURL(blob));
       await currentAudio.play();
     } catch (e) { toast("play failed: " + e.message, true); }
-    finally { btn.disabled = false; btn.textContent = "▶"; }
+    finally { btn.disabled = false; btn.classList.remove("spin"); btn.innerHTML = ic("play") + "<span>Play</span>"; }
   }
 
-  function editVoice(v, tr) {
-    const cell = tr.querySelector(".instruct-cell");
+  function editVoice(v, card) {
+    const cell = card.querySelector(".vc-desc");
     if (cell.querySelector("textarea")) return;
     const original = cell.innerHTML;
     cell.innerHTML = `<textarea rows="3">${esc(v.instruct)}</textarea>
-      <div class="row"><button class="primary" data-save>Save</button><button class="link-btn" data-cancel>cancel</button>
-      ${v.engine !== "design" ? '<span class="muted">clone/stock edits restart that engine (~45 s)</span>' : ""}</div>`;
+      <div class="row"><button class="primary" data-save>Save</button><button class="link-btn" data-cancel>cancel</button></div>
+      ${v.engine !== "design" ? '<div class="hint">clone/stock edits restart that engine (~45 s)</div>' : ""}`;
+    cell.querySelector("textarea").focus();
     cell.querySelector("[data-cancel]").onclick = () => { cell.innerHTML = original; };
     cell.querySelector("[data-save]").onclick = async () => {
       try {
@@ -253,12 +255,12 @@
           recordedBlob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
           $("#clone-file").value = "";
           const a = $("#clone-audio"); a.src = URL.createObjectURL(recordedBlob); a.hidden = false;
-          $("#clone-record").textContent = "● Record again";
+          $("#clone-record").textContent = "Record again";
           state.textContent = `recorded ${elapsed.toFixed(1)} s`;
         };
         let elapsed = 0; const t0 = performance.now();
         recorder.start(250);
-        $("#clone-record").textContent = "■ Stop";
+        $("#clone-record").textContent = "Stop recording";
         recordTimer = setInterval(() => {
           elapsed = (performance.now() - t0) / 1000;
           state.textContent = `recording ${elapsed.toFixed(1)} s` + (elapsed > 12 ? " — that's plenty, stop soon" : "");
@@ -298,6 +300,7 @@
   }
   function addMsg(cls, text, partialKey) {
     const box = $("#transcript");
+    const empty = $("#talk-empty"); if (empty) empty.remove();
     const follow = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
     if (partialKey) {
       let el = box.querySelector(`[data-partial="${partialKey}"]`);
@@ -370,7 +373,7 @@
         api("GET", "/resources"), api("GET", "/models/detailed"),
         api("GET", "/resources/hosts").catch(() => null),
       ]);
-      renderResources(res, hosts);
+      lastHosts = hosts;
       renderModels(det.models || []);
       if (!profilesInfo) { profilesInfo = await api("GET", "/profiles"); renderStartControls(det.models || []); }
       else renderStartControls(det.models || []);
@@ -381,29 +384,7 @@
     if (clusterVisible) clusterTimer = setTimeout(refreshCluster, 10000);
   }
 
-  function hostCard(role, h) {
-    if (!h || !h.ok) return `<div class="card"><div class="big">${esc(role)}</div><div class="sub bad-text">unreachable${h && h.error ? ": " + esc(h.error) : ""}</div></div>`;
-    const usedPct = Math.round(100 * h.mem_used_gb / h.mem_total_gb);
-    const gpu = h.gpu_temp_c != null ? `${h.gpu_temp_c.toFixed(0)}°C · ${h.gpu_power_w.toFixed(0)} W` : "gpu n/a";
-    return `<div class="card">
-      <div class="big">${h.mem_used_gb.toFixed(1)} <span class="sub">/ ${h.mem_total_gb.toFixed(0)} GB</span></div>
-      <div class="sub">${esc(role)}${h.label ? ` (${esc(h.label)})` : ""} · ${esc(gpu)} · ${h.mem_available_gb.toFixed(0)} GB free</div>
-      <div class="membar${usedPct > 80 ? " hot" : ""}"><div style="width:${usedPct}%"></div></div></div>`;
-  }
-
-  function renderResources(r, hosts) {
-    let cards = "";
-    if (hosts && hosts.hosts) {
-      cards = Object.entries(hosts.hosts).map(([role, h]) => hostCard(role, h)).join("");
-    } else {
-      const usedPct = Math.round(100 * r.unified_memory_used_gb / r.unified_memory_gb);
-      cards = `<div class="card"><div class="big">${r.unified_memory_used_gb.toFixed(1)} <span class="sub">/ ${r.unified_memory_gb.toFixed(0)} GB</span></div>
-        <div class="sub">primary unified memory</div>
-        <div class="membar${usedPct > 80 ? " hot" : ""}"><div style="width:${usedPct}%"></div></div></div>`;
-    }
-    cards += `<div class="card"><div class="big">${r.resident_models_count} <span class="sub">/ ${r.max_resident_models}</span></div><div class="sub">resident models (all hosts)</div></div>`;
-    $("#resource-cards").innerHTML = cards;
-  }
+  function renderResources() {}
 
   function fmtIdle(sec) {
     if (sec == null) return "—";
@@ -412,28 +393,59 @@
     return (sec / 3600).toFixed(1) + "h";
   }
 
+  let lastHosts = null;
   function renderModels(models) {
-    const rows = models.map((m) => {
-      const running = m.status === "running", suspended = m.status === "suspended";
-      const hb = m.health_status === "healthy" ? "💚" : m.health_status === "unhealthy" ? "💔" : "";
-      const acts = [
-        running || m.status === "starting" ? `<button data-act="stop" title="stop">■</button>` : "",
-        running && m.model_type === "chat" ? `<button data-act="suspend" title="suspend (free memory, fast resume)">⏸</button>` : "",
-        suspended ? `<button data-act="resume" title="resume">▶</button>` : "",
-      ].join("");
-      return `<tr data-id="${esc(m.id)}" data-alias="${esc(m.alias || m.model_name)}">
-        <td><strong>${esc(m.alias || m.model_name)}</strong>${m.is_default ? '<span class="default-badge">default</span>' : ""}${m.is_vision ? ' 👁' : ""}<div class="muted">${esc(m.backend)} · ${esc(m.model_type)}</div></td>
-        <td>${esc(m.host)}</td>
-        <td><span class="st ${esc(m.status)}">${esc(m.status)}</span><span class="hb">${hb}</span></td>
-        <td>${m.port || "—"}</td>
-        <td>${m.memory_gb != null ? m.memory_gb + " GB" : "—"}</td>
-        <td>${fmtIdle(m.idle_seconds)}</td>
-        <td class="actions">${acts}</td></tr>`;
-    }).join("");
-    $("#models-table").innerHTML = models.length
-      ? `<table class="models"><thead><tr><th>Model</th><th>Host</th><th>Status</th><th>Port</th><th>Memory</th><th>Idle</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
-      : '<p class="muted">no models in the registry</p>';
-    $$("#models-table [data-act]").forEach((b) => { b.onclick = () => modelAction(b.closest("tr"), b.dataset.act); });
+    const box = $("#models-table");
+    box.innerHTML = "";
+    const roles = lastHosts && lastHosts.hosts ? Object.keys(lastHosts.hosts) : [...new Set(models.map((m) => m.host))];
+    for (const role of roles) {
+      const h = lastHosts && lastHosts.hosts ? lastHosts.hosts[role] : null;
+      const mine = models.filter((m) => m.host === role);
+      const sec = document.createElement("section");
+      sec.className = "host-group";
+      let headRight = "";
+      if (h && h.ok) {
+        const usedPct = Math.round(100 * h.mem_used_gb / h.mem_total_gb);
+        headRight = `<div class="host-stats">
+            <span class="mono">${h.mem_used_gb.toFixed(1)} / ${h.mem_total_gb.toFixed(0)} GB</span>
+            ${h.gpu_temp_c != null ? `<span class="mono muted">${h.gpu_temp_c.toFixed(0)}°C · ${h.gpu_power_w.toFixed(0)} W</span>` : ""}
+          </div>
+          <div class="membar host-bar${usedPct > 80 ? " hot" : ""}"><div style="width:${usedPct}%"></div></div>`;
+      } else if (h) {
+        headRight = `<span class="bad-text">unreachable${h.error ? ": " + esc(h.error) : ""}</span>`;
+      }
+      sec.innerHTML = `
+        <header class="host-head">
+          <div class="host-title"><svg class="ic"><use href="#i-server"/></svg><strong>${esc(role)}</strong>${h && h.label ? `<span class="muted">${esc(h.label)}</span>` : ""}</div>
+          <div class="host-head-right">${headRight}</div>
+        </header>
+        <div class="host-models"></div>`;
+      const wrap = sec.querySelector(".host-models");
+      if (!mine.length) {
+        wrap.innerHTML = '<div class="empty-inline muted">nothing running here</div>';
+      }
+      for (const m of mine) {
+        const running = m.status === "running", suspended = m.status === "suspended";
+        const hb = m.health_status === "healthy" ? '<span class="dot ok" title="healthy"></span>' : m.health_status === "unhealthy" ? '<span class="dot bad" title="unhealthy"></span>' : "";
+        const row = document.createElement("div");
+        row.className = "model-row";
+        row.dataset.id = m.id; row.dataset.alias = m.alias || m.model_name;
+        row.innerHTML = `
+          <div class="mr-name"><strong>${esc(m.alias || m.model_name)}</strong>${m.is_default ? '<span class="default-badge">default</span>' : ""}${m.is_vision ? '<span class="vision-badge" title="vision model">V</span>' : ""}
+            <div class="muted">${esc(m.backend)} · ${esc(m.model_type)}${m.port ? " · :" + m.port : ""}</div></div>
+          <div class="mr-mem mono">${m.memory_gb != null ? m.memory_gb + " GB" : ""}</div>
+          <div class="mr-idle mono muted" title="idle">${fmtIdle(m.idle_seconds)}</div>
+          <div class="mr-status"><span class="st ${esc(m.status)}">${esc(m.status)}</span>${hb}</div>
+          <div class="mr-actions">
+            ${running || m.status === "starting" ? `<button data-act="stop" class="icon-btn" title="stop">${ic("stop")}</button>` : ""}
+            ${running && m.model_type === "chat" ? `<button data-act="suspend" class="icon-btn" title="suspend (free memory, fast resume)">${ic("pause")}</button>` : ""}
+            ${suspended ? `<button data-act="resume" class="icon-btn" title="resume">${ic("play")}</button>` : ""}
+          </div>`;
+        row.querySelectorAll("[data-act]").forEach((b) => { b.onclick = () => modelAction(row, b.dataset.act); });
+        wrap.appendChild(row);
+      }
+      box.appendChild(sec);
+    }
   }
 
   async function modelAction(tr, act) {
@@ -610,6 +622,7 @@
 
   function pgRender(role, node) {
     const box = $("#pg-chat");
+    const empty = $("#pg-empty"); if (empty) empty.remove();
     const follow = stickToBottom(box);
     const el = document.createElement("div");
     el.className = "msg " + (role === "user" ? "user" : "assistant");
@@ -721,6 +734,7 @@
     $("#pg-send").onclick = pgSend;
     $("#pg-stop").onclick = () => { if (pg.abort) pg.abort.abort(); };
     $("#pg-clear").onclick = () => { pg.history = []; $("#pg-chat").innerHTML = ""; $("#pg-stats").innerHTML = ""; };
+    $$("#pg-chat .suggestion").forEach((b) => { b.onclick = () => { $("#pg-input").value = b.textContent; pgSend(); }; });
     $("#pg-input").onkeydown = (ev) => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); pgSend(); } };
     $("#pg-file").onchange = () => { Array.from($("#pg-file").files).forEach(pgFileToAttachment); $("#pg-file").value = ""; };
     $("#pg-input").onpaste = (ev) => {
@@ -761,6 +775,30 @@
   function bindClients() { $("#clients-refresh").onclick = refreshClients; }
 
   // ── api key (only when the supervisor enforces one) ──────────────────────
+  function bindVoiceFilters() {
+    $$("#voice-filters .fchip").forEach((b) => {
+      b.onclick = () => {
+        voiceFilter = b.dataset.filter;
+        $$("#voice-filters .fchip").forEach((x) => x.classList.toggle("active", x === b));
+        renderVoices();
+      };
+    });
+  }
+
+  function bindTheme() {
+    const seg = $("#theme-seg");
+    let saved = "";
+    try { saved = localStorage.getItem("sparkstation.theme") || ""; } catch (e) {}
+    const apply = (t) => {
+      if (t) document.documentElement.dataset.theme = t;
+      else delete document.documentElement.dataset.theme;
+      try { t ? localStorage.setItem("sparkstation.theme", t) : localStorage.removeItem("sparkstation.theme"); } catch (e) {}
+      seg.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.theme === t));
+    };
+    seg.querySelectorAll("button").forEach((b) => { b.onclick = () => apply(b.dataset.theme); });
+    apply(saved === "light" || saved === "dark" ? saved : "");
+  }
+
   function bindApiKey() {
     const btn = $("#apikey-btn");
     btn.onclick = () => {
@@ -776,7 +814,7 @@
     $$(".tab").forEach((b) => { b.onclick = () => showTab(b.dataset.tab); });
     window.addEventListener("hashchange", route);
     route();
-    bindDesignForm(); bindCloneForm(); bindTalk(); bindApiKey(); bindCluster(); bindLogs(); bindPlayground(); bindClients();
+    bindDesignForm(); bindCloneForm(); bindTalk(); bindApiKey(); bindCluster(); bindLogs(); bindPlayground(); bindClients(); bindVoiceFilters(); bindTheme();
     $("#voices-refresh").onclick = () => { loadVoices(); refreshStatus(); };
     try {
       config = await (await fetch("/console/config.json")).json();

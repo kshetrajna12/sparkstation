@@ -5,20 +5,53 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sparkstation Console</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>⚡</text></svg>">
-<link rel="stylesheet" href="style.css?v=12">
+<script>try{var t=localStorage.getItem("sparkstation.theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}</script>
+<link rel="stylesheet" href="style.css?v=18">
 </head>
 <body>
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 2 3 14h7l-1 8 11-12h-7l1-8z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><path d="M12 17v4M8 21h8"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H4l2.5-2.9A8 8 0 1 1 21 12z"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4.5"/><path d="M11.2 11.8 20 3M15.5 7.5 18 10M12.9 10.1 15 12.2"/></symbol>
+  <symbol id="i-logs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5h3v14H8zM13 5h3v14h-3z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3l4 4L8 20l-5 1 1-5L17 3z"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 3l2.7 5.7 6.3.8-4.6 4.3 1.2 6.2L12 17l-5.6 3 1.2-6.2L3 9.5l6.3-.8L12 3z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 6.3"/><path d="M20 4v7h-7"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-9 9"/></symbol>
+  <symbol id="i-switch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h13M14 3.5 17.5 7 14 10.5M20 17H7M10 13.5 6.5 17l3.5 3.5"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11z"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4 11 13M9 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3"/></symbol>
+</svg>
 <div class="shell">
   <nav class="sidebar">
-    <div class="brand">⚡ Sparkstation</div>
-    <a class="nav-item active" data-section="voice" href="#voice">🎙️ Voice Studio</a>
-    <a class="nav-item" data-section="cluster" href="#cluster">🖥️ Cluster &amp; models</a>
-    <a class="nav-item" data-section="playground" href="#playground">💬 Playground</a>
-    <a class="nav-item" data-section="clients" href="#clients">🔑 Clients &amp; usage</a>
-    <a class="nav-item" data-section="logs" href="#logs">📜 Logs</a>
-    <a class="nav-item" id="grafana-link" href="#" target="_blank" rel="noopener" hidden>📈 Metrics (Grafana) ↗</a>
+    <div class="brand">
+      <span class="brand-mark"><svg class="ic"><use href="#i-bolt"/></svg></span>
+      <span class="brand-name">Sparkstation<small>Console</small></span>
+    </div>
+    <div class="nav-label">Control</div>
+    <a class="nav-item active" data-section="voice" href="#voice"><svg class="ic"><use href="#i-mic"/></svg>Voice Studio</a>
+    <a class="nav-item" data-section="cluster" href="#cluster"><svg class="ic"><use href="#i-server"/></svg>Cluster &amp; models</a>
+    <a class="nav-item" data-section="playground" href="#playground"><svg class="ic"><use href="#i-chat"/></svg>Playground</a>
+    <a class="nav-item" data-section="clients" href="#clients"><svg class="ic"><use href="#i-key"/></svg>Clients &amp; usage</a>
+    <a class="nav-item" data-section="logs" href="#logs"><svg class="ic"><use href="#i-logs"/></svg>Logs</a>
+    <div class="nav-label">Observe</div>
+    <a class="nav-item" id="grafana-link" href="#" target="_blank" rel="noopener" hidden><svg class="ic"><use href="#i-chart"/></svg>Metrics<svg class="ic ic-end"><use href="#i-external"/></svg></a>
     <div class="sidebar-foot">
       <div id="stack-status" class="status-line">checking voice stack…</div>
+      <div class="theme-seg" id="theme-seg" title="Appearance">
+        <button data-theme="light" title="Light"><svg class="ic"><use href="#i-sun"/></svg></button>
+        <button data-theme="" title="Match system">Auto</button>
+        <button data-theme="dark" title="Dark"><svg class="ic"><use href="#i-moon"/></svg></button>
+      </div>
       <button id="apikey-btn" class="link-btn" hidden>set API key</button>
     </div>
   </nav>
@@ -26,7 +59,7 @@
   <main class="content">
     <section id="section-voice" class="section">
       <header class="section-head">
-        <h1>Voice Studio</h1>
+        <div class="head-text"><h1>Voice Studio</h1><p class="lede">How Sparky sounds — talk live, audition and manage voices.</p></div>
         <div class="tabs">
           <button class="tab active" data-tab="talk">Talk</button>
           <button class="tab" data-tab="voices">Voices</button>
@@ -35,54 +68,69 @@
 
       <!-- ── Talk ─────────────────────────────────────────────────────── -->
       <div id="tab-talk" class="tab-panel">
-        <div class="talk-grid">
-          <div class="talk-controls card">
-            <label>Voice
-              <select id="talk-voice"></select>
-            </label>
-            <label>Brain
-              <select id="talk-brain">
-                <option value="auto">auto (router: fast / think)</option>
-                <option value="gemma4-2b">gemma4-2b (fast)</option>
-                <option value="default">default (think)</option>
-              </select>
-            </label>
-            <label>System instruction <span class="muted">(optional, this session only)</span>
-              <textarea id="talk-sysprompt" rows="3" placeholder="Leave empty for the bot's dev persona. Sparky's real persona is OpenClaw-owned."></textarea>
-            </label>
-            <div class="row">
-              <button id="talk-connect" class="primary">🎤 Start talking</button>
-              <button id="talk-stop" hidden>■ Stop</button>
-            </div>
-            <div id="talk-state" class="status-line">idle</div>
-            <div class="meter"><div id="mic-level" class="meter-fill"></div></div>
+        <div class="talk-stage">
+          <div class="talk-head row between wrap">
             <div id="talk-stats" class="stats"></div>
-            <p class="hint">WebSocket transport (<code>/voice/talk</code> → bot <code>/ws-client</code>), 16 kHz in / 24 kHz out. The mic needs a secure context (localhost or HTTPS). One session at a time — a busy bot closes with 4429.</p>
+            <details class="talk-settings">
+              <summary>Session settings</summary>
+              <div class="talk-settings-body">
+                <label>Voice
+                  <select id="talk-voice"></select>
+                </label>
+                <label>Brain
+                  <select id="talk-brain">
+                    <option value="auto">auto (router: fast / think)</option>
+                    <option value="gemma4-2b">gemma4-2b (fast)</option>
+                    <option value="default">default (think)</option>
+                  </select>
+                </label>
+                <label>System instruction <span class="muted">(this session only)</span>
+                  <textarea id="talk-sysprompt" rows="3" placeholder="Leave empty for the bot's dev persona. Sparky's real persona is OpenClaw-owned."></textarea>
+                </label>
+                <button id="talk-clear" class="link-btn">clear transcript</button>
+              </div>
+            </details>
           </div>
-          <div class="talk-log card">
-            <div class="row between">
-              <strong>Transcript</strong>
-              <button id="talk-clear" class="link-btn">clear</button>
+
+          <div id="transcript" class="transcript talk-transcript">
+            <div class="empty-state" id="talk-empty">
+              <svg class="ic"><use href="#i-mic"/></svg>
+              <p>Press the mic and just talk.<br><span class="muted">Sparky listens continuously — no push-to-talk.</span></p>
             </div>
-            <div id="transcript" class="transcript"></div>
+          </div>
+
+          <div class="talk-dock">
+            <div class="meter"><div id="mic-level" class="meter-fill"></div></div>
+            <div class="talk-dock-row">
+              <button id="talk-connect" class="mic-fab" title="Start talking"><svg class="ic"><use href="#i-mic"/></svg></button>
+              <button id="talk-stop" class="mic-fab live" title="Stop" hidden><svg class="ic"><use href="#i-stop"/></svg></button>
+            </div>
+            <div id="talk-state" class="status-line center">idle</div>
+            <p class="hint center">One session at a time · 16 kHz up / 24 kHz down · mic needs localhost or HTTPS</p>
           </div>
         </div>
       </div>
 
       <!-- ── Voices ───────────────────────────────────────────────────── -->
       <div id="tab-voices" class="tab-panel" hidden>
-        <div class="row between wrap">
-          <div class="row">
-            <input id="sample-text" type="text" size="60" placeholder="Sample text for ▶ play (default: a short Sparky line)">
+        <div class="row between wrap voices-toolbar">
+          <div class="row wrap">
+            <div class="filter-chips" id="voice-filters">
+              <button class="fchip active" data-filter="all">All</button>
+              <button class="fchip" data-filter="clone">Cloned</button>
+              <button class="fchip" data-filter="design">Designed</button>
+              <button class="fchip" data-filter="stock">Stock</button>
+            </div>
           </div>
-          <div class="row">
-            <button id="voices-refresh">↻ refresh</button>
-            <button id="show-design" class="primary">＋ Design from description</button>
-            <button id="show-clone" class="primary">＋ Clone from recording</button>
+          <div class="row wrap">
+            <input id="sample-text" type="text" size="42" placeholder="Audition line (optional) — played by every ▶">
+            <button id="voices-refresh" class="icon-btn" title="Refresh"><svg class="ic"><use href="#i-refresh"/></svg></button>
+            <button id="show-design" class="primary"><svg class="ic"><use href="#i-plus"/></svg>Design a voice</button>
+            <button id="show-clone" class="primary"><svg class="ic"><use href="#i-plus"/></svg>Clone a voice</button>
           </div>
         </div>
         <div id="engine-status" class="engine-status"></div>
-        <div id="voices-list"></div>
+        <div id="voices-list" class="voice-grid"></div>
 
         <!-- design form -->
         <div id="design-form" class="card form" hidden>
@@ -96,7 +144,7 @@
           </label>
           <label>Preview text <input id="design-preview-text" type="text" size="60" placeholder="(default sample line)"></label>
           <div class="row">
-            <button id="design-preview">▶ Preview (not saved)</button>
+            <button id="design-preview"><svg class="ic"><use href="#i-play"/></svg>Preview (not saved)</button>
             <button id="design-save" class="primary">Save voice</button>
             <button id="design-cancel" class="link-btn">cancel</button>
           </div>
@@ -110,7 +158,7 @@
           <p class="hint">Record or upload <strong>8–12 s</strong> of natural speech (max 20 s — longer references make cloned speech choppy) and type its <strong>exact transcript</strong>. The clip is stored only in the voice registry on the voice host, never in git.</p>
           <label>Voice id <input id="clone-id" type="text" placeholder="K_studio" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,39}"></label>
           <div class="row wrap">
-            <button id="clone-record">● Record</button>
+            <button id="clone-record">Record</button>
             <span id="clone-record-state" class="muted"></span>
             <span class="muted">or</span>
             <input id="clone-file" type="file" accept="audio/*,.wav,.webm,.m4a,.mp3,.ogg">
@@ -136,23 +184,23 @@
 
     <section id="section-cluster" class="section" hidden>
       <header class="section-head">
-        <h1>Cluster &amp; models</h1>
+        <div class="head-text"><h1>Cluster &amp; models</h1><p class="lede">Live view of the three Sparks and everything running on them.</p></div>
         <div class="row">
           <span id="profile-chip" class="chip"></span>
           <select id="switch-profile"></select>
-          <button id="switch-btn" class="danger">⇄ Switch profile</button>
-          <button id="cluster-refresh">↻ refresh</button>
+          <button id="switch-btn" class="danger"><svg class="ic"><use href="#i-switch"/></svg>Switch profile</button>
+          <button id="cluster-refresh" title="Refresh"><svg class="ic"><use href="#i-refresh"/></svg>Refresh</button>
         </div>
       </header>
       <div id="switch-status" class="status-line" hidden></div>
-      <div id="resource-cards" class="cards"></div>
-      <div id="models-table"></div>
+      <div id="models-table" class="host-groups"></div>
+      <div id="resource-cards" hidden></div>
       <div class="card form" id="start-card">
         <div class="row wrap">
           <strong>Start a model</strong>
           <select id="start-alias"></select>
           <select id="start-profile"></select>
-          <button id="start-btn" class="primary">▶ Start</button>
+          <button id="start-btn" class="primary"><svg class="ic"><use href="#i-play"/></svg>Start</button>
           <span id="start-msg" class="status-line"></span>
         </div>
         <p class="hint">Resolved through the selected profile exactly like <code>sparkstation models start &lt;alias&gt; -p &lt;profile&gt;</code>. Chat models on the same node are usually mutually exclusive — the supervisor checks the target host's free memory before launching (model + 10 GB headroom must fit) and refuses cleanly if it doesn't.</p>
@@ -161,7 +209,7 @@
 
     <section id="section-logs" class="section" hidden>
       <header class="section-head">
-        <h1>Logs</h1>
+        <div class="head-text"><h1>Logs</h1><p class="lede">Tail the supervisor and any model, live.</p></div>
         <div class="row wrap">
           <select id="log-source"></select>
           <select id="log-lines">
@@ -171,7 +219,7 @@
             <option value="5000">5000 lines</option>
           </select>
           <label class="row inline"><input type="checkbox" id="log-follow" checked> follow</label>
-          <button id="log-refresh">↻</button>
+          <button id="log-refresh" title="Refresh"><svg class="ic"><use href="#i-refresh"/></svg></button>
         </div>
       </header>
       <pre id="log-view" class="log-view">loading…</pre>
@@ -179,7 +227,7 @@
 
     <section id="section-playground" class="section" hidden>
       <header class="section-head">
-        <h1>Playground</h1>
+        <div class="head-text"><h1>Playground</h1><p class="lede">Chat with any gateway model — streaming, vision, reasoning.</p></div>
         <div class="row wrap">
           <select id="pg-model"></select>
           <select id="pg-reasoning" title="reasoning controls (thinking models)">
@@ -192,15 +240,25 @@
         </div>
       </header>
       <input id="pg-system" type="text" placeholder="System prompt (optional, applies to the whole conversation)">
-      <div id="pg-chat" class="transcript pg-chat"></div>
+      <div id="pg-chat" class="transcript pg-chat">
+        <div class="empty-state" id="pg-empty">
+          <svg class="ic"><use href="#i-chat"/></svg>
+          <p>Ask the cluster anything.</p>
+          <div class="row wrap center-row">
+            <button class="suggestion">What models are you running?</button>
+            <button class="suggestion">Write a haiku about home labs</button>
+            <button class="suggestion">Explain unified memory in one paragraph</button>
+          </div>
+        </div>
+      </div>
       <div id="pg-stats" class="stats"></div>
       <div id="pg-attachments" class="row wrap"></div>
       <div class="row">
         <textarea id="pg-input" rows="2" placeholder="Message… (Enter to send, Shift+Enter for newline; paste or attach images for vision)"></textarea>
         <div class="col">
           <button id="pg-send" class="primary">Send</button>
-          <button id="pg-stop" hidden>■ Stop</button>
-          <label class="attach-btn" title="Attach images (or paste one into the message box)">Attach image<input id="pg-file" type="file" accept="image/*" multiple hidden></label>
+          <button id="pg-stop" hidden><svg class="ic"><use href="#i-stop"/></svg>Stop</button>
+          <label class="attach-btn" title="Attach images (or paste one into the message box)"><svg class="ic"><use href="#i-image"/></svg>Attach image<input id="pg-file" type="file" accept="image/*" multiple hidden></label>
         </div>
       </div>
       <p class="hint">Requests go through the supervisor to the local gateway (<code>/playground/chat</code> → <code>:8000/v1/chat/completions</code>). Pick <code>vision</code> for image questions.</p>
@@ -208,10 +266,10 @@
 
     <section id="section-clients" class="section" hidden>
       <header class="section-head">
-        <h1>Clients &amp; usage</h1>
+        <div class="head-text"><h1>Clients &amp; usage</h1><p class="lede">Per-client keys, limits and live traffic through the gateway.</p></div>
         <div class="row">
           <span id="clients-auth" class="chip"></span>
-          <button id="clients-refresh">↻ refresh</button>
+          <button id="clients-refresh" title="Refresh"><svg class="ic"><use href="#i-refresh"/></svg>Refresh</button>
         </div>
       </header>
       <div id="clients-table"></div>
@@ -227,7 +285,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="talk.js?v=12"></script>
-<script src="app.js?v=12"></script>
+<script src="talk.js?v=14"></script>
+<script src="app.js?v=14"></script>
 </body>
 </html>
