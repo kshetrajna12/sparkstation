@@ -84,8 +84,17 @@ async def normalize_sse(chunks: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
             line, buf = buf[:nl], buf[nl + 1:]
             cr = line.endswith(b"\r")
             body = line[:-1] if cr else line
-            for part in split_delta_line(body):
-                out.append(part + (b"\r\n" if cr else b"\n"))
+            nl = b"\r\n" if cr else b"\n"
+            parts = split_delta_line(body)
+            # SSE frames events with a BLANK line; two `data:` lines separated
+            # by a single newline would be ONE event whose payload is both
+            # JSON objects joined with "\n" (that broke OpenClaw's parser on
+            # the first deploy, 2026-08-31 22:31). So every part except the
+            # last gets its own event terminator; the original blank line
+            # that follows in the stream closes the last one.
+            for part in parts[:-1]:
+                out.append(part + nl + nl)
+            out.append(parts[-1] + nl)
         if out:
             yield b"".join(out)
     if buf:
