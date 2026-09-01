@@ -44,6 +44,7 @@ from gateway.clients import (
 from gateway.reasoning import DialectResolver
 from gateway.reasoning import apply_client_default as apply_client_reasoning
 from gateway.reasoning import normalize as normalize_reasoning
+from gateway.sse_normalize import normalize_sse
 
 logger = logging.getLogger("gateway.proxy")
 
@@ -414,10 +415,18 @@ async def forward(request: Request, path: str):
     response_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in HOP_BY_HOP}
     measured = alias != "none"
 
+    # Chat SSE streams get their deltas normalized (a delta carrying both
+    # reasoning and content is split in two — see gateway/sse_normalize.py);
+    # everything else is a byte-for-byte passthrough.
+    is_chat_sse = path.endswith("chat/completions") and upstream.headers.get(
+        "content-type", ""
+    ).lower().startswith("text/event-stream")
+    upstream_iter = normalize_sse(upstream.aiter_raw()) if is_chat_sse else upstream.aiter_raw()
+
     async def stream():
         first = True
         try:
-            async for chunk in upstream.aiter_raw():
+            async for chunk in upstream_iter:
                 if first:
                     first = False
                     if measured:
