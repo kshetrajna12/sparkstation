@@ -7,6 +7,7 @@ speaker, it never makes a fast model wait on a slow one's full answer.
 """
 from __future__ import annotations
 
+import os
 import re
 
 from loguru import logger
@@ -101,8 +102,27 @@ class RouterLLMService(OpenAILLMService):
             logger.info("Router: {} -> {} ({!r})", self._settings.model, model, text[:60])
             self._settings.model = model  # read per-request by get_chat_completions
         # Voice is latency-critical: reasoning burns seconds before the first
-        # audible word, so suppress it even on the think lane (the win there
-        # is the bigger model, not chain-of-thought).
-        self._settings.extra = {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}} if model == self._think else {}
+        # audible word, so the think lane runs with thinking OFF — EXCEPT when
+        # the session has tools registered. Measured: thinking-off Qwen narrates
+        # instead of calling on ~20% of tool turns; thinking-on (effort low) was
+        # 0/15 misses for +0.85 s. CASCADE_THINK_TOOLS_THINKING=0 restores the
+        # old always-off behaviour.
+        if model == self._think:
+            tools = context.tools
+            has_tools = bool(tools) and bool(getattr(tools, "standard_tools", None))
+            # Think only on the DECISION request (is a tool needed?). The
+            # continuation after a tool result just verbalizes it — thinking
+            # there added ~1-3 s per tool turn for nothing (bench 2026-09-01).
+            msgs = context.get_messages()
+            last_role = (msgs[-1].get("role") if msgs and isinstance(msgs[-1], dict)
+                         else getattr(msgs[-1], "role", None) if msgs else None)
+            after_tool = last_role == "tool"
+            if has_tools and not after_tool and os.environ.get("CASCADE_THINK_TOOLS_THINKING", "1") != "0":
+                kwargs = {"enable_thinking": True, "reasoning_effort": "low"}
+            else:
+                kwargs = {"enable_thinking": False}
+            self._settings.extra = {"extra_body": {"chat_template_kwargs": kwargs}}
+        else:
+            self._settings.extra = {}
         metrics.turn_routed("think" if model == self._think else "fast")
         await super()._process_context(context)

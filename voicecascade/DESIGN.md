@@ -27,7 +27,40 @@ cascade_* prometheus metrics and the Grafana "Voice — cascade" row.
 | TTS | martinb78/faster-qwen3-tts-dgx-spark:streaming (Qwen3-TTS-12Hz-1.7B) | GB10 CUDA-graph image, OpenAI-compatible, streams WAV <1s first audio, voice cloning for Sparky's voice |
 | Orchestration | Pipecat (same pinned rev), same /ws-client protobuf contract | bridge contract v2 == v1.2 transport-wise; tool calls become native OpenAI tool-calls via brain |
 
-## Latency budget (target ≤1.5s speech-end → first audio)
+## Latency: from 2.6 s to 0.67 s (2026-09-01)
+
+Bench = `scripts/latency_bench.sh` (3 turns/lane, speech-end → first bot
+audio, medians). Baseline → after: **fast 2.60 → 0.67 s, think 3.15 → 1.08 s,
+tool turn 4.28 → 2.85 s**; tool calls 3/3 throughout; transcripts intact.
+What moved it, in order of effect:
+
+1. **Semantic-VAD endpointing + Kyutai flush trick** (−0.9 s): the PyTorch
+   checkpoint has no VAD heads, but `kyutai/stt-1b-en_fr-candle` carries the
+   same base tensors plus 4 `extra_heads`; loading its weights with
+   `lm_kwargs_overrides={"extra_heads_num_heads": 4, "extra_heads_dim": 6}`
+   makes `step_with_extra_heads` return them. Head 2 (`p(done)`, class 0)
+   sits ~1.0 in pre-speech silence (so it is gated on speech seen), 0.0 while
+   talking, crosses 0.6 ~0.2 s after speech ends. Then 7 zero frames are
+   stepped back-to-back so the 0.5 s delayed text emerges in ~0.25 s;
+   `TranscriptionFrame(finalized=True)`. Energy-silence (400 ms) is the
+   fallback trigger, the 1.0 s text-gap the last resort.
+2. **Adaptive TTS first chunk** (−0.8 s): chunk_size 16 (needed for 1.4×
+   realtime) meant 1.0 s to first audio. `voicecascade/patches/` yields the
+   first chunk after 4 codec steps and doubles up to chunk_size: first audio
+   0.35 s, RTF unchanged (1.40×). Launcher re-applies it on every start.
+3. **First-clause TTS** (`FirstClauseAggregator`): the first TTS request goes
+   out at the first clause boundary (≥4 words) or 9 words, not the first
+   sentence.
+4. **Thinking on tool turns** — decision request only: with tools registered
+   the think lane runs `enable_thinking: true, reasoning_effort: low`
+   (0/15 lost calls vs 3/15 without); the post-tool continuation does not
+   think (it just verbalizes; thinking there cost 1–3 s).
+
+Remaining budget (fast lane 0.67 s): endpoint ~0.2 + flush 0.25 + brain TTFT
+0.1–0.3 + TTS 0.35, partly overlapped. Next lever if wanted: speculative brain
+start at VAD-stop (hides brain TTFT and the think-lane thinking).
+
+## Latency budget (original target ≤1.5s speech-end → first audio)
 
 STT finalization ~0.5s + brain TTFT (gemma 26ms / qwen ~0.3-1s) + first
 sentence gen (~0.3s gemma) + TTS first chunk (<1s, overlapped) — stretch: ~1.2s.

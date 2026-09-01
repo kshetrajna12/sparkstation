@@ -67,7 +67,7 @@ from pipecat.workers.runner import WorkerRunner
 
 from . import metrics
 from .kyutai_stt import KyutaiSTTService
-from .qwen_tts import QwenTTSService
+from .qwen_tts import FirstClauseAggregator, QwenTTSService
 from .router_llm import RouterLLMService
 
 GATEWAY = os.environ.get("CASCADE_GATEWAY", "http://192.168.101.10:8000/v1")
@@ -214,6 +214,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         base_url=TTS_ENGINES[engine], api_key="unused",  # TTS servers do no auth
         voice=voice, model="tts-1", sample_rate=24_000,
     )
+    # TTSService builds its SimpleTextAggregator itself (no constructor knob in
+    # this pipecat rev), so swap it after the fact: speak the first clause
+    # instead of waiting on the first full sentence (~0.3 s off time-to-audio).
+    tts._text_aggregator = FirstClauseAggregator(aggregation_type=tts._text_aggregation_mode)
     context = LLMContext(
         messages=[{"role": "system", "content": DEV_SYSTEM_INSTRUCTION}]
     )
