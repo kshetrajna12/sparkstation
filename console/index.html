@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sparkstation Console</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>⚡</text></svg>">
-<link rel="stylesheet" href="style.css?v=9">
+<link rel="stylesheet" href="style.css?v=10">
 </head>
 <body>
 <div class="shell">
@@ -200,7 +200,7 @@
         <div class="col">
           <button id="pg-send" class="primary">Send</button>
           <button id="pg-stop" hidden>■ Stop</button>
-          <label class="attach-btn" title="attach image">🖼<input id="pg-file" type="file" accept="image/*" multiple hidden></label>
+          <label class="attach-btn" title="Attach images (or paste one into the message box)">Attach image<input id="pg-file" type="file" accept="image/*" multiple hidden></label>
         </div>
       </div>
       <p class="hint">Requests go through the supervisor to the local gateway (<code>/playground/chat</code> → <code>:8000/v1/chat/completions</code>). Pick <code>vision</code> for image questions.</p>
@@ -215,7 +215,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="talk.js?v=9"></script>
-<script src="app.js?v=9"></script>
+<script src="talk.js?v=10"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>
