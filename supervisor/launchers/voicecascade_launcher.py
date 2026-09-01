@@ -23,7 +23,7 @@ Config expectations (models.yaml):
   model_type: voice
   host: worker2
   extra_args:
-    cascade_dir: /home/kshetrajna/cascade-bot     # bot checkout (module voicecascade)
+    cascade_dir: ~/cascade-bot                    # bot checkout (module voicecascade)
     port: 7860
     metrics_port: 7861                            # prometheus (http_sd uses this)
     tunnel_port: 18000                            # loopback gateway tunnel on worker
@@ -54,7 +54,7 @@ from supervisor.models_config import get_cluster_config
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CASCADE_DIR = "/home/kshetrajna/cascade-bot"
+DEFAULT_CASCADE_DIR = "~/cascade-bot"
 DEFAULT_PORT = 7860
 DEFAULT_METRICS_PORT = 7861
 DEFAULT_TUNNEL_PORT = 18000
@@ -124,6 +124,8 @@ class VoicecascadeLauncher(ModelLauncher):
         xa = config.extra_args or {}
         target = self._ssh_target(config.host)
         cascade_dir = xa.get("cascade_dir", DEFAULT_CASCADE_DIR)
+        # runs on the REMOTE host: a leading ~ must reach its shell unquoted
+        cdir_q = ("~/" + shlex.quote(cascade_dir[2:])) if cascade_dir.startswith("~/") else shlex.quote(cascade_dir)
         api_port = int(xa.get("port", DEFAULT_PORT))
         tunnel_port = int(xa.get("tunnel_port", DEFAULT_TUNNEL_PORT))
         containers = xa.get("tts_containers") or DEFAULT_TTS_CONTAINERS
@@ -176,9 +178,9 @@ class VoicecascadeLauncher(ModelLauncher):
             logger.info(f"voicecascade bot already answering at {base_url}; adopting")
         else:
             up_cmd = (
-                f"cd {shlex.quote(cascade_dir)} && "
+                f"cd {cdir_q} && "
                 f"CASCADE_GATEWAY=http://127.0.0.1:{tunnel_port}/v1 {env}"
-                f"setsid nohup {shlex.quote(cascade_dir)}/.venv/bin/python "
+                f"setsid nohup {cdir_q}/.venv/bin/python "
                 f"-m voicecascade.bot -t webrtc --host 0.0.0.0 --port {api_port} "
                 f">> /tmp/cascade-bot.log 2>&1 < /dev/null & echo started"  # append: keep prior sessions' evidence
             )

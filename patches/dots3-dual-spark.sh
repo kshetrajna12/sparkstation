@@ -15,7 +15,7 @@ IFACE=enp1s0f0np0
 COMMON_DOCKER=(
   docker run -d --gpus all --network host --ipc=host --shm-size 32g
   --ulimit memlock=-1
-  -v /home/kshetrajna/.cache/huggingface:/root/.cache/huggingface
+  -v $HOME/.cache/huggingface:/root/.cache/huggingface
   -e NCCL_SOCKET_IFNAME=$IFACE
   -e GLOO_SOCKET_IFNAME=$IFACE
   -e NCCL_IB_DISABLE=1

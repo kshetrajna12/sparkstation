@@ -21,7 +21,7 @@ COMMON_DOCKER=(
   docker run -d --gpus all --network host --ipc=host --shm-size 32g
   --ulimit memlock=-1 --cap-add=IPC_LOCK
   -v /dev/infiniband:/dev/infiniband
-  -v /home/kshetrajna/.cache/huggingface:/root/.cache/huggingface
+  -v $HOME/.cache/huggingface:/root/.cache/huggingface
   "${NCCL_ENV[@]}"
   -e VLLM_HOST_IP=$([ "$ROLE" = head ] && echo "$HEAD_IP" || echo "${WORKER_IP:-${HEAD_IP%.*}.11}")
 )
