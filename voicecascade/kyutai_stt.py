@@ -7,10 +7,62 @@ event loop). Decoded word pieces stream out as InterimTranscriptionFrames;
 the aggregator's VAD/turn strategies decide turn boundaries, and on
 UserStoppedSpeaking we flush the model's ~0.5 s text delay and emit the
 final TranscriptionFrame for the turn.
+
+Endpointing (semantic VAD + flush trick)
+----------------------------------------
+PRIMARY trigger: the model's semantic-VAD "pause prediction" heads
+(`lm_gen.step_with_extra_heads` -> `(text_tokens, extra_heads)`), softmax over
+6 classes with class 0 = "speaker finished", for pauses of 0.5/1.0/2.0/3.0 s
+(head 0..3; lower index = more aggressive). We watch head VAD_HEAD (default
+2, as Kyutai's Unmute does) and endpoint on `p(class 0) > VAD_THRESH` (0.6).
+Measured on a real utterance: ~1.0 during pre-speech silence — which is why
+the `spoke` gate is essential, not optional — 0.0 while speaking, a brief
+mid-sentence wobble to ~0.55, then 0.98 within ~0.2 s of speech end.
+
+The heads are absent from the published PyTorch `kyutai/stt-1b-en_fr`
+weights, but the candle sibling repo (CASCADE_STT_VAD_REPO, default
+"kyutai/stt-1b-en_fr-candle") holds the same base tensors byte-for-byte plus
+`extra_heads.0-3.weight` [6,2048]; we point the checkpoint's `moshi_weights`
+at that file and pass `extra_heads_num_heads=4, extra_heads_dim=6`. On any
+download/load failure we log and fall back to the plain weights; the startup
+line "KyutaiSTT semantic VAD heads: N" says which happened.
+
+SECONDARY trigger (safety net, and the only one when N == 0): AUDIO ENERGY.
+The 16 kHz block feeding each 80 ms step is reduced to its peak amplitude,
+and a run of consecutive blocks below SILENCE_PEAK (default 0.015 ~ -36 dBFS)
+lasting SILENCE_MS (default 400 ms = 5 steps) means the speaker stopped. The
+silence run resets to zero on every emitted text token, so a mid-word gap can
+never trigger it; the 400 ms default keeps it from pre-empting the semantic
+head, which normally fires ~200 ms after speech end.
+
+Either trigger runs the same flush + final path.
+
+Because the model emits text with a fixed ~0.5 s delay, detecting the pause
+is not enough: the tail of the utterance is still in flight. So on detection
+we run the "flush trick" — push 7 frames (ceil(0.5 s / 80 ms) + 1) of
+synthetic silence through the model back-to-back, unpaced, which drains the
+delayed text in ~0.25 s of wall clock instead of 0.5 s. Any tokens that come
+out are forwarded normally, then a ("final", None) marker tells the emit loop
+to push a finalized TranscriptionFrame immediately. (Tokens for the last
+spoken word arrive ~6 steps after their audio; that is exactly what the flush
+recovers.)
+
+Streaming state is never reset between turns (a reset costs a 1-2 s lead-in);
+the flush merely advances the stream with silence and real audio continues
+right after.
+
+Env knobs:
+  CASCADE_STT_SILENCE_PEAK  (default "0.015") peak amplitude below = silence
+  CASCADE_STT_SILENCE_MS    (default "400")   silence needed to endpoint
+  CASCADE_STT_VAD_REPO      (default "kyutai/stt-1b-en_fr-candle") head weights
+  CASCADE_STT_VAD_HEAD      (default "2")     which pause head to watch
+  CASCADE_STT_VAD_THRESH    (default "0.6")   p(finished) threshold
+  CASCADE_STT_FINAL_GAP     (default "1.0")   text-gap fallback, safety net
 """
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import queue
 import threading
@@ -29,7 +81,18 @@ from pipecat.services.stt_service import STTService
 from pipecat.utils.time import time_now_iso8601
 
 FLUSH_AFTER_TURN_S = 0.9   # model text delay (~0.5s) + margin
-TEXT_GAP_FINAL_S = float(os.environ.get("CASCADE_STT_FINAL_GAP", "0.7"))     # no new pieces for this long (with text pending) => final
+TEXT_GAP_FINAL_S = float(os.environ.get("CASCADE_STT_FINAL_GAP", "1.0"))     # safety net: no new pieces for this long (with text pending) => final
+
+# Endpointing knobs (see module docstring).
+SILENCE_PEAK = float(os.environ.get("CASCADE_STT_SILENCE_PEAK", "0.015"))   # 16k block peak below this = silent
+SILENCE_MS = float(os.environ.get("CASCADE_STT_SILENCE_MS", "400"))         # silence run needed to endpoint (fallback path)
+SILENCE_STEPS = max(1, math.ceil(SILENCE_MS / 80.0))                        # 80 ms per step
+# Semantic-VAD heads: weights come from the candle sibling repo ("" disables).
+VAD_REPO = os.environ.get("CASCADE_STT_VAD_REPO", "kyutai/stt-1b-en_fr-candle")
+VAD_HEAD = int(os.environ.get("CASCADE_STT_VAD_HEAD", "2"))
+VAD_THRESH = float(os.environ.get("CASCADE_STT_VAD_THRESH", "0.6"))
+VAD_WARMUP_STEPS = 12      # ignore endpointing right after a stream reset
+FLUSH_FRAMES = 7           # ceil(0.5 s text delay / 80 ms) + 1
 
 # Process-global engine: the model loads ONCE per bot process (~19 s) and is
 # reused across sessions (sessions are serial — single-session bot). Without
@@ -67,8 +130,34 @@ def _engine_main(device: str, hf_repo: str):
     info = loaders.CheckpointInfo.from_hf_repo(hf_repo)
     mimi = info.get_mimi(device=device)
     tokenizer = info.get_text_tokenizer()
-    lm = info.get_moshi(device=device, dtype=torch.bfloat16)
+    # The published PyTorch weights carry no semantic-VAD heads, but the
+    # candle sibling checkpoint is the same base tensors byte-for-byte PLUS
+    # extra_heads.0-3.weight [6,2048] — so load the LM from that file and tell
+    # the config it has 4 heads of dim 6. Everything else (tokenizer, mimi,
+    # config) still comes from hf_repo. CASCADE_STT_VAD_REPO="" opts out.
+    lm = None
+    if VAD_REPO:
+        try:
+            from huggingface_hub import snapshot_download
+            cand = os.path.join(snapshot_download(VAD_REPO), "model.safetensors")
+            info.moshi_weights = cand
+            lm = info.get_moshi(device=device, dtype=torch.bfloat16,
+                                lm_kwargs_overrides={"extra_heads_num_heads": 4,
+                                                     "extra_heads_dim": 6})
+            logger.info("KyutaiSTT loaded VAD-head weights from {}", VAD_REPO)
+        except Exception:
+            logger.exception("semantic-VAD weights unavailable; falling back to plain STT weights")
+            lm = None
+            info = loaders.CheckpointInfo.from_hf_repo(hf_repo)
+    if lm is None:
+        lm = info.get_moshi(device=device, dtype=torch.bfloat16)
     lm_gen = LMGen(lm, temp=0, temp_text=0.0)
+    try:
+        _n_heads = len(getattr(lm, "extra_heads", None) or [])
+    except TypeError:
+        _n_heads = 0
+    has_heads = _n_heads > 0
+    logger.info("KyutaiSTT semantic VAD heads: {}", _n_heads)
     CTX16, BLK16, CTX24, BLK24 = 160, 1280, 240, 1920
     assert BLK24 == mimi.frame_size
 
@@ -100,8 +189,30 @@ def _engine_main(device: str, hf_repo: str):
         logger.info("KyutaiSTT ready (engine thread)")
         _ENGINE_STARTED.set()
 
+        # 80 ms of digital silence at 24 kHz, reused for every flush step.
+        silence24 = torch.zeros(BLK24, device=device)
+
+        def _step(chunk24):
+            """One model step. Returns (token_id_or_None, p_finished_or_None)."""
+            res = lm_gen.step_with_extra_heads(mimi.encode(chunk24[None, None]))
+            if res is None:
+                return None, None
+            t, extra_heads = res
+            pr = None
+            try:
+                pr = extra_heads[VAD_HEAD][0, 0, 0].item()
+            except Exception:  # head layout unexpected — degrade to gap-based final
+                pr = None
+            if t is None:
+                return None, pr
+            return t[0, 0, 0].item(), pr
+
         buf16 = torch.zeros(CTX16)
         sink = None
+        steps_since_reset = 0
+        spoke = False        # a real (non-pad) token since the last finalize
+        flushed = False      # a flush already fired for this utterance
+        silent_steps = 0     # consecutive quiet 80 ms blocks since the last token
         nstat = {"n": 0, "pad": 0, "tok": 0, "cmax": 0.0}
         while True:
             kind, payload = _ENGINE_IN.get()
@@ -112,6 +223,10 @@ def _engine_main(device: str, hf_repo: str):
                 # arrives immediately after connect still transcribes.
                 buf16 = torch.zeros(CTX16 + 32000)
                 sink = payload
+                steps_since_reset = 0
+                spoke = False
+                flushed = False
+                silent_steps = 0
                 continue
             pcm, s_sink = payload
             if s_sink is not sink:
@@ -120,23 +235,72 @@ def _engine_main(device: str, hf_repo: str):
             buf16 = torch.cat([buf16, audio])
             while buf16.shape[-1] >= CTX16 + BLK16 + CTX16:
                 win = buf16[: CTX16 + BLK16 + CTX16]; buf16 = buf16[BLK16:]
+                # the 16k block this step actually covers (centre of the window)
+                peak = float(win[CTX16: CTX16 + BLK16].abs().max())
                 chunk = julius.resample_frac(win, 16000, 24000)[CTX24: CTX24 + BLK24]
-                t = lm_gen.step(mimi.encode(chunk.to(device)[None, None]))
+                v, pr = _step(chunk.to(device))
+                steps_since_reset += 1
+                silent_steps = silent_steps + 1 if peak < SILENCE_PEAK else 0
                 nstat["n"] += 1; nstat["cmax"] = max(nstat["cmax"], float(chunk.abs().max()))
-                if t is None:
-                    continue
-                v = t[0, 0, 0].item()
-                if v in (0, 3):
-                    nstat["pad"] += 1
-                else:
-                    nstat["tok"] += 1
-                    piece = tokenizer.id_to_piece(v).replace("▁", " ")
-                    if sink is not None:
-                        sink(("text", piece))
+                if v is not None:
+                    if v in (0, 3):
+                        nstat["pad"] += 1
+                    else:
+                        nstat["tok"] += 1
+                        piece = tokenizer.id_to_piece(v).replace("▁", " ")
+                        # new speech after a flush = a new utterance
+                        spoke = True
+                        flushed = False
+                        # count silence only from AFTER the last text token,
+                        # so a mid-word gap cannot endpoint the turn
+                        silent_steps = 0
+                        if sink is not None:
+                            sink(("text", piece))
+                if pr is not None:
+                    nstat["prmax"] = max(nstat.get("prmax", 0.0), pr)
+                    if spoke and not flushed:
+                        nstat["prmax_spoke"] = max(nstat.get("prmax_spoke", 0.0), pr)
+                nstat["silmax"] = max(nstat.get("silmax", 0), silent_steps)
+                nstat["peakmax"] = max(nstat.get("peakmax", 0.0), peak)
+                nstat["peakmin"] = min(nstat.get("peakmin", 1e9), peak)
                 if nstat["n"] % 100 == 0:
-                    logger.debug("KyutaiSTT engine steps {}: pad={} tok={} max24k={:.3f}",
-                                 nstat["n"], nstat["pad"], nstat["tok"], nstat["cmax"])
-                    nstat.update(pad=0, tok=0, cmax=0.0)
+                    logger.debug("KyutaiSTT engine steps {}: pad={} tok={} max24k={:.3f} prmax={:.2f} "
+                                 "prmax_spoke={:.2f} silmax={} peak={:.4f}..{:.4f}",
+                                 nstat["n"], nstat["pad"], nstat["tok"], nstat["cmax"],
+                                 nstat.get("prmax", 0.0), nstat.get("prmax_spoke", 0.0),
+                                 nstat.get("silmax", 0), nstat.get("peakmin", 0.0), nstat.get("peakmax", 0.0))
+                    nstat.update(pad=0, tok=0, cmax=0.0, prmax=0.0, prmax_spoke=0.0,
+                                 silmax=0, peakmax=0.0, peakmin=1e9)
+
+                # --- endpoint (semantic head primary, energy silence fallback) + flush trick ---
+                by_head = has_heads and pr is not None and pr > VAD_THRESH
+                by_silence = silent_steps >= SILENCE_STEPS
+                if (spoke and not flushed and steps_since_reset >= VAD_WARMUP_STEPS
+                        and (by_head or by_silence)):
+                    if by_head:
+                        logger.info("KyutaiSTT endpoint: pr={:.2f} after {} steps, flushed {} frames",
+                                    pr, steps_since_reset, FLUSH_FRAMES)
+                    else:
+                        logger.info("KyutaiSTT endpoint: silence {} ms after {} steps, flushed {} frames",
+                                    int(silent_steps * 80), steps_since_reset, FLUSH_FRAMES)
+                    for _ in range(FLUSH_FRAMES):
+                        fv, fpr = _step(silence24)
+                        steps_since_reset += 1
+                        nstat["n"] += 1
+                        if fv is not None and fv not in (0, 3):
+                            nstat["tok"] += 1
+                            piece = tokenizer.id_to_piece(fv).replace("▁", " ")
+                            if sink is not None:
+                                sink(("text", piece))
+                        elif fv is not None:
+                            nstat["pad"] += 1
+                        if fpr is not None:
+                            logger.debug("KyutaiSTT flush step: pr={:.2f}", fpr)
+                    if sink is not None:
+                        sink(("final", None))
+                    flushed = True
+                    spoke = False
+                    silent_steps = 0
 
 
 class KyutaiSTTService(STTService):
@@ -178,6 +342,10 @@ class KyutaiSTTService(STTService):
                 if self._turn_text and time.monotonic() - self._last_piece_at > TEXT_GAP_FINAL_S:
                     await self._emit_final()
                 continue
+            if kind == "final":
+                # engine-side semantic VAD says the turn ended (post-flush)
+                await self._emit_final()
+                continue
             if kind == "text":
                 if not self._turn_text:
                     logger.debug("KyutaiSTT first piece: {!r}", payload)
@@ -196,7 +364,8 @@ class KyutaiSTTService(STTService):
         if text:
             logger.info("KyutaiSTT final: {!r}", text)
             await self.push_frame(
-                TranscriptionFrame(text=text, user_id="user", timestamp=time_now_iso8601())
+                TranscriptionFrame(text=text, user_id="user", timestamp=time_now_iso8601(),
+                                   finalized=True)
             )
 
     async def run_stt(self, audio: bytes):
