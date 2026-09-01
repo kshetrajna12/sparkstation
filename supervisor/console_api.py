@@ -365,7 +365,11 @@ async def playground_chat(request: Request):
     upstream = _gw.build_request(
         "POST", f"{_gateway_base()}/v1/chat/completions",
         content=body,
-        headers={"Authorization": "Bearer console", "Content-Type": "application/json"},
+        # identity: httpx advertises gzip by default and LiteLLM then
+        # compresses the SSE stream — the gzip flush windows turn per-token
+        # chunks into multi-KB sentence-sized bursts at the browser.
+        headers={"Authorization": "Bearer console", "Content-Type": "application/json",
+                 "Accept-Encoding": "identity"},
     )
     try:
         resp = await _gw.send(upstream, stream=True)
@@ -374,7 +378,7 @@ async def playground_chat(request: Request):
 
     async def body_iter():
         try:
-            async for chunk in resp.aiter_bytes(8192):
+            async for chunk in resp.aiter_raw(8192):
                 yield chunk
         finally:
             await resp.aclose()
