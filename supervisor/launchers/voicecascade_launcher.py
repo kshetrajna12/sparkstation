@@ -180,7 +180,7 @@ class VoicecascadeLauncher(ModelLauncher):
                 f"CASCADE_GATEWAY=http://127.0.0.1:{tunnel_port}/v1 {env}"
                 f"setsid nohup {shlex.quote(cascade_dir)}/.venv/bin/python "
                 f"-m voicecascade.bot -t webrtc --host 0.0.0.0 --port {api_port} "
-                f"> /tmp/cascade-bot.log 2>&1 < /dev/null & echo started"
+                f">> /tmp/cascade-bot.log 2>&1 < /dev/null & echo started"  # append: keep prior sessions' evidence
             )
             # sshd can hold the channel open past the detached dispatch
             # (same behavior the voicechat launcher hit) — a hung dispatch is
