@@ -59,9 +59,26 @@ stop_litellm() { # <pid>
 write_pointer() { printf '%s' "$1" > "$POINTER.tmp" && mv "$POINTER.tmp" "$POINTER"; }
 
 # ── Initial boot ────────────────────────────────────────────────────────────
-active_port="$PORT_BLUE"
-active_pid="$(start_litellm "$active_port")"
-write_pointer "$active_port"
+port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && { exec 3>&-; return 0; } || return 1; }
+# Start on the first FREE slot (a draining litellm from a killed manager may
+# still hold blue), and publish the pointer only once it answers readiness —
+# the proxy must never be pointed at a port nothing listens on.
+boot_litellm() { # sets active_port/active_pid, returns 0 when ready
+  local try
+  for try in 1 2; do
+    for p in "$PORT_BLUE" "$PORT_GREEN"; do
+      port_busy "$p" && { echo "[bluegreen] port $p busy; trying the other slot"; continue; }
+      active_port="$p"; active_pid="$(start_litellm "$p")"
+      if wait_ready "$p" "$active_pid"; then write_pointer "$p"; return 0; fi
+      echo "[bluegreen] litellm on $p failed readiness; retrying"; stop_litellm "$active_pid"
+    done
+    sleep 3
+  done
+  return 1
+}
+if ! boot_litellm; then
+  echo "[bluegreen] FATAL: could not bring up litellm on $PORT_BLUE or $PORT_GREEN"; exit 1
+fi
 active_sum="$(cfg_sum)"
 echo "[bluegreen] litellm up on $active_port pid=$active_pid (config md5=${active_sum:-none})"
 
@@ -79,8 +96,7 @@ while true; do
   # Liveness: relaunch the active litellm in place if it died.
   if ! kill -0 "$active_pid" 2>/dev/null; then
     echo "[bluegreen] active litellm ($active_port) died; relaunching"
-    active_pid="$(start_litellm "$active_port")"
-    write_pointer "$active_port"
+    if ! boot_litellm; then echo "[bluegreen] relaunch failed on both slots; will retry"; sleep 5; continue; fi
     active_sum="$(cfg_sum)"; pending_sum=""
     continue
   fi

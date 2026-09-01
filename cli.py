@@ -172,6 +172,13 @@ def _start_litellm() -> "subprocess.Popen":
     stops the active litellm child too.
     """
     gw_log = LOG_DIR / "gateway.log"
+    # Rotate instead of truncating: the previous manager's log is the only
+    # record of a blue-green desync once it has happened.
+    try:
+        if gw_log.exists() and gw_log.stat().st_size > 0:
+            gw_log.replace(LOG_DIR / "gateway.prev.log")
+    except OSError:
+        pass
     gw_env = os.environ.copy()
     gw_env.pop("SUPERVISOR_DATABASE_URL", None)
     # Prefer the project venv's python: it has the LOCKED litellm version.
@@ -670,6 +677,12 @@ def stop():
     _kill_and_wait("gateway-proxy", timeout=5)
     subprocess.run(["pkill", "-9", "-f", "uvicorn gateway.proxy:app"], capture_output=True)
     _kill_and_wait("gateway", timeout=5)
+    # The manager's SIGTERM stops only the ACTIVE litellm. A blue-green flip in
+    # the last 5 min leaves a draining old litellm + its drainer subshell alive;
+    # the next start then binds blind and the pointer/process desync (twice on
+    # 2026-09-01: proxy 502 "All connection attempts failed" after `bounce`).
+    subprocess.run(["pkill", "-f", "gateway/litellm-bluegreen.sh"], capture_output=True)
+    subprocess.run(["pkill", "-f", "litellm.proxy.proxy_cli"], capture_output=True)
     # Also kill by pattern in case PID file was lost. Watcher FIRST — killing
     # only the LiteLLM child leaves the watcher alive to restart it.
     subprocess.run(["pkill", "-9", "-f", "gateway/litellm-"], capture_output=True)
