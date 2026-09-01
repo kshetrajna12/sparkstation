@@ -98,6 +98,9 @@ class Settings(BaseSettings):
 
     # Sparkstation Console (static SPA at /console/, Voice Studio API at /voice/*)
     console_enabled: bool = True
+    # API key the playground proxy presents to the gateway (clients.yaml
+    # 'console' entry) so console traffic is attributed under its own client.
+    gateway_console_key: str = "console"
     # Optional link-out for the Metrics section (Grafana is not rebuilt in the
     # console). Leave unset to hide the link. Set via env: CONSOLE_GRAFANA_URL.
     console_grafana_url: Optional[str] = None

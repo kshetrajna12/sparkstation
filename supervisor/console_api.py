@@ -338,7 +338,7 @@ def _gateway_base() -> str:
 async def playground_models():
     """Chat-capable model ids the gateway currently serves."""
     try:
-        r = await _gw.get(f"{_gateway_base()}/v1/models", headers={"Authorization": "Bearer console"})
+        r = await _gw.get(f"{_gateway_base()}/v1/models", headers={"Authorization": f"Bearer {settings.gateway_console_key}"})
         r.raise_for_status()
     except httpx.HTTPError as e:
         raise HTTPException(502, f"gateway unreachable: {e}")
@@ -368,7 +368,7 @@ async def playground_chat(request: Request):
         # identity: httpx advertises gzip by default and LiteLLM then
         # compresses the SSE stream — the gzip flush windows turn per-token
         # chunks into multi-KB sentence-sized bursts at the browser.
-        headers={"Authorization": "Bearer console", "Content-Type": "application/json",
+        headers={"Authorization": f"Bearer {settings.gateway_console_key}", "Content-Type": "application/json",
                  "Accept-Encoding": "identity"},
     )
     try:

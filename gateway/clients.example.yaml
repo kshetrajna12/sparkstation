@@ -87,6 +87,21 @@ clients:
     concurrency: 4
     reasoning: low
 
+# Sparkstation Console playground (supervisor /playground/* proxy; key also in
+# .env as GATEWAY_CONSOLE_KEY so the supervisor can present it).
+#  - name: console
+#    keys: ["sk-spark-console-REPLACE_ME"]
+#    allow: ["*"]
+#    concurrency: 4
+#
+# To run enforce_auth: true without breaking local callers (CLI health checks,
+# voicecascade brain, SDK examples that use "dummy-key"), register the legacy
+# key explicitly:
+#  - name: local-ops
+#    keys: ["dummy-key"]
+#    allow: ["*"]
+#    reasoning: low
+
 # Any key not listed above (incl. the legacy "dummy-key"/"sk-local" and the
 # CLI's own health checks) falls here. Kept generous so nothing breaks; tighten
 # once every client has a real key.
