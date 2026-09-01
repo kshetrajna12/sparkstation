@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="style.css?v=15">
+<link rel="stylesheet" href="style.css?v=16">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
@@ -63,54 +63,69 @@
 
       <!-- ── Talk ─────────────────────────────────────────────────────── -->
       <div id="tab-talk" class="tab-panel">
-        <div class="talk-grid">
-          <div class="talk-controls card">
-            <label>Voice
-              <select id="talk-voice"></select>
-            </label>
-            <label>Brain
-              <select id="talk-brain">
-                <option value="auto">auto (router: fast / think)</option>
-                <option value="gemma4-2b">gemma4-2b (fast)</option>
-                <option value="default">default (think)</option>
-              </select>
-            </label>
-            <label>System instruction <span class="muted">(optional, this session only)</span>
-              <textarea id="talk-sysprompt" rows="3" placeholder="Leave empty for the bot's dev persona. Sparky's real persona is OpenClaw-owned."></textarea>
-            </label>
-            <div class="row">
-              <button id="talk-connect" class="primary btn-lg"><svg class="ic"><use href="#i-mic"/></svg>Start talking</button>
-              <button id="talk-stop" class="btn-lg" hidden><svg class="ic"><use href="#i-stop"/></svg>Stop</button>
-            </div>
-            <div id="talk-state" class="status-line">idle</div>
-            <div class="meter"><div id="mic-level" class="meter-fill"></div></div>
+        <div class="talk-stage">
+          <div class="talk-head row between wrap">
             <div id="talk-stats" class="stats"></div>
-            <p class="hint">WebSocket transport (<code>/voice/talk</code> → bot <code>/ws-client</code>), 16 kHz in / 24 kHz out. The mic needs a secure context (localhost or HTTPS). One session at a time — a busy bot closes with 4429.</p>
+            <details class="talk-settings">
+              <summary>Session settings</summary>
+              <div class="talk-settings-body">
+                <label>Voice
+                  <select id="talk-voice"></select>
+                </label>
+                <label>Brain
+                  <select id="talk-brain">
+                    <option value="auto">auto (router: fast / think)</option>
+                    <option value="gemma4-2b">gemma4-2b (fast)</option>
+                    <option value="default">default (think)</option>
+                  </select>
+                </label>
+                <label>System instruction <span class="muted">(this session only)</span>
+                  <textarea id="talk-sysprompt" rows="3" placeholder="Leave empty for the bot's dev persona. Sparky's real persona is OpenClaw-owned."></textarea>
+                </label>
+                <button id="talk-clear" class="link-btn">clear transcript</button>
+              </div>
+            </details>
           </div>
-          <div class="talk-log card">
-            <div class="row between">
-              <strong>Transcript</strong>
-              <button id="talk-clear" class="link-btn">clear</button>
+
+          <div id="transcript" class="transcript talk-transcript">
+            <div class="empty-state" id="talk-empty">
+              <svg class="ic"><use href="#i-mic"/></svg>
+              <p>Press the mic and just talk.<br><span class="muted">Sparky listens continuously — no push-to-talk.</span></p>
             </div>
-            <div id="transcript" class="transcript"></div>
+          </div>
+
+          <div class="talk-dock">
+            <div class="meter"><div id="mic-level" class="meter-fill"></div></div>
+            <div class="talk-dock-row">
+              <button id="talk-connect" class="mic-fab" title="Start talking"><svg class="ic"><use href="#i-mic"/></svg></button>
+              <button id="talk-stop" class="mic-fab live" title="Stop" hidden><svg class="ic"><use href="#i-stop"/></svg></button>
+            </div>
+            <div id="talk-state" class="status-line center">idle</div>
+            <p class="hint center">One session at a time · 16 kHz up / 24 kHz down · mic needs localhost or HTTPS</p>
           </div>
         </div>
       </div>
 
       <!-- ── Voices ───────────────────────────────────────────────────── -->
       <div id="tab-voices" class="tab-panel" hidden>
-        <div class="row between wrap">
-          <div class="row">
-            <input id="sample-text" type="text" size="60" placeholder="Sample text for playback (default: a short Sparky line)">
+        <div class="row between wrap voices-toolbar">
+          <div class="row wrap">
+            <div class="filter-chips" id="voice-filters">
+              <button class="fchip active" data-filter="all">All</button>
+              <button class="fchip" data-filter="clone">Cloned</button>
+              <button class="fchip" data-filter="design">Designed</button>
+              <button class="fchip" data-filter="stock">Stock</button>
+            </div>
           </div>
-          <div class="row">
-            <button id="voices-refresh" title="Refresh"><svg class="ic"><use href="#i-refresh"/></svg>Refresh</button>
-            <button id="show-design" class="primary"><svg class="ic"><use href="#i-plus"/></svg>Design from description</button>
-            <button id="show-clone" class="primary"><svg class="ic"><use href="#i-plus"/></svg>Clone from recording</button>
+          <div class="row wrap">
+            <input id="sample-text" type="text" size="42" placeholder="Audition line (optional) — played by every ▶">
+            <button id="voices-refresh" class="icon-btn" title="Refresh"><svg class="ic"><use href="#i-refresh"/></svg></button>
+            <button id="show-design" class="primary"><svg class="ic"><use href="#i-plus"/></svg>Design a voice</button>
+            <button id="show-clone" class="primary"><svg class="ic"><use href="#i-plus"/></svg>Clone a voice</button>
           </div>
         </div>
         <div id="engine-status" class="engine-status"></div>
-        <div id="voices-list"></div>
+        <div id="voices-list" class="voice-grid"></div>
 
         <!-- design form -->
         <div id="design-form" class="card form" hidden>
@@ -173,8 +188,8 @@
         </div>
       </header>
       <div id="switch-status" class="status-line" hidden></div>
-      <div id="resource-cards" class="cards"></div>
-      <div id="models-table"></div>
+      <div id="models-table" class="host-groups"></div>
+      <div id="resource-cards" hidden></div>
       <div class="card form" id="start-card">
         <div class="row wrap">
           <strong>Start a model</strong>
@@ -220,7 +235,17 @@
         </div>
       </header>
       <input id="pg-system" type="text" placeholder="System prompt (optional, applies to the whole conversation)">
-      <div id="pg-chat" class="transcript pg-chat"></div>
+      <div id="pg-chat" class="transcript pg-chat">
+        <div class="empty-state" id="pg-empty">
+          <svg class="ic"><use href="#i-chat"/></svg>
+          <p>Ask the cluster anything.</p>
+          <div class="row wrap center-row">
+            <button class="suggestion">What models are you running?</button>
+            <button class="suggestion">Write a haiku about home labs</button>
+            <button class="suggestion">Explain unified memory in one paragraph</button>
+          </div>
+        </div>
+      </div>
       <div id="pg-stats" class="stats"></div>
       <div id="pg-attachments" class="row wrap"></div>
       <div class="row">
