@@ -13,7 +13,8 @@ Session config (RTVI client-message, BEFORE client-ready, all optional):
                             "voice": "Ryan",              # TTS voice slot
                             "engine": "clone"|"stock"|"design",  # which TTS server
                             "brain": "auto"|"gemma4-2b"|"default",
-                            "tool_ack": "One sec."}}   # spoken by the bot when it forwards a tool call ("" = silent)
+                            "tool_ack": "One sec.",     # spoken by the bot when it forwards a tool call ("" = silent)
+                            "min_words": 1}}            # barge-in words needed while the bot speaks (default 3; 1 with client AEC)
 Ack: server-message {"type": "configured", "data": {...}}.
 
 Turn taking / echo (env): CASCADE_TURN_START ("min_words" default, or "vad")
@@ -269,6 +270,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     context = LLMContext(
         messages=[{"role": "system", "content": DEV_SYSTEM_INSTRUCTION}]
     )
+    start_strategy = turn_start_strategy()
     user_agg = LLMUserAggregator(
         context,
         params=LLMUserAggregatorParams(
@@ -279,7 +281,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
                 stop_secs=_env_float("CASCADE_VAD_STOP_SECS", 0.2),
             )),
             user_turn_strategies=UserTurnStrategies(
-                start=[turn_start_strategy()],
+                start=[start_strategy],
                 stop=[TurnAnalyzerUserTurnStopStrategy(
                     turn_analyzer=LocalSmartTurnAnalyzerV3(cpu_count=1),
                     wait_for_transcript=True,
@@ -383,6 +385,13 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
             # swap the TTS server for this session (openai client base_url is settable)
             tts._client.base_url = TTS_ENGINES[eng]
             applied["engine"] = eng
+        mw = d.get("min_words")
+        if isinstance(mw, int) and 1 <= mw <= 10 and hasattr(start_strategy, "_min_words"):
+            # Barge-in words required while the bot speaks. Robot sessions
+            # (hardware AEC via the XVF3800) can run 1; phone sessions without
+            # echo cancellation keep the default 3 (2026-09-01).
+            start_strategy._min_words = mw
+            applied["min_words"] = mw
         ack = d.get("tool_ack")
         if isinstance(ack, str):
             session["tool_ack"] = ack.strip()[:80]
