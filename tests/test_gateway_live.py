@@ -20,7 +20,11 @@ import urllib.request
 import pytest
 
 GATEWAY = "http://127.0.0.1:8000"
-HEADERS = {"Content-Type": "application/json", "Authorization": "Bearer dummy-key"}
+import os as _os
+_key = _os.environ.get("SPARK_KEY") or next(
+    (l.split("=", 1)[1].strip() for l in open(".env") if l.startswith("GATEWAY_LOCAL_KEY=")), "missing-key"
+) if _os.path.exists(".env") else "missing-key"
+HEADERS = {"Content-Type": "application/json", "Authorization": f"Bearer {_key}"}
 
 # Deliberately reasoning-heavy prompt — with a `max`-effort default this
 # reliably consumed >4096 tokens of pure reasoning.

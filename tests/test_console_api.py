@@ -295,3 +295,45 @@ def test_playground_models_gateway_down(client, monkeypatch):
     async def fake_get(url, **kw): raise _httpx.ConnectError("nope")
     monkeypatch.setattr(console_api._gw, "get", fake_get)
     assert client.get("/playground/models").status_code == 502
+
+
+# ── clients & usage ──────────────────────────────────────────────────────────
+
+def test_clients_masks_keys_and_joins_usage(client, monkeypatch, tmp_path):
+    f = tmp_path / "clients.yaml"
+    f.write_text("""
+enforce_auth: false
+clients:
+  - name: scout
+    keys: ["sk-spark-scout-abcdef123456"]
+    allow: ["default", "bge-m3"]
+    rpm: 120
+    concurrency: 2
+default:
+  name: anonymous
+  allow: ["*"]
+""")
+    monkeypatch.setattr(console_api, "CLIENTS_FILE", f)
+
+    METRICS = "\n".join([
+        'sparkstation_gateway_client_requests_total{alias="default",client="scout",code="200"} 40.0',
+        'sparkstation_gateway_client_requests_total{alias="default",client="scout",code="429"} 3.0',
+        'sparkstation_gateway_client_inflight{client="scout"} 1.0',
+    ])
+    class FakeResp:
+        text = METRICS
+    async def fake_get(url, **kw): return FakeResp()
+    monkeypatch.setattr(console_api._gw, "get", fake_get)
+
+    d = client.get("/clients").json()
+    assert d["enforce_auth"] is False and d["gateway_metrics_ok"] is True
+    sc = d["clients"][0]
+    assert sc["keys"] == ["sk-spark…3456"]  # masked, never the full key
+    assert "sk-spark-scout-abcdef123456" not in str(d)
+    assert sc["usage"] == {"total": 43, "errors": 3, "by_alias": {"default": 43}, "inflight": 1}
+    assert d["default"]["name"] == "anonymous" and d["default"]["usage"] is None
+
+
+def test_clients_missing_file_404(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(console_api, "CLIENTS_FILE", tmp_path / "nope.yaml")
+    assert client.get("/clients").status_code == 404

@@ -322,6 +322,19 @@ async def _ensure_available(alias: str) -> Optional[Response]:
 async def forward(request: Request, path: str):
     body = await request.body()
 
+    # GET /health is unauthenticated liveness: monitors and the CLI must be
+    # able to see "gateway up" without holding a client key (enforce_auth
+    # would otherwise 401 the probe and every health check would lie).
+    if request.method == "GET" and path == "health":
+        try:
+            # litellm's /health itself demands auth; /health/liveliness is its
+            # unauthenticated liveness route and answers 200 when it's up.
+            upstream = await client.get("/health/liveliness")
+            return Response(content=upstream.content, status_code=upstream.status_code,
+                            media_type=upstream.headers.get("content-type"))
+        except Exception as e:
+            return JSONResponse(status_code=502, content={"error": {"message": f"Upstream gateway error: {e}", "type": "bad_gateway"}})
+
     # Resolve the client up front — its reasoning default is applied before
     # dialect normalization below.
     policy = clients.resolve(extract_key(request.headers))

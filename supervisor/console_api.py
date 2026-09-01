@@ -338,7 +338,7 @@ def _gateway_base() -> str:
 async def playground_models():
     """Chat-capable model ids the gateway currently serves."""
     try:
-        r = await _gw.get(f"{_gateway_base()}/v1/models", headers={"Authorization": "Bearer console"})
+        r = await _gw.get(f"{_gateway_base()}/v1/models", headers={"Authorization": f"Bearer {settings.gateway_console_key}"})
         r.raise_for_status()
     except httpx.HTTPError as e:
         raise HTTPException(502, f"gateway unreachable: {e}")
@@ -368,7 +368,7 @@ async def playground_chat(request: Request):
         # identity: httpx advertises gzip by default and LiteLLM then
         # compresses the SSE stream — the gzip flush windows turn per-token
         # chunks into multi-KB sentence-sized bursts at the browser.
-        headers={"Authorization": "Bearer console", "Content-Type": "application/json",
+        headers={"Authorization": f"Bearer {settings.gateway_console_key}", "Content-Type": "application/json",
                  "Accept-Encoding": "identity"},
     )
     try:
@@ -404,6 +404,90 @@ async def playground_chat(request: Request):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ── clients & usage ──────────────────────────────────────────────────────────
+# Read-only view of the gateway's per-client access control (gateway/clients.py):
+# policies from gateway/clients.yaml (keys masked — the file stays the source
+# of truth and hot-reloads on save, so edits happen there, not here) joined
+# with live usage counters scraped from the proxy's /metrics.
+
+CLIENTS_FILE = Path("gateway/clients.yaml")
+
+
+def _mask_key(k: str) -> str:
+    k = str(k)
+    if len(k) <= 8:
+        return "****"
+    return f"{k[:8]}…{k[-4:]}"
+
+
+def _parse_prom_line(line: str):
+    """name{a="b",c="d"} value -> (name, labels, float) — enough for our counters."""
+    try:
+        head, val = line.rsplit(" ", 1)
+        name, _, rest = head.partition("{")
+        labels = {}
+        if rest.endswith("}"):
+            for part in rest[:-1].split('",'):
+                if "=" in part:
+                    k, _, v = part.partition("=")
+                    labels[k.strip()] = v.strip().strip('"')
+        return name, labels, float(val)
+    except ValueError:
+        return None, None, None
+
+
+@router.get("/clients")
+async def clients_and_usage():
+    if not CLIENTS_FILE.is_file():
+        raise HTTPException(404, f"{CLIENTS_FILE} not found — per-client control not configured")
+    import yaml
+    try:
+        cfg = yaml.safe_load(CLIENTS_FILE.read_text()) or {}
+    except yaml.YAMLError as e:
+        raise HTTPException(502, f"clients.yaml is not valid YAML: {e}")
+
+    usage: dict = {}
+    gateway_ok = True
+    try:
+        r = await _gw.get(f"{_gateway_base()}/metrics", timeout=5.0)
+        for line in r.text.splitlines():
+            if line.startswith("sparkstation_gateway_client_requests_total"):
+                _, lab, val = _parse_prom_line(line)
+                if lab is None:
+                    continue
+                u = usage.setdefault(lab.get("client", "?"), {"total": 0, "errors": 0, "by_alias": {}, "inflight": 0})
+                u["total"] += int(val)
+                if not lab.get("code", "").startswith("2"):
+                    u["errors"] += int(val)
+                if lab.get("alias") and lab["alias"] != "none":
+                    u["by_alias"][lab["alias"]] = u["by_alias"].get(lab["alias"], 0) + int(val)
+            elif line.startswith("sparkstation_gateway_client_inflight"):
+                _, lab, val = _parse_prom_line(line)
+                if lab is not None:
+                    usage.setdefault(lab.get("client", "?"), {"total": 0, "errors": 0, "by_alias": {}, "inflight": 0})["inflight"] = int(val)
+    except httpx.HTTPError:
+        gateway_ok = False
+
+    def policy_view(c: dict) -> dict:
+        return {
+            "name": c.get("name"),
+            "keys": [_mask_key(k) for k in (c.get("keys") or [])],
+            "allow": c.get("allow") or ["*"],
+            "rpm": int(c.get("rpm") or 0),
+            "concurrency": int(c.get("concurrency") or 0),
+            "reasoning": c.get("reasoning"),
+            "usage": usage.get(c.get("name")),
+        }
+
+    return {
+        "enforce_auth": bool(cfg.get("enforce_auth")),
+        "gateway_metrics_ok": gateway_ok,
+        "clients": [policy_view(c) for c in cfg.get("clients") or []],
+        "default": policy_view(cfg["default"]) if isinstance(cfg.get("default"), dict) else None,
+        "config_file": str(CLIENTS_FILE),
+    }
 
 
 # ── logs ─────────────────────────────────────────────────────────────────────
