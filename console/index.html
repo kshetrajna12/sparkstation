@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sparkstation Console</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>⚡</text></svg>">
-<link rel="stylesheet" href="style.css?v=11">
+<link rel="stylesheet" href="style.css?v=12">
 </head>
 <body>
 <div class="shell">
@@ -14,7 +14,7 @@
     <a class="nav-item active" data-section="voice" href="#voice">🎙️ Voice Studio</a>
     <a class="nav-item" data-section="cluster" href="#cluster">🖥️ Cluster &amp; models</a>
     <a class="nav-item" data-section="playground" href="#playground">💬 Playground</a>
-    <a class="nav-item soon" data-section="clients" href="#clients">🔑 Clients &amp; usage <span class="pill">soon</span></a>
+    <a class="nav-item" data-section="clients" href="#clients">🔑 Clients &amp; usage</a>
     <a class="nav-item" data-section="logs" href="#logs">📜 Logs</a>
     <a class="nav-item" id="grafana-link" href="#" target="_blank" rel="noopener" hidden>📈 Metrics (Grafana) ↗</a>
     <div class="sidebar-foot">
@@ -206,6 +206,18 @@
       <p class="hint">Requests go through the supervisor to the local gateway (<code>/playground/chat</code> → <code>:8000/v1/chat/completions</code>). Pick <code>vision</code> for image questions.</p>
     </section>
 
+    <section id="section-clients" class="section" hidden>
+      <header class="section-head">
+        <h1>Clients &amp; usage</h1>
+        <div class="row">
+          <span id="clients-auth" class="chip"></span>
+          <button id="clients-refresh">↻ refresh</button>
+        </div>
+      </header>
+      <div id="clients-table"></div>
+      <p class="hint">Policies live in <code>gateway/clients.yaml</code> on the primary (keys are secrets — masked here). The proxy hot-reloads the file on save, so edits there apply without a restart. Request counts are since the gateway last started.</p>
+    </section>
+
     <section id="section-soon" class="section" hidden>
       <h1 id="soon-title">Coming soon</h1>
       <p class="muted">This section isn't built yet. The CLI (<code>sparkstation …</code>) remains the authoritative ops tool.</p>
@@ -215,7 +227,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="talk.js?v=11"></script>
-<script src="app.js?v=11"></script>
+<script src="talk.js?v=12"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>

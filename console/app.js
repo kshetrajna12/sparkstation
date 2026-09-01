@@ -46,7 +46,7 @@
   function fillLangs() { $$(".lang-select").forEach((sel) => { sel.innerHTML = LANGS.map((l) => `<option>${l}</option>`).join(""); }); }
 
   // ── navigation ───────────────────────────────────────────────────────────
-  const BUILT_SECTIONS = { voice: "#section-voice", cluster: "#section-cluster", logs: "#section-logs", playground: "#section-playground" };
+  const BUILT_SECTIONS = { voice: "#section-voice", cluster: "#section-cluster", logs: "#section-logs", playground: "#section-playground", clients: "#section-clients" };
   function showSection(name) {
     $$(".nav-item[data-section]").forEach((a) => a.classList.toggle("active", a.dataset.section === name));
     for (const sel of Object.values(BUILT_SECTIONS)) $(sel).hidden = BUILT_SECTIONS[name] !== sel;
@@ -55,6 +55,7 @@
     if (name === "cluster") refreshCluster();
     if (name === "logs") refreshLogSources();
     if (name === "playground") initPlayground();
+    if (name === "clients") refreshClients();
     clusterVisible = name === "cluster";
     logsVisible = name === "logs";
   }
@@ -729,6 +730,36 @@
     };
   }
 
+  // ── clients & usage ──────────────────────────────────────────────────────
+  async function refreshClients() {
+    try {
+      const d = await api("GET", "/clients");
+      const auth = $("#clients-auth");
+      auth.textContent = d.enforce_auth ? "enforce_auth: ON (unknown keys rejected)" : "enforce_auth: off (unknown keys → default policy)";
+      const rows = [...d.clients, ...(d.default ? [{ ...d.default, name: (d.default.name || "default") + " (fallback)" }] : [])];
+      const fmt = (n) => (n === 0 ? "∞" : n);
+      const usageCell = (u) => {
+        if (!u) return '<span class="muted">no traffic</span>';
+        const aliases = Object.entries(u.by_alias).sort((a, b) => b[1] - a[1]).slice(0, 4)
+          .map(([a, n]) => `${esc(a)}: ${n}`).join(", ");
+        return `${u.total} req${u.errors ? ` · <span class="bad-text">${u.errors} err</span>` : ""}${u.inflight ? ` · ${u.inflight} in-flight` : ""}${aliases ? `<div class="muted">${aliases}</div>` : ""}`;
+      };
+      $("#clients-table").innerHTML = `<table class="models"><thead><tr>
+        <th>Client</th><th>Keys</th><th>Models allowed</th><th>rpm</th><th>Concurrency</th><th>Reasoning</th><th>Usage (since gateway start)</th>
+        </tr></thead><tbody>` + rows.map((c) => `<tr>
+        <td><strong>${esc(c.name)}</strong></td>
+        <td class="muted">${c.keys && c.keys.length ? c.keys.map(esc).join("<br>") : "—"}</td>
+        <td>${(c.allow || []).map(esc).join(", ")}</td>
+        <td>${fmt(c.rpm)}</td>
+        <td>${fmt(c.concurrency)}</td>
+        <td>${esc(c.reasoning || "—")}</td>
+        <td>${usageCell(c.usage)}</td></tr>`).join("") + "</tbody></table>"
+        + (d.gateway_metrics_ok ? "" : '<p class="status-line bad">gateway /metrics unreachable — usage unavailable</p>');
+    } catch (e) { $("#clients-table").innerHTML = `<p class="status-line bad">${esc(e.message)}</p>`; }
+  }
+
+  function bindClients() { $("#clients-refresh").onclick = refreshClients; }
+
   // ── api key (only when the supervisor enforces one) ──────────────────────
   function bindApiKey() {
     const btn = $("#apikey-btn");
@@ -745,7 +776,7 @@
     $$(".tab").forEach((b) => { b.onclick = () => showTab(b.dataset.tab); });
     window.addEventListener("hashchange", route);
     route();
-    bindDesignForm(); bindCloneForm(); bindTalk(); bindApiKey(); bindCluster(); bindLogs(); bindPlayground();
+    bindDesignForm(); bindCloneForm(); bindTalk(); bindApiKey(); bindCluster(); bindLogs(); bindPlayground(); bindClients();
     $("#voices-refresh").onclick = () => { loadVoices(); refreshStatus(); };
     try {
       config = await (await fetch("/console/config.json")).json();
