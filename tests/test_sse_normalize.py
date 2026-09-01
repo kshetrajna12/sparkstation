@@ -59,6 +59,11 @@ def test_stream_reassembles_partial_lines():
         return b"".join([c async for c in normalize_sse(gen())])
 
     out = asyncio.run(run())
+    # SSE framing: every event must be its own blank-line-terminated block,
+    # and no block may carry two data lines.
+    events = [e for e in out.split(b"\n\n") if e.strip()]
+    assert len(events) == 4, events
+    assert all(e.count(b"data:") == 1 for e in events), events
     lines = [l for l in out.split(b"\n") if l.startswith(b"data:")]
     assert len(lines) == 4  # split mixed (2) + _REPLY + [DONE]
     assert _delta(lines[0]) == {"reasoning": "\n"}
@@ -79,4 +84,6 @@ def test_crlf_preserved():
         return b"".join([c async for c in normalize_sse(gen())])
 
     out = asyncio.run(run())
-    assert out.count(b"\r\n") == 2
+    # part1 + CRLF CRLF (event end) + part2 + CRLF
+    assert out.count(b"\r\n") == 3
+    assert out.split(b"\r\n\r\n")[0].count(b"data:") == 1
