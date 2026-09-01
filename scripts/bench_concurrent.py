@@ -13,6 +13,7 @@ Usage:
     .venv/bin/python scripts/bench_concurrent.py [--model qwen3.8-27b] \\
         [--concurrencies 1,4,8,16,32] [--rounds 3] [--max-tokens 256]
 """
+import os
 import argparse
 import asyncio
 import json
@@ -73,7 +74,7 @@ async def stream_one(client: httpx.AsyncClient, base_url: str, model: str,
     async with client.stream(
         "POST", f"{base_url}/chat/completions",
         json=body,
-        headers={"Authorization": "Bearer dummy-key"},
+        headers={"Authorization": f"Bearer {os.environ.get('SPARK_KEY', 'missing-key')}"},
         timeout=300.0,
     ) as resp:
         async for line in resp.aiter_lines():

@@ -355,7 +355,7 @@ This project has access to local LLM models through Sparkstation gateway.
 
 - **Base URL**: `http://localhost:8000/v1`
 - **Protocol**: OpenAI-compatible API
-- **Authentication**: Use any string as API key (e.g., `"dummy-key"`)
+- **Authentication**: Any string works until you enable per-client keys (gateway/clients.yaml `enforce_auth: true`); then use a registered key.
 
 ## Usage with OpenAI Python SDK
 

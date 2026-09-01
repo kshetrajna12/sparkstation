@@ -293,7 +293,7 @@ curl http://127.0.0.1:9001/models/detailed
 
 ```bash
 curl http://127.0.0.1:8000/v1/chat/completions \
-  -H 'Authorization: Bearer dummy-key' \
+  -H "Authorization: Bearer $SPARK_KEY" \  # registered key (gateway/clients.yaml); fresh installs accept any string until enforce_auth is enabled
   -H 'Content-Type: application/json' \
   -d '{
     "model": "chat",
@@ -305,7 +305,7 @@ For embeddings:
 
 ```bash
 curl http://127.0.0.1:8000/v1/embeddings \
-  -H 'Authorization: Bearer dummy-key' \
+  -H "Authorization: Bearer $SPARK_KEY" \  # registered key (gateway/clients.yaml); fresh installs accept any string until enforce_auth is enabled
   -H 'Content-Type: application/json' \
   -d '{
     "model": "embeddings",

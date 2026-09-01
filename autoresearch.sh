@@ -18,9 +18,9 @@ MAX_TOKENS="${BENCH_MAX_TOKENS:-256}"
 # Attribute this harness to the 'autoresearch' gateway client (per-client
 # metrics/limits). The key is read from the gitignored gateway/clients.yaml so
 # it never lands in git; override with SPARKSTATION_API_KEY. Falls back to
-# dummy-key -> the anonymous client.
+# The gateway enforces registered keys; local-ops key comes from .env.
 SPARK_KEY="${SPARKSTATION_API_KEY:-$(grep -oE 'sk-spark-autoresearch-[0-9a-f]+' gateway/clients.yaml 2>/dev/null | head -1)}"
-export SPARK_KEY="${SPARK_KEY:-dummy-key}"
+export SPARK_KEY="${SPARK_KEY:-$(grep -s ^GATEWAY_LOCAL_KEY "$(dirname "$0")/.env" | cut -d= -f2)}"
 
 echo "Benchmarking $MODEL ($MODE) — $REQUESTS requests, $WARMUP warmup, max_tokens=$MAX_TOKENS" >&2
 
@@ -33,7 +33,7 @@ import asyncio, os, sys, time, json, statistics, httpx
 
 model, num_req, warmup, max_tok = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 BASE_URL = "http://localhost:8000/v1"
-API_KEY = os.environ.get("SPARK_KEY", "dummy-key")
+API_KEY = os.environ.get("SPARK_KEY", "missing-key")
 prompts = [
     "Explain the concept of photosynthesis in two sentences.",
     "What are the three laws of thermodynamics?",

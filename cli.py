@@ -240,8 +240,9 @@ def _supervisor_healthy() -> bool:
 
 def _gateway_healthy() -> bool:
     try:
-        r = httpx.get(f"{DEFAULT_GATEWAY_URL}/v1/models",
-                       headers={"Authorization": "Bearer dummy-key"}, timeout=3)
+        # /health is the unauthenticated liveness path (enforce_auth would 401
+        # a keyless /v1/models probe and make a healthy gateway look down)
+        r = httpx.get(f"{DEFAULT_GATEWAY_URL}/health", timeout=3)
         return r.status_code == 200
     except Exception:
         return False

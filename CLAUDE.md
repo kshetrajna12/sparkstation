@@ -39,7 +39,9 @@ role host — never commit it.
 
 - **Base URL**: `http://localhost:8000/v1`
 - **Protocol**: OpenAI-compatible API
-- **Authentication**: Use any string as API key (e.g., `"dummy-key"`)
+- **Authentication**: the gateway enforces registered API keys (401 otherwise).
+  For local work use the `local-ops` key from the repo's gitignored `.env`:
+  `export SPARK_KEY=$(grep ^GATEWAY_LOCAL_KEY .env | cut -d= -f2)`
 
 ## Usage with OpenAI Python SDK
 
@@ -47,8 +49,9 @@ role host — never commit it.
 from openai import OpenAI
 
 # Initialize client pointing to local Sparkstation gateway
+import os
 client = OpenAI(
-    api_key="dummy-key",  # Any value works
+    api_key=os.environ["SPARK_KEY"],  # from .env GATEWAY_LOCAL_KEY (see above)
     base_url="http://localhost:8000/v1"
 )
 
@@ -68,7 +71,7 @@ print(response.choices[0].message.content)
 ```bash
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer dummy-key" \
+  -H "Authorization: Bearer $SPARK_KEY" \
   -d '{
     "model": "default",
     "messages": [{"role": "user", "content": "Hello!"}]

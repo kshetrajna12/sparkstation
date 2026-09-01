@@ -96,6 +96,21 @@ def default_voice() -> tuple[str, str]:
         pass
     return fallback
 FAST_BRAIN = os.environ.get("CASCADE_FAST_BRAIN", "gemma4-2b")
+
+
+def _brain_key() -> str:
+    """Gateway API key for the brain (enforce_auth is on). Env wins; else a
+    keyfile on this host — never models.yaml, which is public."""
+    k = os.environ.get("CASCADE_BRAIN_KEY")
+    if k:
+        return k
+    path = os.path.expanduser(os.environ.get("CASCADE_BRAIN_KEY_FILE", "~/.sparkstation-brain-key"))
+    try:
+        with open(path) as f:
+            return f.read().strip() or "missing-brain-key"
+    except OSError:
+        logger.warning("no brain key at {} — gateway calls will 401", path)
+        return "missing-brain-key"
 THINK_BRAIN = os.environ.get("CASCADE_THINK_BRAIN", "default")
 
 DEV_SYSTEM_INSTRUCTION = (
@@ -191,11 +206,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
     stt = KyutaiSTTService(sample_rate=16_000)
     llm = RouterLLMService(
         fast_model=FAST_BRAIN, think_model=THINK_BRAIN,
-        base_url=GATEWAY, api_key="dummy-key",
+        base_url=GATEWAY, api_key=_brain_key(),
     )
     voice, engine = default_voice()  # K's pick 2026-08-30: cloned voice "K"
     tts = QwenTTSService(
-        base_url=TTS_ENGINES[engine], api_key="dummy-key",
+        base_url=TTS_ENGINES[engine], api_key="unused",  # TTS servers do no auth
         voice=voice, model="tts-1", sample_rate=24_000,
     )
     context = LLMContext(
