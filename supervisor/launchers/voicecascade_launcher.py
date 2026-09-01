@@ -139,9 +139,17 @@ class VoicecascadeLauncher(ModelLauncher):
                 raise LaunchError(f"invalid extra_env key: {key!r}")
             env += f"{key}={shlex.quote(str(value))} "
 
-        # 1) TTS containers ('docker start' on a running container is a no-op)
+        # 1) TTS containers ('docker start' on a running container is a no-op).
+        # Re-apply the adaptive-first-chunk patch (voicecascade/patches/) into
+        # each container's writable layer first: idempotent, works on stopped
+        # containers, and restores it if a container was recreated.
         names = " ".join(shlex.quote(c) for c in containers)
-        result = await self._ssh(target, f"docker start {names}", 60, log_path)
+        patch = xa.get("tts_patch", "/home/kshetrajna/cascade-tts/patches/streaming.py")
+        patch_cmd = " ".join(
+            f"([ -f {shlex.quote(patch)} ] && docker cp {shlex.quote(patch)} "
+            f"{shlex.quote(c)}:/app/faster_qwen3_tts/streaming.py >/dev/null 2>&1; true);"
+            for c in containers)
+        result = await self._ssh(target, f"{patch_cmd} docker start {names}", 90, log_path)
         if result.returncode != 0:
             raise LaunchError(
                 f"voicecascade: docker start {names} failed (exit {result.returncode}); "

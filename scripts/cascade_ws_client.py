@@ -13,8 +13,14 @@ Wire format: Pipecat protobuf frames (pipecat/frames/frames.proto,
 ProtobufFrameSerializer). The tiny codec below covers the full wire schema —
 useful as reference for a bridge in any language. Requires only `websockets`.
 
-Usage: python ws_smoke_client.py [host] [seconds]
+Usage: python ws_smoke_client.py [host] [seconds] [wav] [tools.json]
+
+ECHO=<gain> (default 0 = off) mixes the bot audio this client RECEIVES back
+into the mic stream it SENDS, emulating a speaker->mic loop on a client with
+no AEC — the condition that makes the bot interrupt itself and transcribe its
+own words. ECHO_DELAY_MS (default 150) is the acoustic delay.
 """
+import array
 import asyncio
 import json
 import os
@@ -30,7 +36,9 @@ RUN_SECS = float(sys.argv[2]) if len(sys.argv) > 2 else 25.0
 URL = f"ws://{HOST}:7860/ws-client"
 
 IN_RATE = 16_000   # mic path: client -> bot
-# bot audio arrives at 24_000 Hz mono PCM16
+OUT_RATE = 24_000  # bot audio arrives at 24_000 Hz mono PCM16
+ECHO_GAIN = float(os.environ.get("ECHO", "0") or 0)
+ECHO_DELAY_MS = float(os.environ.get("ECHO_DELAY_MS", "150") or 150)
 
 
 # ── minimal protobuf wire codec for pipecat/frames/frames.proto ──────────────
@@ -99,7 +107,8 @@ def decode_frame(buf: bytes):
     kind = FRAME_KINDS.get(field, f"unknown-{field}")
     if kind == "audio":
         f = _parse_fields(payload)
-        return kind, {"bytes": len(f.get(3, b"")), "rate": f.get(4), "ch": f.get(5)}
+        pcm = f.get(3, b"")
+        return kind, {"bytes": len(pcm), "rate": f.get(4), "ch": f.get(5), "pcm": pcm}
     if kind == "message":
         return kind, json.loads(_parse_fields(payload).get(1, b"{}"))
     if kind in ("text", "transcription"):
@@ -108,9 +117,53 @@ def decode_frame(buf: bytes):
     return kind, {}
 
 
+# ── speaker -> mic echo simulation (ECHO=<gain>) ─────────────────────────────
+# A ring of received bot PCM16 @24k, pre-filled with ECHO_DELAY_MS of silence.
+# Each outgoing 20 ms mic chunk (320 samples @16k) consumes 480 samples @24k,
+# resampled 3:2 by nearest-neighbour (index round(i * 1.5)) — pure Python, no
+# numpy in this venv.
+_ECHO_PREFILL = int(OUT_RATE * ECHO_DELAY_MS / 1000.0)
+_echo_buf = array.array("h", [0] * _ECHO_PREFILL)
+
+
+def echo_feed(pcm: bytes) -> None:
+    """Bot audio arriving at the 'speaker'."""
+    if ECHO_GAIN <= 0 or len(pcm) < 2:
+        return
+    if not _echo_buf:
+        # the delay line drained while the bot was quiet — re-arm it so the
+        # next utterance is echoed ECHO_DELAY_MS late, not instantly
+        _echo_buf.extend([0] * _ECHO_PREFILL)
+    a = array.array("h")
+    a.frombytes(pcm[: len(pcm) - (len(pcm) % 2)])
+    _echo_buf.extend(a)
+
+
+def echo_mix(pcm: bytes, n_samples: int) -> bytes:
+    """Add the next n_samples of delayed, downsampled bot audio to a mic chunk."""
+    if ECHO_GAIN <= 0:
+        return pcm
+    need = int(n_samples * OUT_RATE / IN_RATE)          # 480 @24k per 320 @16k
+    if len(_echo_buf) < need:
+        return pcm
+    win = _echo_buf[:need]
+    del _echo_buf[:need]
+    mic = array.array("h")
+    mic.frombytes(pcm[: n_samples * 2])
+    for i in range(min(n_samples, len(mic))):
+        j = int(round(i * OUT_RATE / IN_RATE))
+        if j >= need:
+            break
+        v = int(mic[i] + win[j] * ECHO_GAIN)
+        mic[i] = -32768 if v < -32768 else (32767 if v > 32767 else v)
+    return mic.tobytes()
+
+
 # ── smoke test ───────────────────────────────────────────────────────────────
 async def main():
     print(f"connecting {URL}")
+    if ECHO_GAIN > 0:
+        print(f"-> echo simulation on (gain {ECHO_GAIN}, delay {ECHO_DELAY_MS:.0f} ms)")
     got: dict[str, int] = {}
     audio_in_bytes = 0
     wav_done_at = None
@@ -166,6 +219,7 @@ async def main():
                         struct.pack("<h", int(3000 * math.sin(2 * math.pi * 220 * (t + i) / IN_RATE)))
                         for i in range(chunk)) if False else b"\x00" * (chunk * 2)
                 t += chunk
+                pcm = echo_mix(pcm, chunk)
                 # MUTE_AFTER_SPEECH=1: emulate a half-duplex bridge that stops
                 # sending mic audio once its utterance is done
                 if os.environ.get("MUTE_AFTER_SPEECH") == "1" and pos >= len(wav_pcm) and wav_pcm:
@@ -189,6 +243,7 @@ async def main():
                     if first_audio_at is None:
                         first_audio_at = time.monotonic()
                     audio_in_bytes += info["bytes"]
+                    echo_feed(info.get("pcm", b""))
                     got["audio"] = got.get("audio", 0) + 1
                 else:
                     got[kind] = got.get(kind, 0) + 1

@@ -16,6 +16,13 @@ Session config (RTVI client-message, BEFORE client-ready, all optional):
                             "tool_ack": "One sec."}}   # spoken by the bot when it forwards a tool call ("" = silent)
 Ack: server-message {"type": "configured", "data": {...}}.
 
+Turn taking / echo (env): CASCADE_TURN_START ("min_words" default, or "vad")
+picks the user-turn-start strategy and CASCADE_MIN_WORDS (3) is the word count
+needed to interrupt a speaking bot; CASCADE_ECHO_GUARD=0 turns off the
+transcript-level echo suppressor (CASCADE_ECHO_WINDOW_S, CASCADE_ECHO_TAIL_S —
+see echo_guard.py). Clients without AEC need both: their speaker bleeds into
+their mic and the bot otherwise interrupts itself and answers its own words.
+
 Default voice: the Console writes {"default": {"voice", "engine"}} to
 <CASCADE_VOICE_CONFIG_DIR>/console.json (the TTS registry dir); it is read at
 every session start, falling back to CASCADE_VOICE / the clone engine. Engine
@@ -34,7 +41,14 @@ from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import InputAudioRawFrame, LLMRunFrame, TTSSpeakFrame
+from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
+    InputAudioRawFrame,
+    LLMRunFrame,
+    TTSSpeakFrame,
+    TTSTextFrame,
+)
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -58,6 +72,9 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
 )
+from pipecat.turns.user_start.min_words_user_turn_start_strategy import (
+    MinWordsUserTurnStartStrategy,
+)
 from pipecat.turns.user_start.vad_user_turn_start_strategy import VADUserTurnStartStrategy
 from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
     TurnAnalyzerUserTurnStopStrategy,
@@ -66,8 +83,9 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
 from . import metrics
+from .echo_guard import EchoGuard, RecentBotText
 from .kyutai_stt import KyutaiSTTService
-from .qwen_tts import QwenTTSService
+from .qwen_tts import FirstClauseAggregator, QwenTTSService
 from .router_llm import RouterLLMService
 
 GATEWAY = os.environ.get("CASCADE_GATEWAY", "http://192.168.101.10:8000/v1")
@@ -167,7 +185,15 @@ class IngressPacer(FrameProcessor):
 
 
 class CascadeMetricsTap(FrameProcessor):
-    """Pass-through that feeds every frame to the prometheus tap."""
+    """Pass-through that feeds every frame to the prometheus tap, and records
+    the bot's own speech for the EchoGuard.
+
+    It sits between TTS and transport.output(), which is exactly where spoken
+    text (TTSTextFrame, downstream) and the transport's speaking edges
+    (BotStarted/StoppedSpeakingFrame, pushed upstream from the output) both
+    pass. TTSSpeakFrame is deliberately NOT recorded here: the tool_ack path
+    pushes it from the LLM and it reaches us as TTSTextFrame after the TTS,
+    so recording it too would only double-count."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -176,7 +202,28 @@ class CascadeMetricsTap(FrameProcessor):
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
         self._tap.on_frame(frame)
+        if isinstance(frame, BotStartedSpeakingFrame):
+            RecentBotText.speaking(True)
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            RecentBotText.speaking(False)
         await self.push_frame(frame, direction)
+
+
+def turn_start_strategy():
+    """How a user turn begins. Default "min_words": a speaking bot is only
+    interrupted once CASCADE_MIN_WORDS words have been transcribed, so a burst
+    of echo/room noise no longer cuts the bot off (VAD energy alone did).
+    CASCADE_TURN_START=vad restores the old energy-triggered behaviour. The
+    VAD analyzer stays configured either way — the smart-turn stop strategy
+    needs its frames."""
+    mode = (os.environ.get("CASCADE_TURN_START", "min_words") or "min_words").strip().lower()
+    if mode == "vad":
+        return VADUserTurnStartStrategy()
+    try:
+        min_words = int(os.environ.get("CASCADE_MIN_WORDS", "") or 3)
+    except ValueError:
+        min_words = 3
+    return MinWordsUserTurnStartStrategy(min_words=max(1, min_words))
 
 
 def create_transport(runner_args):
@@ -204,6 +251,7 @@ def create_transport(runner_args):
 
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
+    RecentBotText.reset()  # bot speech is per-session state (sessions are serial)
     stt = KyutaiSTTService(sample_rate=16_000)
     llm = RouterLLMService(
         fast_model=FAST_BRAIN, think_model=THINK_BRAIN,
@@ -214,6 +262,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         base_url=TTS_ENGINES[engine], api_key="unused",  # TTS servers do no auth
         voice=voice, model="tts-1", sample_rate=24_000,
     )
+    # TTSService builds its SimpleTextAggregator itself (no constructor knob in
+    # this pipecat rev), so swap it after the fact: speak the first clause
+    # instead of waiting on the first full sentence (~0.3 s off time-to-audio).
+    tts._text_aggregator = FirstClauseAggregator(aggregation_type=tts._text_aggregation_mode)
     context = LLMContext(
         messages=[{"role": "system", "content": DEV_SYSTEM_INSTRUCTION}]
     )
@@ -227,7 +279,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
                 stop_secs=_env_float("CASCADE_VAD_STOP_SECS", 0.2),
             )),
             user_turn_strategies=UserTurnStrategies(
-                start=[VADUserTurnStartStrategy()],
+                start=[turn_start_strategy()],
                 stop=[TurnAnalyzerUserTurnStopStrategy(
                     turn_analyzer=LocalSmartTurnAnalyzerV3(cpu_count=1),
                     wait_for_transcript=True,
@@ -243,6 +295,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         transport.input(),
         *pacer,
         stt,
+        EchoGuard(),
         user_agg,
         llm,
         tts,
