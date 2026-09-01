@@ -12,7 +12,8 @@ Session config (RTVI client-message, BEFORE client-ready, all optional):
   {"t": "configure", "d": {"system_instruction": "...",   # OpenClaw-owned
                             "voice": "Ryan",              # TTS voice slot
                             "engine": "clone"|"stock"|"design",  # which TTS server
-                            "brain": "auto"|"gemma4-2b"|"default"}}
+                            "brain": "auto"|"gemma4-2b"|"default",
+                            "tool_ack": "One sec."}}   # spoken by the bot when it forwards a tool call ("" = silent)
 Ack: server-message {"type": "configured", "data": {...}}.
 
 Default voice: the Console writes {"default": {"voice", "engine"}} to
@@ -33,7 +34,7 @@ from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.frames.frames import InputAudioRawFrame, LLMRunFrame
+from pipecat.frames.frames import InputAudioRawFrame, LLMRunFrame, TTSSpeakFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -263,6 +264,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         rtvi_processor=rtvi,
     )
 
+    session = {"tool_ack": ""}  # per-session knobs set via configure
+
     async def forward_tool_call(params: FunctionCallParams):
         """Catch-all: every brain tool call is forwarded to the client as an
         RTVI llm-function-call message (contract v1.1 shapes). Deferred: the
@@ -271,6 +274,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
         logger.info("Tool call -> client: {}({}) id={}",
                     params.function_name, params.arguments, params.tool_call_id)
         metrics.tool_call(params.function_name)
+        # Spoken acknowledgement while the client works the call. Bot-side on
+        # purpose: asking the MODEL to "say you're checking" makes Qwen narrate
+        # and stop without calling ~25% of the time (measured 2026-09-01).
+        if session["tool_ack"]:
+            await params.llm.push_frame(TTSSpeakFrame(session["tool_ack"]))
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
             await rtvi.handle_function_call(params)
@@ -322,6 +330,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
             # swap the TTS server for this session (openai client base_url is settable)
             tts._client.base_url = TTS_ENGINES[eng]
             applied["engine"] = eng
+        ack = d.get("tool_ack")
+        if isinstance(ack, str):
+            session["tool_ack"] = ack.strip()[:80]
+            applied["tool_ack"] = session["tool_ack"]
         b = d.get("brain")
         if isinstance(b, str) and b.strip() and b != "auto":
             llm._fast = llm._think = b.strip()
