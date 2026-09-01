@@ -378,7 +378,10 @@ async def playground_chat(request: Request):
 
     async def body_iter():
         try:
-            async for chunk in resp.aiter_raw(8192):
+            # no chunk size: aiter_raw(N) is an EXACT-size chunker that waits
+            # to fill N bytes — at ~37 tok/s that turned per-token SSE into
+            # 8 KB blobs ~3 s apart. Bare aiter_raw() yields per network read.
+            async for chunk in resp.aiter_raw():
                 yield chunk
         finally:
             await resp.aclose()
