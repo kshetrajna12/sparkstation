@@ -42,6 +42,7 @@
     t.classList.toggle("bad", !!bad); t.classList.toggle("warn", !bad && !!warn);
     clearTimeout(t._h); t._h = setTimeout(() => { t.hidden = true; }, bad || warn ? 7000 : 3000);
   }
+  const ic = (name) => `<svg class="ic"><use href="#i-${name}"/></svg>`;
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
   function fillLangs() { $$(".lang-select").forEach((sel) => { sel.innerHTML = LANGS.map((l) => `<option>${l}</option>`).join(""); }); }
 
@@ -142,10 +143,10 @@
       <td class="instruct-cell"><div class="instruct-view">${v.instruct ? esc(v.instruct) : '<span class="muted">—</span>'}</div></td>
       ${v.engine === "clone" ? `<td class="instruct-cell">${esc(v.ref_text || "")}</td>` : ""}
       <td class="actions">
-        <button data-act="play" title="synthesize the sample text with this voice">▶</button>
-        <button data-act="edit" title="edit ${v.engine === "design" ? "description" : "style instruct"}">✎</button>
-        ${v.is_default ? "" : `<button data-act="default" title="make this Sparky's voice">★</button>`}
-        ${v.engine === "stock" || v.is_default ? "" : `<button data-act="delete" class="danger" title="delete">🗑</button>`}
+        <button data-act="play" class="icon-btn" title="synthesize the sample text with this voice">${ic("play")}</button>
+        <button data-act="edit" class="icon-btn" title="edit ${v.engine === "design" ? "description" : "style instruct"}">${ic("pencil")}</button>
+        ${v.is_default ? "" : `<button data-act="default" class="icon-btn" title="make this Sparky's voice">${ic("star")}</button>`}
+        ${v.engine === "stock" || v.is_default ? "" : `<button data-act="delete" class="icon-btn danger" title="delete">${ic("trash")}</button>`}
       </td>`;
     tr.querySelector('[data-act="play"]').onclick = (ev) => playVoice(v, ev.currentTarget);
     tr.querySelector('[data-act="edit"]').onclick = () => editVoice(v, tr);
@@ -157,7 +158,7 @@
   let currentAudio = null;
   async function playVoice(v, btn) {
     try {
-      btn.disabled = true; btn.textContent = "…";
+      btn.disabled = true; btn.classList.add("spin"); btn.innerHTML = ic("refresh");
       const body = { voice: v.id, engine: v.engine };
       if (sampleText()) body.text = sampleText();
       const r = await api("POST", "/voice/speak", body, { raw: true });
@@ -167,7 +168,7 @@
       currentAudio = new Audio(URL.createObjectURL(blob));
       await currentAudio.play();
     } catch (e) { toast("play failed: " + e.message, true); }
-    finally { btn.disabled = false; btn.textContent = "▶"; }
+    finally { btn.disabled = false; btn.classList.remove("spin"); btn.innerHTML = ic("play"); }
   }
 
   function editVoice(v, tr) {
@@ -253,12 +254,12 @@
           recordedBlob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
           $("#clone-file").value = "";
           const a = $("#clone-audio"); a.src = URL.createObjectURL(recordedBlob); a.hidden = false;
-          $("#clone-record").textContent = "● Record again";
+          $("#clone-record").textContent = "Record again";
           state.textContent = `recorded ${elapsed.toFixed(1)} s`;
         };
         let elapsed = 0; const t0 = performance.now();
         recorder.start(250);
-        $("#clone-record").textContent = "■ Stop";
+        $("#clone-record").textContent = "Stop recording";
         recordTimer = setInterval(() => {
           elapsed = (performance.now() - t0) / 1000;
           state.textContent = `recording ${elapsed.toFixed(1)} s` + (elapsed > 12 ? " — that's plenty, stop soon" : "");
@@ -415,14 +416,14 @@
   function renderModels(models) {
     const rows = models.map((m) => {
       const running = m.status === "running", suspended = m.status === "suspended";
-      const hb = m.health_status === "healthy" ? "💚" : m.health_status === "unhealthy" ? "💔" : "";
+      const hb = m.health_status === "healthy" ? '<span class="dot ok" title="healthy"></span>' : m.health_status === "unhealthy" ? '<span class="dot bad" title="unhealthy"></span>' : "";
       const acts = [
-        running || m.status === "starting" ? `<button data-act="stop" title="stop">■</button>` : "",
-        running && m.model_type === "chat" ? `<button data-act="suspend" title="suspend (free memory, fast resume)">⏸</button>` : "",
-        suspended ? `<button data-act="resume" title="resume">▶</button>` : "",
+        running || m.status === "starting" ? `<button data-act="stop" class="icon-btn" title="stop">${ic("stop")}</button>` : "",
+        running && m.model_type === "chat" ? `<button data-act="suspend" class="icon-btn" title="suspend (free memory, fast resume)">${ic("pause")}</button>` : "",
+        suspended ? `<button data-act="resume" class="icon-btn" title="resume">${ic("play")}</button>` : "",
       ].join("");
       return `<tr data-id="${esc(m.id)}" data-alias="${esc(m.alias || m.model_name)}">
-        <td><strong>${esc(m.alias || m.model_name)}</strong>${m.is_default ? '<span class="default-badge">default</span>' : ""}${m.is_vision ? ' 👁' : ""}<div class="muted">${esc(m.backend)} · ${esc(m.model_type)}</div></td>
+        <td><strong>${esc(m.alias || m.model_name)}</strong>${m.is_default ? '<span class="default-badge">default</span>' : ""}${m.is_vision ? ' <span class="vision-badge" title="vision model">V</span>' : ""}<div class="muted">${esc(m.backend)} · ${esc(m.model_type)}</div></td>
         <td>${esc(m.host)}</td>
         <td><span class="st ${esc(m.status)}">${esc(m.status)}</span><span class="hb">${hb}</span></td>
         <td>${m.port || "—"}</td>

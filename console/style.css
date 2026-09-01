@@ -66,15 +66,15 @@
 [hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; }
 body {
-  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 14px/1.5 "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   background: var(--bg);
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
 }
 a { color: inherit; text-decoration: none; }
 code {
-  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: .86em;
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .84em;
   background: var(--panel-2);
   border: 1px solid var(--line);
   border-radius: 5px;
@@ -376,7 +376,7 @@ td.actions button { padding: .28rem .55rem; margin-right: .25rem; box-shadow: no
 .log-view {
   background: var(--panel); border: 1px solid var(--line);
   border-radius: var(--radius); padding: .9rem 1rem;
-  font: 12px/1.55 ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font: 12px/1.6 "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   white-space: pre-wrap; word-break: break-all;
   max-height: 75vh; overflow-y: auto;
   box-shadow: var(--shadow-1);
@@ -407,4 +407,48 @@ td.actions button { padding: .28rem .55rem; margin-right: .25rem; box-shadow: no
   .sidebar-foot { margin-top: 0; width: 100%; border-top: 0; }
   .talk-grid { grid-template-columns: 1fr; }
   .content { padding: 1.1rem 1rem 2.5rem; }
+}
+
+/* ── identity & iconography ───────────────────────────────────────────── */
+.ic { width: 16px; height: 16px; flex: 0 0 auto; vertical-align: -3px; }
+button .ic, .attach-btn .ic { margin-right: .45rem; vertical-align: -3.5px; }
+.icon-btn .ic, #log-refresh .ic { margin-right: 0; }
+.nav-item .ic { width: 17px; height: 17px; opacity: .85; }
+.ic-end { margin-left: auto; width: 13px; height: 13px; opacity: .6; }
+
+.brand { padding-bottom: 1.2rem; }
+.brand-mark {
+  width: 34px; height: 34px; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #5b6cf0, #7c4fe0);
+  color: #fff; box-shadow: 0 3px 10px rgba(91, 108, 240, .35);
+}
+.brand-mark .ic { width: 18px; height: 18px; }
+.brand-name { display: flex; flex-direction: column; line-height: 1.15; letter-spacing: -.015em; }
+.brand-name small {
+  font-size: .68rem; font-weight: 550; color: var(--muted);
+  letter-spacing: .09em; text-transform: uppercase;
+}
+.nav-label {
+  font-size: .66rem; font-weight: 650; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted); opacity: .75;
+  padding: .9rem .65rem .3rem;
+}
+
+.head-text { display: flex; flex-direction: column; gap: .15rem; }
+.lede { margin: 0; color: var(--muted); font-size: .86rem; }
+
+.btn-lg { padding: .6rem 1.2rem; font-size: .95rem; border-radius: 10px; }
+.icon-btn { padding: .34rem .5rem; line-height: 0; }
+.icon-btn .ic { width: 15px; height: 15px; }
+button.spin .ic { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-left: .4rem; vertical-align: 1px; }
+.dot.ok { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.dot.bad { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
+.vision-badge {
+  display: inline-block; font-size: .6rem; font-weight: 700;
+  background: var(--accent-soft); color: var(--accent);
+  border-radius: 4px; padding: .05rem .3rem; margin-left: .35rem; vertical-align: 1px;
 }
