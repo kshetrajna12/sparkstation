@@ -664,10 +664,14 @@
       if (!r.ok || !r.body) throw new Error((await r.text()).slice(0, 300) || r.statusText);
       const reader = r.body.getReader();
       const dec = new TextDecoder();
-      let buf = "";
+      let buf = "", reads = 0, lastRead = null, maxGap = 0;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        reads++;
+        const now = performance.now();
+        if (lastRead !== null && now - lastRead > maxGap) maxGap = now - lastRead;
+        lastRead = now;
         buf += dec.decode(value, { stream: true });
         const lines = buf.split("\n"); buf = lines.pop();
         for (const ln of lines) {
@@ -695,6 +699,7 @@
         toks ? `${toks} tok · ${(toks / secs).toFixed(1)} tok/s` : `${answer.length} chars in ${secs.toFixed(1)} s`,
         usage ? `prompt ${usage.prompt_tokens} tok` : null,
         finish && finish !== "stop" ? `finish: ${finish}` : null,
+        `net: ${reads} reads, max gap ${(maxGap / 1000).toFixed(1)}s`,
       ].filter(Boolean).map((x) => `<span>${esc(x)}</span>`).join("");
     } catch (e) {
       if (e.name === "AbortError") { ans.textContent = answer + " ⏹"; pg.history.push({ role: "assistant", content: answer }); }
