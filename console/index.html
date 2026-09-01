@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sparkstation Console</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>⚡</text></svg>">
-<link rel="stylesheet" href="style.css?v=17">
+<script>try{var t=localStorage.getItem("sparkstation.theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}</script>
+<link rel="stylesheet" href="style.css?v=18">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" style="display:none">
@@ -26,6 +27,8 @@
   <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 6.3"/><path d="M20 4v7h-7"/></symbol>
   <symbol id="i-image" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-9 9"/></symbol>
   <symbol id="i-switch" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h13M14 3.5 17.5 7 14 10.5M20 17H7M10 13.5 6.5 17l3.5 3.5"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 14.5A8.5 8.5 0 1 1 9.5 3.5a7 7 0 0 0 11 11z"/></symbol>
   <symbol id="i-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4 11 13M9 5H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-3"/></symbol>
 </svg>
 <div class="shell">
@@ -44,6 +47,11 @@
     <a class="nav-item" id="grafana-link" href="#" target="_blank" rel="noopener" hidden><svg class="ic"><use href="#i-chart"/></svg>Metrics<svg class="ic ic-end"><use href="#i-external"/></svg></a>
     <div class="sidebar-foot">
       <div id="stack-status" class="status-line">checking voice stack…</div>
+      <div class="theme-seg" id="theme-seg" title="Appearance">
+        <button data-theme="light" title="Light"><svg class="ic"><use href="#i-sun"/></svg></button>
+        <button data-theme="" title="Match system">Auto</button>
+        <button data-theme="dark" title="Dark"><svg class="ic"><use href="#i-moon"/></svg></button>
+      </div>
       <button id="apikey-btn" class="link-btn" hidden>set API key</button>
     </div>
   </nav>

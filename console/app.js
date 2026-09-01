@@ -785,6 +785,20 @@
     });
   }
 
+  function bindTheme() {
+    const seg = $("#theme-seg");
+    let saved = "";
+    try { saved = localStorage.getItem("sparkstation.theme") || ""; } catch (e) {}
+    const apply = (t) => {
+      if (t) document.documentElement.dataset.theme = t;
+      else delete document.documentElement.dataset.theme;
+      try { t ? localStorage.setItem("sparkstation.theme", t) : localStorage.removeItem("sparkstation.theme"); } catch (e) {}
+      seg.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.theme === t));
+    };
+    seg.querySelectorAll("button").forEach((b) => { b.onclick = () => apply(b.dataset.theme); });
+    apply(saved === "light" || saved === "dark" ? saved : "");
+  }
+
   function bindApiKey() {
     const btn = $("#apikey-btn");
     btn.onclick = () => {
@@ -800,7 +814,7 @@
     $$(".tab").forEach((b) => { b.onclick = () => showTab(b.dataset.tab); });
     window.addEventListener("hashchange", route);
     route();
-    bindDesignForm(); bindCloneForm(); bindTalk(); bindApiKey(); bindCluster(); bindLogs(); bindPlayground(); bindClients(); bindVoiceFilters();
+    bindDesignForm(); bindCloneForm(); bindTalk(); bindApiKey(); bindCluster(); bindLogs(); bindPlayground(); bindClients(); bindVoiceFilters(); bindTheme();
     $("#voices-refresh").onclick = () => { loadVoices(); refreshStatus(); };
     try {
       config = await (await fetch("/console/config.json")).json();

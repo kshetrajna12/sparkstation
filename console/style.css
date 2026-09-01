@@ -33,13 +33,24 @@
   --shadow-card: 0 1px 3px rgba(0, 0, 0, .06), 0 1px 2px rgba(0, 0, 0, .04);
   --shadow-pop: 0 10px 40px rgba(0, 0, 0, .18), 0 2px 10px rgba(0, 0, 0, .08);
   --thumb-shadow: 0 1px 4px rgba(0, 0, 0, .12), 0 3px 8px rgba(0, 0, 0, .06);
+  --hover-wash: rgba(0, 0, 0, .05);
+  --seg-track: rgba(0, 0, 0, .06);
+  --seg-thumb: #ffffff;
+  --seg-thumb-ink: #000000;
+  --btn-hover-filter: brightness(.96);
+  --track-bg: rgba(0, 0, 0, .08);
+  --design-bg: rgba(175, 82, 222, .13);
+  --design-ink: #af52de;
+  --card-hover-shadow: 0 4px 14px rgba(0, 0, 0, .09), 0 1px 3px rgba(0, 0, 0, .05);
   --radius: 14px;
   --radius-sm: 9px;
   color-scheme: light dark;
 }
 
+/* Dark tokens twice: once for the OS setting (unless the user forced light),
+   once for the explicit toggle. Keep the two blocks identical. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #1c1c1e;
     --rail: rgba(22, 22, 24, .82);
     --panel: #2c2c2e;
@@ -61,7 +72,48 @@
     --shadow-card: 0 0 0 1px rgba(255, 255, 255, .04);
     --shadow-pop: 0 10px 40px rgba(0, 0, 0, .6), 0 0 0 1px rgba(255, 255, 255, .08);
     --thumb-shadow: none;
+    --hover-wash: rgba(255, 255, 255, .07);
+    --seg-track: rgba(255, 255, 255, .1);
+    --seg-thumb: #636366;
+    --seg-thumb-ink: #ffffff;
+    --btn-hover-filter: brightness(1.15);
+    --track-bg: rgba(255, 255, 255, .12);
+    --design-bg: rgba(191, 90, 242, .2);
+    --design-ink: #bf5af2;
+    --card-hover-shadow: 0 0 0 1px rgba(255, 255, 255, .1);
   }
+}
+:root[data-theme="dark"] {
+    --bg: #1c1c1e;
+    --rail: rgba(22, 22, 24, .82);
+    --panel: #2c2c2e;
+    --panel-2: #3a3a3c;
+    --line: rgba(255, 255, 255, .10);
+    --line-strong: rgba(255, 255, 255, .18);
+    --ink: #f5f5f7;
+    --ink-strong: #ffffff;
+    --muted: #98989d;
+    --faint: #6e6e73;
+    --accent: #0a84ff;
+    --accent-hi: #409cff;
+    --accent-soft: rgba(10, 132, 255, .18);
+    --ok: #30d158;    --ok-soft: rgba(48, 209, 88, .16);
+    --warn: #ff9f0a;  --warn-soft: rgba(255, 159, 10, .16);
+    --bad: #ff453a;   --bad-soft: rgba(255, 69, 58, .16);
+    --user: #0a84ff;  --user-ink: #ffffff;
+    --bot: #3a3a3c;   --bot-ink: #f5f5f7;
+    --shadow-card: 0 0 0 1px rgba(255, 255, 255, .04);
+    --shadow-pop: 0 10px 40px rgba(0, 0, 0, .6), 0 0 0 1px rgba(255, 255, 255, .08);
+    --thumb-shadow: none;
+    --hover-wash: rgba(255, 255, 255, .07);
+    --seg-track: rgba(255, 255, 255, .1);
+    --seg-thumb: #636366;
+    --seg-thumb-ink: #ffffff;
+    --btn-hover-filter: brightness(1.15);
+    --track-bg: rgba(255, 255, 255, .12);
+    --design-bg: rgba(191, 90, 242, .2);
+    --design-ink: #bf5af2;
+    --card-hover-shadow: 0 0 0 1px rgba(255, 255, 255, .1);
 }
 
 /* ── base ─────────────────────────────────────────────────────────────── */
@@ -138,8 +190,7 @@ code {
   transition: background .12s ease;
 }
 .nav-item .ic { width: 17px; height: 17px; color: var(--accent); }
-.nav-item:hover { background: rgba(0, 0, 0, .05); }
-@media (prefers-color-scheme: dark) { .nav-item:hover { background: rgba(255, 255, 255, .07); } }
+.nav-item:hover { background: var(--hover-wash); }
 .nav-item.active { background: var(--accent); color: #fff; font-weight: 500; }
 .nav-item.active .ic { color: #fff; }
 .nav-item.soon { opacity: .45; }
@@ -180,10 +231,9 @@ button .ic, .attach-btn .ic { margin-right: .42rem; vertical-align: -3.5px; }
 .tabs, .filter-chips {
   display: flex; gap: 0;
   border-radius: 9px; padding: 2px;
-  background: rgba(0, 0, 0, .06);
+  background: var(--seg-track);
   border: 0;
 }
-@media (prefers-color-scheme: dark) { .tabs, .filter-chips { background: rgba(255, 255, 255, .1); } }
 .tab, .fchip {
   border: 0; background: transparent; box-shadow: none;
   padding: .34rem 1.05rem; border-radius: 7px;
@@ -191,12 +241,11 @@ button .ic, .attach-btn .ic { margin-right: .42rem; vertical-align: -3.5px; }
   transition: background .15s ease, box-shadow .15s ease;
 }
 .tab.active, .fchip.active {
-  background: var(--panel);
+  background: var(--seg-thumb);
   box-shadow: var(--thumb-shadow);
   font-weight: 550;
-  color: var(--ink-strong);
+  color: var(--seg-thumb-ink);
 }
-@media (prefers-color-scheme: dark) { .tab.active, .fchip.active { background: #636366; color: #fff; } }
 
 button {
   font: inherit; font-weight: 500; font-size: .86rem;
@@ -207,8 +256,7 @@ button {
   cursor: pointer;
   transition: filter .1s ease, background .12s ease, transform .06s ease;
 }
-button:hover { filter: brightness(.96); }
-@media (prefers-color-scheme: dark) { button:hover { filter: brightness(1.15); } }
+button:hover { filter: var(--btn-hover-filter); }
 button:active { transform: scale(.985); }
 button:disabled { opacity: .4; cursor: default; transform: none; filter: none; }
 button.primary { background: var(--accent); color: var(--accent-ink); }
@@ -276,8 +324,7 @@ label { display: flex; flex-direction: column; gap: .32rem; font-weight: 500; fo
   box-shadow: var(--shadow-card);
 }
 .form { margin-top: 1rem; display: flex; flex-direction: column; gap: .85rem; }
-.membar { height: 5px; background: rgba(0, 0, 0, .08); border-radius: 3px; overflow: hidden; }
-@media (prefers-color-scheme: dark) { .membar { background: rgba(255, 255, 255, .12); } }
+.membar { height: 5px; background: var(--track-bg); border-radius: 3px; overflow: hidden; }
 .membar div { height: 100%; border-radius: 3px; background: var(--accent); transition: width .5s cubic-bezier(.3,.7,.3,1); }
 .membar.hot div { background: var(--warn); }
 
@@ -295,8 +342,7 @@ label { display: flex; flex-direction: column; gap: .32rem; font-weight: 500; fo
   box-shadow: var(--shadow-card);
   transition: transform .12s ease, box-shadow .15s ease;
 }
-.voice-card:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,.09), 0 1px 3px rgba(0,0,0,.05); }
-@media (prefers-color-scheme: dark) { .voice-card:hover { box-shadow: 0 0 0 1px rgba(255,255,255,.1); } }
+.voice-card:hover { transform: translateY(-1px); box-shadow: var(--card-hover-shadow); }
 .voice-card.is-default { box-shadow: 0 0 0 2px var(--warn), var(--shadow-card); }
 .vc-head { display: flex; align-items: center; gap: .45rem; }
 .vc-name { font-weight: 600; font-size: 1.02rem; color: var(--ink-strong); letter-spacing: -.015em; }
@@ -306,8 +352,7 @@ label { display: flex; flex-direction: column; gap: .32rem; font-weight: 500; fo
   border-radius: 5px; padding: .12rem .45rem;
 }
 .engine-tag.clone { background: var(--accent-soft); color: var(--accent); }
-.engine-tag.design { background: rgba(175, 82, 222, .13); color: #af52de; }
-@media (prefers-color-scheme: dark) { .engine-tag.design { background: rgba(191, 90, 242, .2); color: #bf5af2; } }
+.engine-tag.design { background: var(--design-bg); color: var(--design-ink); }
 .engine-tag.stock { background: var(--panel-2); color: var(--muted); }
 .vc-desc { color: var(--muted); font-size: .82rem; line-height: 1.55; flex: 1; min-height: 2.4em; }
 .vc-actions { display: flex; align-items: center; gap: .3rem; border-top: 1px solid var(--line); padding-top: .7rem; margin-top: .25rem; }
@@ -364,8 +409,7 @@ label { display: flex; flex-direction: column; gap: .32rem; font-weight: 500; fo
   display: flex; flex-direction: column; align-items: center; gap: .65rem;
 }
 .talk-dock .meter { width: min(420px, 80%); }
-.meter { height: 5px; background: rgba(0,0,0,.08); border-radius: 3px; overflow: hidden; }
-@media (prefers-color-scheme: dark) { .meter { background: rgba(255,255,255,.12); } }
+.meter { height: 5px; background: var(--track-bg); border-radius: 3px; overflow: hidden; }
 .meter-fill { height: 100%; width: 0; border-radius: 3px; background: var(--ok); transition: width .08s linear; }
 .mic-fab {
   width: 62px; height: 62px; border-radius: 50%;
@@ -520,8 +564,7 @@ td.actions button { margin-right: .3rem; }
   font-size: .86rem; font-weight: 500; white-space: nowrap; user-select: none;
   transition: filter .1s ease;
 }
-.attach-btn:hover { filter: brightness(.96); }
-@media (prefers-color-scheme: dark) { .attach-btn:hover { filter: brightness(1.15); } }
+.attach-btn:hover { filter: var(--btn-hover-filter); }
 .att-chip {
   border-radius: var(--radius-sm);
   padding: .2rem .5rem; font-size: .78rem;
@@ -571,3 +614,14 @@ td.actions button { margin-right: .3rem; }
   .host-bar { width: 140px; }
   .talk-settings-body { width: min(90vw, 340px); }
 }
+
+/* ── theme toggle ─────────────────────────────────────────────────────── */
+.theme-seg { display: flex; gap: 0; border-radius: 8px; padding: 2px; background: var(--seg-track); align-self: flex-start; }
+.theme-seg button {
+  border: 0; background: transparent; box-shadow: none;
+  padding: .22rem .6rem; border-radius: 6px;
+  color: var(--muted); font-size: .74rem; font-weight: 500; line-height: 1;
+}
+.theme-seg button:hover { filter: none; color: var(--ink); }
+.theme-seg button.active { background: var(--seg-thumb); color: var(--seg-thumb-ink); box-shadow: var(--thumb-shadow); }
+.theme-seg .ic { width: 12px; height: 12px; margin: 0; vertical-align: -2px; }
