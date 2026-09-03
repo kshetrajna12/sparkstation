@@ -27,6 +27,7 @@ PORT_BLUE="${1:?usage: litellm-bluegreen.sh <blue-port> <green-port> <pointer-fi
 PORT_GREEN="${2:?}"
 POINTER="${3:?}"
 PY="${LITELLM_PYTHON:-python3}"
+echo "[bluegreen] python: $PY | cwd: $(pwd) | cli-root: ${LITELLM_DEBUG_ROOT:-unset}"
 GRACE="${LITELLM_DRAIN_GRACE:-300}"          # let old drain this long before kill (covers long generations)
 READY_TIMEOUT="${LITELLM_READY_TIMEOUT:-90}" # max secs to wait for a new litellm to become ready
 DEBOUNCE="${LITELLM_DEBOUNCE:-6}"            # config must be stable this long before we swap
