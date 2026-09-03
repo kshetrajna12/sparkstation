@@ -63,6 +63,9 @@ Env knobs:
   CASCADE_STT_VAD_THRESH    (default "0.6")   p(finished) threshold
   CASCADE_STT_VAD_CONSEC    (default "2")     steps over threshold to endpoint
   CASCADE_STT_FINAL_GAP     (default "1.0")   text-gap fallback, safety net
+  CASCADE_STT_FINAL_GRACE_MS (default "0")   hold each final this long; a
+      continuation arriving inside the window is merged into the same turn
+      instead of finalizing the fragment (per-session: `stt_patience_ms`)
 """
 from __future__ import annotations
 
@@ -327,6 +330,12 @@ class KyutaiSTTService(STTService):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._turn_text: list[str] = []
         self._last_piece_at = 0.0
+        # Final-grace debounce: hold a final this long so a hesitating speaker's
+        # continuation ("what day today [pause] is?") joins the same turn.
+        # 0 = finalize immediately (old behaviour). The bot's configure handler
+        # sets this per session, so it is public.
+        self.final_grace_s = float(os.environ.get("CASCADE_STT_FINAL_GRACE_MS", "0")) / 1000.0
+        self._pending_final_at: float | None = None
         self._flush_task: asyncio.Task | None = None
         # one stable callable per service: the engine compares sink identity
         # to drop stale-session audio, and bound methods are re-created on
@@ -351,19 +360,32 @@ class KyutaiSTTService(STTService):
 
     async def _emit_loop(self):
         while True:
+            # While a final is on grace hold, poll fast so the deadline is
+            # honoured within ~50 ms instead of up to a full 250 ms late.
+            timeout = 0.05 if self._pending_final_at is not None else 0.25
             try:
-                kind, payload = await asyncio.wait_for(self._out_q.get(), timeout=0.25)
+                kind, payload = await asyncio.wait_for(self._out_q.get(), timeout=timeout)
             except asyncio.TimeoutError:
-                if self._turn_text and time.monotonic() - self._last_piece_at > TEXT_GAP_FINAL_S:
+                await self._check_grace()
+                if (self._pending_final_at is None and self._turn_text
+                        and time.monotonic() - self._last_piece_at > TEXT_GAP_FINAL_S):
                     await self._emit_final()
                 continue
             if kind == "final":
                 # engine-side semantic VAD says the turn ended (post-flush)
-                await self._emit_final()
-                continue
-            if kind == "text":
+                if self.final_grace_s > 0:
+                    if self._pending_final_at is None:
+                        logger.debug("KyutaiSTT final grace hold: {:.0f} ms",
+                                     self.final_grace_s * 1000)
+                    self._pending_final_at = time.monotonic()
+                else:
+                    await self._emit_final()
+            elif kind == "text":
                 if not self._turn_text:
                     logger.debug("KyutaiSTT first piece: {!r}", payload)
+                if self._pending_final_at is not None:
+                    logger.debug("KyutaiSTT grace merged continuation: {!r}", payload)
+                    self._pending_final_at = time.monotonic()  # continuation restarts the grace
                 self._turn_text.append(payload)
                 self._last_piece_at = time.monotonic()
                 await self.push_frame(
@@ -372,8 +394,16 @@ class KyutaiSTTService(STTService):
                         user_id="user", timestamp=time_now_iso8601(),
                     )
                 )
+            await self._check_grace()
+
+    async def _check_grace(self):
+        """Finalize a held final once the grace window has elapsed."""
+        if (self._pending_final_at is not None
+                and time.monotonic() - self._pending_final_at >= self.final_grace_s):
+            await self._emit_final()
 
     async def _emit_final(self):
+        self._pending_final_at = None  # single clearing point: never double-fire
         text = "".join(self._turn_text).strip()
         self._turn_text = []
         if text:
