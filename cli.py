@@ -187,6 +187,7 @@ def _start_litellm() -> "subprocess.Popen":
     # versions whose proxy is broken (`No module named 'proxy_server'`).
     venv_python = PROJECT_ROOT / ".venv" / "bin" / "python3"
     gw_env["LITELLM_PYTHON"] = str(venv_python) if venv_python.exists() else sys.executable
+    gw_env["LITELLM_DEBUG_ROOT"] = str(PROJECT_ROOT)  # diagnosed 2026-09-02: litellm ran from the uv-tool env (drifted 1.98) instead of the locked venv (1.79)
     with open(gw_log, "w") as lf:
         proc = subprocess.Popen(
             ["bash", "gateway/litellm-bluegreen.sh",
