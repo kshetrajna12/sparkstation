@@ -14,7 +14,8 @@ Session config (RTVI client-message, BEFORE client-ready, all optional):
                             "engine": "clone"|"stock"|"design",  # which TTS server
                             "brain": "auto"|"gemma4-2b"|"default",
                             "tool_ack": "One sec.",     # spoken by the bot when it forwards a tool call ("" = silent)
-                            "min_words": 1}}            # barge-in words needed while the bot speaks (default 3; 1 with client AEC)
+                            "min_words": 1,             # barge-in words needed while the bot speaks (default 3; 1 with client AEC)
+                            "stt_patience_ms": 400}}    # hold each STT final this long so a mid-clause pause doesn't end the turn (0..2000, default 0)
 Ack: server-message {"type": "configured", "data": {...}}.
 
 Turn taking / echo (env): CASCADE_TURN_START ("min_words" default, or "vad")
@@ -287,7 +288,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
                     wait_for_transcript=True,
                 )],
             ),
-            user_turn_stop_timeout=_env_float("CASCADE_TURN_STOP_TIMEOUT", 4.0),
+            # 2 s, not 4: with finalized transcripts plus the STT grace knob,
+            # 4 s of smart-turn-INCOMPLETE waiting added ~3 s to hesitant turns
+            # (measured 2026-09-02). Still overridable via the env var.
+            user_turn_stop_timeout=_env_float("CASCADE_TURN_STOP_TIMEOUT", 2.0),
         ),
     )
     assistant_agg = LLMAssistantAggregator(context, _paired_user_aggregator=user_agg)
@@ -392,6 +396,13 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
             # echo cancellation keep the default 3 (2026-09-01).
             start_strategy._min_words = mw
             applied["min_words"] = mw
+        pat = d.get("stt_patience_ms")
+        if isinstance(pat, int) and not isinstance(pat, bool) and 0 <= pat <= 2000:
+            # Per-session STT final-grace: a hesitating speaker ("what day today
+            # [1 s pause] is?") otherwise finalizes the fragment and fires the
+            # turn before the continuation lands (2026-09-02).
+            stt.final_grace_s = pat / 1000.0
+            applied["stt_patience_ms"] = pat
         ack = d.get("tool_ack")
         if isinstance(ack, str):
             session["tool_ack"] = ack.strip()[:80]
