@@ -61,14 +61,38 @@ write_pointer() { printf '%s' "$1" > "$POINTER.tmp" && mv "$POINTER.tmp" "$POINT
 
 # ── Initial boot ────────────────────────────────────────────────────────────
 port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && { exec 3>&-; return 0; } || return 1; }
-# Start on the first FREE slot (a draining litellm from a killed manager may
-# still hold blue), and publish the pointer only once it answers readiness —
-# the proxy must never be pointed at a port nothing listens on.
+# PID actually LISTENING on a port — the ground truth, which $active_pid is not.
+port_pid() { ss -ltnpH "sport = :$1" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2; }
+port_ready() { curl -fsS "http://127.0.0.1:$1/health/readiness" >/dev/null 2>&1; }
+
+# Start on the first usable slot, and publish the pointer only once it answers
+# readiness — the proxy must never be pointed at a port nothing listens on.
+#
+# WEDGE FIX (2026-09-05): litellm's proxy_cli can leave the real server running
+# as an ORPHAN (reparented to init) after the pid we launched exits. The manager
+# then saw "active died", tried to relaunch, found BOTH slots held by orphans it
+# did not own, and looped "port busy; trying the other slot" forever — the
+# gateway froze serving whatever stale config those orphans had booted with
+# (observed: :8000 stuck on a 2-model list while litellm.yaml had 7). So a busy
+# port is no longer a dead end: adopt it if it is a healthy litellm, reclaim it
+# if it is not.
 boot_litellm() { # sets active_port/active_pid, returns 0 when ready
-  local try
+  local try p owner
   for try in 1 2; do
     for p in "$PORT_BLUE" "$PORT_GREEN"; do
-      port_busy "$p" && { echo "[bluegreen] port $p busy; trying the other slot"; continue; }
+      if port_busy "$p"; then
+        owner="$(port_pid "$p")"
+        if [ -n "$owner" ] && port_ready "$p"; then
+          # A live, healthy litellm we lost track of — adopt rather than fight
+          # it. Config drift is handled by the normal debounce/swap loop below.
+          echo "[bluegreen] adopting healthy litellm on $p (pid=$owner)"
+          active_port="$p"; active_pid="$owner"; write_pointer "$p"; return 0
+        fi
+        echo "[bluegreen] port $p busy but not a healthy litellm; reclaiming (pid=${owner:-unknown})"
+        [ -n "$owner" ] && stop_litellm "$owner"
+        sleep 1
+        port_busy "$p" && { echo "[bluegreen] port $p still held; trying the other slot"; continue; }
+      fi
       active_port="$p"; active_pid="$(start_litellm "$p")"
       if wait_ready "$p" "$active_pid"; then write_pointer "$p"; return 0; fi
       echo "[bluegreen] litellm on $p failed readiness; retrying"; stop_litellm "$active_pid"
@@ -94,8 +118,19 @@ pending_sum=""; pending_since=0
 while true; do
   sleep 2
 
-  # Liveness: relaunch the active litellm in place if it died.
+  # Liveness: relaunch the active litellm in place if it died. Check the PORT,
+  # not just our recorded pid — proxy_cli orphans its real server, so a dead
+  # $active_pid with a healthy listener means we merely lost the handle. Re-adopt
+  # it instead of declaring death and thrashing the relaunch path.
   if ! kill -0 "$active_pid" 2>/dev/null; then
+    if port_ready "$active_port"; then
+      readopted="$(port_pid "$active_port")"
+      if [ -n "$readopted" ] && [ "$readopted" != "$active_pid" ]; then
+        echo "[bluegreen] re-adopting live litellm on $active_port (pid $active_pid -> $readopted)"
+        active_pid="$readopted"
+        continue
+      fi
+    fi
     echo "[bluegreen] active litellm ($active_port) died; relaunching"
     if ! boot_litellm; then echo "[bluegreen] relaunch failed on both slots; will retry"; sleep 5; continue; fi
     active_sum="$(cfg_sum)"; pending_sum=""
@@ -115,6 +150,14 @@ while true; do
   # ── Blue-green swap ─────────────────────────────────────────────────────
   if [ "$active_port" = "$PORT_BLUE" ]; then idle_port="$PORT_GREEN"; else idle_port="$PORT_BLUE"; fi
   echo "[bluegreen] config stable; bringing up new litellm on idle $idle_port"
+  # The idle slot may still be held by an orphan from an earlier cycle; it has
+  # the OLD config by definition, so reclaim it rather than adopting it.
+  if port_busy "$idle_port"; then
+    stale="$(port_pid "$idle_port")"
+    echo "[bluegreen] idle $idle_port held (pid=${stale:-unknown}); reclaiming before swap"
+    [ -n "$stale" ] && stop_litellm "$stale"
+    sleep 1
+  fi
   new_pid="$(start_litellm "$idle_port")"
   if wait_ready "$idle_port" "$new_pid"; then
     write_pointer "$idle_port"                                   # ATOMIC flip — proxy follows this

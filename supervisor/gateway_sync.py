@@ -39,6 +39,20 @@ def _litellm_params(model_name: str, base_url: str, model_type) -> dict:
     return params
 
 
+def _model_info(is_vision: bool) -> dict | None:
+    """LiteLLM `model_info` block so clients can DISCOVER capabilities.
+
+    models.yaml already knows which model is the profile's VLM (`vision_default`),
+    but until 2026-09-05 that only shaped the `vision` alias — `/v1/models` is the
+    bare OpenAI shape (id/object/created/owned_by) and `/model/info` reported
+    `supports_vision: None`. Every client therefore had to hardcode "this alias is
+    multimodal", which silently rotted on each model swap (openclaw kept routing
+    images to a retired Qwen3-VL sidecar). Emitting supports_vision makes the
+    capability readable over the API instead of guessed.
+    """
+    return {"supports_vision": True} if is_vision else None
+
+
 class GatewaySync:
     """
     Push model list to LiteLLM via admin API (more reliable than fetch_from_url).
@@ -51,6 +65,7 @@ class GatewaySync:
         master_key: Optional[str] = None,
         default_model_alias: Optional[str] = None,
         vision_model_alias: Optional[str] = None,
+        vision_capable_aliases: Optional[set] = None,
     ):
         self.registry = registry
         self.admin_url = litellm_admin_url or settings.litellm_admin_url
@@ -58,6 +73,10 @@ class GatewaySync:
         self.sync_interval = settings.gateway_sync_interval_seconds
         self.default_model_alias = default_model_alias
         self.vision_model_alias = vision_model_alias
+        # Every alias that accepts images, not just the "vision" alias target.
+        self.vision_capable_aliases = set(vision_capable_aliases or ())
+        if vision_model_alias:
+            self.vision_capable_aliases.add(vision_model_alias)
         self.client = httpx.AsyncClient(timeout=30.0)
         self._task: Optional[asyncio.Task] = None
 
@@ -119,28 +138,36 @@ class GatewaySync:
             # Use alias for display name, but actual model_name for the backend
             display_name = model.model_alias or model.model_name.split("/")[-1]
 
-            model_list.append(
-                {
-                    "model_name": display_name,
-                    "litellm_params": _litellm_params(
-                        model.model_name, model.base_url, model.model_type
-                    ),
-                }
-            )
+            entry = {
+                "model_name": display_name,
+                "litellm_params": _litellm_params(
+                    model.model_name, model.base_url, model.model_type
+                ),
+            }
+            info = _model_info(display_name in self.vision_capable_aliases)
+            if info:
+                entry["model_info"] = info
+            model_list.append(entry)
 
         # Add "default" alias pointing to the default model
         if self.default_model_alias:
             for model in all_models:
                 display_name = model.model_alias or model.model_name.split("/")[-1]
                 if display_name == self.default_model_alias:
-                    model_list.append(
-                        {
-                            "model_name": "default",
-                            "litellm_params": _litellm_params(
-                                model.model_name, model.base_url, model.model_type
-                            ),
-                        }
-                    )
+                    entry = {
+                        "model_name": "default",
+                        "litellm_params": _litellm_params(
+                            model.model_name, model.base_url, model.model_type
+                        ),
+                    }
+                    # The daily driver is usually natively multimodal and is its
+                    # own vision_default, so "default" must advertise vision too
+                    # — clients pinned to "default" (openclaw) otherwise think
+                    # they're on a text-only model.
+                    info = _model_info(display_name in self.vision_capable_aliases)
+                    if info:
+                        entry["model_info"] = info
+                    model_list.append(entry)
                     break
 
         # Add "vision" alias pointing to the profile's vision model — same
@@ -157,6 +184,7 @@ class GatewaySync:
                             "litellm_params": _litellm_params(
                                 model.model_name, model.base_url, model.model_type
                             ),
+                            "model_info": _model_info(True),
                         }
                     )
                     break

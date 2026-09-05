@@ -86,12 +86,13 @@ restart_manager: Optional[RestartManager] = None
 startup_complete: bool = False
 default_model_alias: Optional[str] = None
 vision_model_alias: Optional[str] = None
+vision_capable_aliases: set = set()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize and cleanup resources."""
-    global registry, resource_manager, launcher_factory, auto_suspend_manager, gateway_sync, health_check_manager, restart_manager, default_model_alias, vision_model_alias
+    global registry, resource_manager, launcher_factory, auto_suspend_manager, gateway_sync, health_check_manager, restart_manager, default_model_alias, vision_model_alias, vision_capable_aliases
 
     logger.info("Initializing Sparkstation Supervisor...")
 
@@ -162,13 +163,19 @@ async def lifespan(app: FastAPI):
     _dspark.on_starting = registry.create
     _dspark.on_placeholder_done = registry.delete
     auto_suspend_manager = AutoSuspendManager(registry, launcher_factory, resource_manager)
-    from supervisor.models_config import get_default_model_alias, get_vision_model_alias
+    from supervisor.models_config import (
+        get_default_model_alias,
+        get_vision_model_alias,
+        get_vision_capable_aliases,
+    )
     default_model_alias = get_default_model_alias(settings.startup_profile)
     vision_model_alias = get_vision_model_alias(settings.startup_profile)
+    vision_capable_aliases = get_vision_capable_aliases(settings.startup_profile)
     gateway_sync = GatewaySync(
         registry,
         default_model_alias=default_model_alias,
         vision_model_alias=vision_model_alias,
+        vision_capable_aliases=vision_capable_aliases,
     )
     restart_manager = RestartManager(registry, launcher_factory, resource_manager)
     health_check_manager = HealthCheckManager(registry, restart_manager, gateway_sync=gateway_sync)
@@ -793,8 +800,13 @@ async def list_models_detailed():
                 "base_url": model.base_url,
                 "memory_gb": model.memory_gb,
                 "is_default": (model.model_alias or model.model_name) == default_model_alias,
+                # is_vision = "this is the profile's designated VLM" (drives
+                # the gateway "vision" alias). supports_vision = "this model
+                # accepts images at all" — several models can, per profile.
                 "is_vision": bool(vision_model_alias)
                 and (model.model_alias or model.model_name) == vision_model_alias,
+                "supports_vision": (model.model_alias or model.model_name)
+                in vision_capable_aliases,
                 "last_request_time": model.last_request_time.isoformat()
                 if model.last_request_time
                 else None,

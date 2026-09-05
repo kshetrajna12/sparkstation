@@ -381,12 +381,25 @@ def _write_gateway_yaml():
         else:
             lp["drop_params"] = True
         entry = {"model_name": alias, "litellm_params": lp}
+        # Advertise vision capability so clients can DISCOVER it via
+        # /model/info instead of hardcoding "this alias is multimodal" —
+        # a hardcode that silently rots on every model swap. Mirrors
+        # supervisor/gateway_sync.py::_model_info.
+        # supports_vision (any model that accepts images) is broader than
+        # is_vision (the ONE model the "vision" alias resolves to): under the
+        # voice profile both qwen-flash-next and gemma4-2b see.
+        can_see = bool(m.get("supports_vision") or m.get("is_vision"))
+        if can_see:
+            entry["model_info"] = {"supports_vision": True}
         model_list.append(entry)
         if m.get("is_default"):
-            model_list.append({
+            default_entry = {
                 "model_name": "default",
                 "litellm_params": dict(entry["litellm_params"]),
-            })
+            }
+            if can_see:
+                default_entry["model_info"] = {"supports_vision": True}
+            model_list.append(default_entry)
         # "vision" alias → profile's vision_default model. Mirror is_default so
         # the CLI's gateway-restart path stays consistent with the supervisor's
         # own gateway_sync (which already emits vision); without this, `gateway
@@ -395,6 +408,7 @@ def _write_gateway_yaml():
             model_list.append({
                 "model_name": "vision",
                 "litellm_params": dict(entry["litellm_params"]),
+                "model_info": {"supports_vision": True},
             })
 
     gw["model_list"] = model_list

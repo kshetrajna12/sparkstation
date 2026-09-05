@@ -332,6 +332,10 @@ models:
     name: "google/gemma-4-E2B-it-qat-w4a16-ct"
     backend: "vllm"
     model_type: "chat"
+    # Gemma 4 E2B is natively multimodal (image + audio). It is NOT any
+    # profile's vision_default — that alias points at the big VLM — but it
+    # still accepts images, so clients that route by capability may use it.
+    vision: true
     # Moved worker2 → primary 2026-08-25: VoiceChat 11B needs its qualified
     # memory footprint (Nano engine wants 0.42*121GB free at init) and gemma's
     # 16GB pushed worker2 below it. Weights + gemma4-cu130-audio image exist

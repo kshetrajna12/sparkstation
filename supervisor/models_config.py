@@ -17,7 +17,7 @@ Loader precedence: public `models.yaml` (base) → `.sparkstation.local.yaml`
 """
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Set, List, Dict, Any, Optional
 
 import yaml
 from pydantic import BaseModel, Field
@@ -139,6 +139,13 @@ class ModelDefinition(BaseModel):
     speculative_method: Optional[str] = None
     speculative_extra: Dict[str, Any] = Field(default_factory=dict)
     default: bool = False
+    # CAPABILITY: does this model accept image input at all? Independent of
+    # vision_default — a profile has exactly ONE vision_default (what the
+    # "vision" alias resolves to) but may run SEVERAL vision-capable models
+    # (2026-09-05: under `voice`, both qwen-flash-next and gemma4-2b see).
+    # Published to the gateway as model_info.supports_vision so clients can
+    # discover capability instead of hardcoding which alias is multimodal.
+    vision: bool = False
     vision_default: bool = False  # profile's designated vision model → gateway "vision" alias
     extra_args: Dict[str, Any] = Field(default_factory=dict)
     docker_image: Optional[str] = None
@@ -167,6 +174,13 @@ class ModelConfigYAML(BaseModel):
     speculative_method: Optional[str] = None
     speculative_extra: Dict[str, Any] = Field(default_factory=dict)
     default: bool = False
+    # CAPABILITY: does this model accept image input at all? Independent of
+    # vision_default — a profile has exactly ONE vision_default (what the
+    # "vision" alias resolves to) but may run SEVERAL vision-capable models
+    # (2026-09-05: under `voice`, both qwen-flash-next and gemma4-2b see).
+    # Published to the gateway as model_info.supports_vision so clients can
+    # discover capability instead of hardcoding which alias is multimodal.
+    vision: bool = False
     vision_default: bool = False  # profile's designated vision model → gateway "vision" alias
     extra_args: Dict[str, Any] = Field(default_factory=dict)
     docker_image: Optional[str] = None
@@ -250,6 +264,10 @@ def _resolve(alias: str, base_defn: ModelDefinition, override: Dict[str, Any]) -
         else:
             merged[k] = v
     merged["alias"] = alias
+    # A profile's designated VLM is vision-capable by definition — imply the
+    # capability so a spec never has to carry both flags in agreement.
+    if merged.get("vision_default"):
+        merged["vision"] = True
     return ModelConfigYAML(**merged)
 
 
@@ -330,6 +348,25 @@ def get_vision_model_alias(profile_name: Optional[str] = None) -> Optional[str]:
         if m.vision_default:
             return m.alias or m.name
     return None
+
+
+def get_vision_capable_aliases(profile_name: Optional[str] = None) -> Set[str]:
+    """Aliases of EVERY vision-capable model in the resolved profile.
+
+    Distinct from get_vision_model_alias(), which names the single model the
+    "vision" alias resolves to. A profile routinely runs more than one model
+    that accepts images (under `voice`: qwen-flash-next AND gemma4-2b), and
+    clients need to know about all of them — publishing only the designated
+    one is what left consumers hardcoding capability by model name.
+    """
+    profile = profile_name
+    if profile is None:
+        profile = load_models_config().default_profile
+    if profile is None:
+        return set()
+    return {
+        (m.alias or m.name) for m in get_profile_models(profile) if m.vision
+    }
 
 
 def list_profiles() -> List[str]:
