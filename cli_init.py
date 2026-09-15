@@ -452,40 +452,47 @@ response = client.chat.completions.create(
 {reasoning_section}
 ## Reasoning Models & Token Budgets (IMPORTANT)
 
-Chat models on this gateway may be reasoning models (e.g. DeepSeek-V4-Flash,
-Qwen thinking variants). **`max_tokens` caps reasoning + final content
-COMBINED.** The server's default reasoning effort is `low`; a complex prompt
-can still spend most of a small budget on reasoning.
+Chat models on this gateway may be reasoning models. **`max_tokens` caps
+reasoning + final content COMBINED.** The serving stack pins a server-side
+default of `reasoning_effort: low`, so a modest budget still leaves room for
+the answer.
 
-**Symptom of an under-sized budget**: `content` empty, `reasoning_content`
-non-empty, `finish_reason: "length"` — the model ran out of tokens before
-writing the answer. Raise `max_tokens`, or cap reasoning explicitly.
+**You do not need to know a model's thinking dialect.** The gateway normalizes
+reasoning controls for whichever backend is loaded (`gateway/reasoning.py` +
+`gateway/reasoning.yaml`): express the intent any common way and it is
+rewritten into what the current model actually honors — including effort
+values the model would otherwise reject outright.
 
 ```python
-# Bounded reasoning — guarantees room for the final answer:
-response = client.chat.completions.create(
-    model="default",
-    messages=[...],
-    max_tokens=4096,
-    extra_body={{"thinking_token_budget": 2048}},   # reasoning hard-capped
-)
+# Off (fastest; simple or structured tasks). Equivalent through the gateway:
+extra_body={{"chat_template_kwargs": {{"thinking": False}}}}
+extra_body={{"chat_template_kwargs": {{"enable_thinking": False}}}}
+extra_body={{"reasoning": False}}
 
-# Deep reasoning on demand (size max_tokens generously — 16K+):
-response = client.chat.completions.create(
-    model="default",
-    messages=[...],
-    max_tokens=16384,
-    extra_body={{"chat_template_kwargs": {{"thinking": True, "reasoning_effort": "high"}}}},
-)
-
-# No reasoning at all (fastest, for simple/structured tasks):
-#   extra_body={{"chat_template_kwargs": {{"thinking": False}}}}
+# Level. Send the OpenAI spelling; the gateway maps it into the model's own
+# vocabulary (current driver: low | medium | xhigh; high -> xhigh,
+# unrecognized -> medium).
+extra_body={{"reasoning_effort": "low"}}    # brief
+extra_body={{"reasoning_effort": "high"}}   # deep — size max_tokens 16K+
 ```
 
-These knobs pass through the gateway unchanged. For structured output
-(`response_format` json_schema), prefer `thinking_token_budget` or
-`thinking: False` — reasoning length is highly variable and can starve the
-JSON answer on tight budgets.
+Going **direct to a backend port** bypasses this translation. There you must
+use the model's own spelling: Qwen3.8-Flash-Next reads `enable_thinking` and
+`reasoning_effort` inside `chat_template_kwargs`, **ignores `thinking`
+entirely** (it is not a variable in the chat template, so the request reasons
+anyway), and raises on any effort outside `low|medium|xhigh`.
+
+**Symptom of an under-sized budget**: `content` empty with
+`finish_reason: "length"`. Diagnose with
+`usage.completion_tokens_details.reasoning_tokens` — that field is reliable.
+Do NOT key on `reasoning_content`: the field name varies by build (the current
+driver streams `reasoning` deltas and leaves `reasoning_content` empty).
+
+For structured output (`response_format` json_schema) leave ~250 completion
+tokens of headroom beyond the JSON itself — reasoning is emitted first.
+`thinking_token_budget` is a DFlash2-era knob and is **NOT** honored by the
+current daily driver (measured 2026-09-14: budget 32 produced 147 reasoning
+tokens); use `reasoning_effort` or turn thinking off instead.
 
 ## Embeddings
 
