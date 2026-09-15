@@ -268,3 +268,6 @@ gateway/.litellm-*.log
 gateway/clients.yaml
 data/last_profile
 data/.bounce-keep-models
+
+# autoresearch experiment sessions
+.auto/
