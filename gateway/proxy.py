@@ -349,11 +349,11 @@ async def forward(request: Request, path: str):
             parsed = json.loads(body)
             alias = parsed.get("model") or "none"
             if alias != "none" and path.endswith("chat/completions") and isinstance(parsed, dict):
-                dialect = reasoning.dialect_for(alias)
+                dialect, efforts, effort_aliases = reasoning.policy_for(alias)
                 if dialect != "passthrough":
                     if policy is not None:
                         apply_client_reasoning(parsed, policy.reasoning)
-                    normalize_reasoning(parsed, dialect)
+                    normalize_reasoning(parsed, dialect, efforts, effort_aliases)
                     body = json.dumps(parsed).encode()
         except (json.JSONDecodeError, AttributeError):
             pass

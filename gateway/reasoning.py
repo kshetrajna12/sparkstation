@@ -42,6 +42,41 @@ _ENABLE_KEYS_TOP = ("enable_thinking", "thinking", "reasoning")
 # Keys a client might use to express the effort level.
 _EFFORT_OFF = {"none", "off", "false", "disable", "disabled"}
 
+# Effort VOCABULARY differs per chat template, and an unsupported value is not
+# ignored — Qwen3.8-Flash-Next's template raises:
+#   'Unexpected reasoning effort high. Supported types are xhigh, medium, low.'
+# (chat_template.jinja:49, identical in the AutoRound and MiaAI NVFP4 builds).
+# So a client sending the OpenAI-conventional "high" gets a 400 instead of a
+# degraded answer. We map the client's intent into whatever the loaded template
+# accepts, so clients never have to know a model's vocabulary.
+_DEFAULT_EFFORT_ALIASES = {
+    "high": "xhigh", "max": "xhigh", "maximum": "xhigh", "xhigh": "xhigh",
+    "medium": "medium", "mid": "medium", "default": "medium",
+    "low": "low", "minimal": "low", "min": "low",
+}
+
+
+def _map_effort(effort, allowed, aliases) -> Optional[str]:
+    """Coerce an effort level into the vocabulary the loaded template accepts.
+
+    `allowed` empty/None = no declared vocabulary, pass through untouched (the
+    old behaviour, for dialects where we haven't recorded the template's terms).
+    """
+    if effort is None or not allowed:
+        return effort
+    e = str(effort).strip().lower()
+    if e in allowed:
+        return e
+    mapped = (aliases or {}).get(e) or _DEFAULT_EFFORT_ALIASES.get(e)
+    if mapped in allowed:
+        logger.info(f"reasoning_effort {effort!r} -> {mapped!r} (template vocabulary)")
+        return mapped
+    fallback = "medium" if "medium" in allowed else allowed[-1]
+    logger.warning(
+        f"reasoning_effort {effort!r} not in {allowed} and has no alias; "
+        f"using {fallback!r} (sending it verbatim would raise in the template)")
+    return fallback
+
 
 def _extract_intent(body: dict):
     """Pull (enabled, effort) intent from anywhere a client might have put it.
@@ -174,8 +209,12 @@ def apply_client_default(body: dict, pref) -> None:
         body["reasoning_effort"] = p
 
 
-def normalize(body: dict, dialect: str) -> dict:
+def normalize(body: dict, dialect: str, efforts=None, effort_aliases=None) -> dict:
     """Rewrite a chat request's reasoning controls into `dialect`.
+
+    `efforts` is the effort vocabulary the loaded template accepts (from
+    reasoning.yaml); the client's level is coerced into it so an unsupported
+    value degrades instead of raising upstream.
 
     No-op when the dialect is passthrough/unknown or the client sent no
     thinking signal at all.
@@ -184,6 +223,7 @@ def normalize(body: dict, dialect: str) -> dict:
     if apply is None or not _has_signal(body):
         return body
     enabled, effort = _extract_intent(body)
+    effort = _map_effort(effort, efforts, effort_aliases)
     _strip_reasoning(body)
     apply(body, enabled, effort)
     return body
@@ -206,7 +246,8 @@ class DialectResolver:
             "SPARKSTATION_REASONING_FILE", "gateway/reasoning.yaml")
         self.litellm_path = litellm_path or os.environ.get(
             "SPARKSTATION_LITELLM_CONFIG", "gateway/litellm.yaml")
-        self._rules: list[tuple[str, str]] = []
+        # (match, dialect, efforts, effort_aliases)
+        self._rules: list[tuple[str, str, list, dict]] = []
         self._default = "passthrough"
         self._alias_to_model: dict[str, str] = {}
         self._cfg_mtime = 0.0
@@ -229,8 +270,12 @@ class DialectResolver:
             return
         try:
             cfg = yaml.safe_load(open(self.config_path)) or {}
-            self._rules = [(str(r["match"]), str(r["dialect"]))
-                           for r in (cfg.get("dialects") or []) if r.get("match")]
+            self._rules = [
+                (str(r["match"]), str(r["dialect"]),
+                 [str(e).strip().lower() for e in (r.get("efforts") or [])],
+                 {str(k).strip().lower(): str(v).strip().lower()
+                  for k, v in (r.get("effort_aliases") or {}).items()})
+                for r in (cfg.get("dialects") or []) if r.get("match")]
             self._default = str(cfg.get("default", "passthrough"))
             self._cfg_mtime = mtime
             logger.info(f"Loaded {len(self._rules)} reasoning dialect rule(s) "
@@ -261,8 +306,12 @@ class DialectResolver:
             logger.error(f"Failed to load {self.litellm_path}: {e}")
 
     def dialect_for(self, alias: str) -> str:
+        return self.policy_for(alias)[0]
+
+    def policy_for(self, alias: str):
+        """(dialect, efforts, effort_aliases) for an alias's loaded backend."""
         served = self._alias_to_model.get(alias, alias) or alias
-        for match, dialect in self._rules:
+        for match, dialect, efforts, aliases in self._rules:
             if match in served:
-                return dialect
-        return self._default
+                return dialect, efforts, aliases
+        return self._default, [], {}

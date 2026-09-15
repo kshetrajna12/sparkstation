@@ -19,7 +19,20 @@
 #   passthrough           leave the request untouched.
 
 dialects:
-  # Current daily driver: RadixArk/Qwen3.8-27B-NVFP4 on SGLang.
+  # DAILY DRIVER (2026-09-14): Qwen3.8-Flash-Next. Matches BOTH served names --
+  # `qwen-flash-next` (Saren AutoRound) and `qwen3.8-flash-next` (MiaAI NVFP4);
+  # their chat_template.jinja files are identical, so one rule is correct and
+  # rollback keeps working. Template reads enable_thinking + reasoning_effort,
+  # both inside chat_template_kwargs, and RAISES on any effort outside
+  # xhigh|medium|low -- hence `efforts`, so a client asking for "high" (the
+  # OpenAI convention, and what CLAUDE.md documented) degrades to xhigh instead
+  # of 400ing. Default when the client says nothing is the template's own
+  # `xhigh`, which overthinks badly; serve.sh pins reasoning_effort=low.
+  - match: "flash-next"
+    dialect: qwen_enable_thinking
+    efforts: [low, medium, xhigh]
+    effort_aliases: {high: xhigh, max: xhigh, minimal: low}
+  # Qwen3.8-27B NVFP4 on SGLang (earlier daily driver).
   - match: "NVFP4"
     dialect: qwen_enable_thinking
   # DFlash2 build (if the daily driver is swapped back to it).

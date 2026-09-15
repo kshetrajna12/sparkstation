@@ -206,8 +206,17 @@ models:
       max_model_len: 32768
       max_concurrent_requests: 4
 
-  qwen-flash-next:
-    # DAILY DRIVER (2026-08-29) — Qwen3.8-Flash-Next 125B-A6B on ONE Spark
+  qwen-flash-next-autoround:
+    # ROLLBACK — REMOVE AFTER 2026-10-01 if the MiaAI lane has held up.
+    # Deleting it means removing, in this order:
+    #   1. this spec block
+    #   2. primary:~/qfn-ar-deploy/            (wrapper scripts)
+    #   3. worker1:~/models/qfn-ar-{model,table}  (~120 GB — the real cost)
+    #   4. worker1:~/qfn-autoround/            (the Saren fork clone)
+    # Until then: `sparkstation models stop qwen-flash-next && \
+    #              sparkstation models start qwen-flash-next-autoround`
+    # serves the SAME model name, so a rollback is invisible to clients.
+    # (was DAILY DRIVER 2026-08-29 .. 2026-09-14) — Qwen3.8-Flash-Next 125B-A6B on ONE Spark
     # (worker1), replacing qwen3.8-sglang: model a benchmark tier up,
     # code c1 48.3 tok/s (+13% vs 27B), prose 30.1 (tie), vision native,
     # tools+thinking 4/4, 2x4K-token long-gen stability verified. Trade-off:
@@ -223,7 +232,7 @@ models:
     # modest max_tokens budgets before any JSON content (finish_reason=length;
     # caught by test_structured_output_modest_budget 2026-08-29). Clients
     # request deeper thinking per-call, same as dsv4/glm.
-    name: "qwen-flash-next"   # SERVED name (serve.sh SERVED_NAME)
+    name: "qwen-flash-next"   # SERVED name (serve.sh SERVED_NAME) — same as the live spec on purpose: only one runs at a time, so a rollback is invisible to clients
     backend: "dspark"          # generic script-stack launcher
     model_type: "chat"
     host: worker1
@@ -239,6 +248,48 @@ models:
       port: 8010
       launch_timeout_seconds: 1500
       head_container: "qwen38-flash"
+
+  qwen-flash-next:
+    # DAILY DRIVER (2026-09-14) — swapped from qwen-flash-next (AutoRound).
+    # Same model (Qwen3.8-Flash-Next 125B-A6B), different serving recipe:
+    # MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark, checkpoint
+    # Mia-AiLab/Qwen3.8-Flash-Next-NVFP4 (99G) + a PACKED 26.8GiB PLE table
+    # built on first launch. That packed table is the whole point: AutoRound
+    # mmapped a 44GB table and needed it page-cache resident, which forced
+    # KV_BYTES down to 9g -> a 289,066-token KV pool (1.10x at 262K), so two
+    # concurrent sessions evicted each other and re-prefilled (60-136s).
+    # Measured here 2026-09-14: pool 1,085,188 tokens / 4.14x, prefix caching
+    # ON (mamba cache mode 'align', vLLM #54173 did NOT fire), A/B/A probe
+    # PASS (warm 2.2-2.9s vs cold 136s), code c1 45.9 / prose 33.9 tok/s,
+    # tools PASS, factual 6/6 = AutoRound. Rollback: qwen-flash-next above
+    # (its weights stay at ~/models/qfn-ar-{model,table}).
+    # MEMORY: HOST_RESERVE_GIB=26 is NOT tunable down — 22 (the recipe's old
+    # default) idles the host at 6.9-8.8GiB MemAvailable against a 6GiB
+    # watchdog floor; upstream lost three servers to it on 2026-09-04.
+    # REASONING BUDGET CONTRACT: .env EXTRA_VLLM_ARGS pins
+    # --default-chat-template-kwargs={"reasoning_effort":"low"}. The template
+    # defaults to xhigh and IGNORES `thinking` (it reads enable_thinking), so
+    # without this every client burns its budget on reasoning. The gateway
+    # normalizes client dialects — see gateway/reasoning.yaml `flash-next`.
+    name: "qwen-flash-next"   # SERVED name (.env SERVED_MODEL_NAME) — alias kept stable across recipe swaps
+    backend: "dspark"            # generic script-stack launcher
+    model_type: "chat"
+    host: worker1
+    quantization: "none"         # stack-managed (NVFP4 + packed PLE)
+    default: true
+    vision_default: true         # natively multimodal (text/image/video)
+    memory_gb: 96                # GPU budget = MemTotal - HOST_RESERVE_GIB(26)
+    auto_suspend_enabled: false
+    extra_args:
+      # dspark_dir is resolved ON PRIMARY (where the supervisor runs), so it
+      # points at a wrapper that ssh's to worker1 — same pattern as
+      # ~/qfn-ar-deploy. The recipe itself lives at worker1:~/qfn-single.
+      dspark_dir: "~/qfn-single-deploy"  # absolute per-machine path in .sparkstation.local.yaml
+      start_script: "start.sh"
+      stop_script: "stop.sh"
+      port: 8888
+      launch_timeout_seconds: 1800    # 3 consecutive loads ran 4-8 min (NVMe-bound)
+      head_container: "vllm-fn-tp1"
 
   qwen3.8-sglang:
     # RETIRED as daily driver 2026-08-29 (see qwen-flash-next above); kept
@@ -425,7 +476,7 @@ profiles:
   #                 tuned, 135 tok/s aggregate c=8 — vLLM MTP batches well,
   #                 unlike SGLang-DSpark which poisons batch, proven 08-18).
   generic:
-    qwen-flash-next: {} # DAILY DRIVER chat (Flash-Next AutoRound, single Spark on worker1; default+vision alias; swapped from qwen3.8-sglang 2026-08-29)
+    qwen-flash-next: {} # DAILY DRIVER chat (single Spark, worker1; default+vision alias). Recipe swapped AutoRound -> MiaAI NVFP4 2026-09-14 for a 3.7x KV pool; alias unchanged.
     bge-m3: {}          # openclaw/memory-search text embeddings
     clip-vit: {}        # image embeddings (cross-modal search)
     face-detect: {}     # gallery recognition
