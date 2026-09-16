@@ -2214,6 +2214,113 @@
       "description": "Acceptance rate (accepted/proposed drafts) and effective accepted tokens per forward pass. Both vLLM (MTP) and SGLang (DSpark) export these \u2014 for SGLang, accept-length already includes the bonus token."
     },
     {
+      "id": 43,
+      "type": "timeseries",
+      "title": "Preemptions",
+      "description": "Should be flat ZERO. Non-zero = the KV pool was exhausted and vLLM evicted a running request's cache and recomputed it \u2014 the failure mode MAX_NUM_SEQS guards against. On 2026-09-14 the AutoRound lane hit 100% KV and preempted twice.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 77
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "sparkstation:engine_preemptions_per_second{host=~\"$host\"}",
+          "legendFormat": "{{alias}} {{host}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 44,
+      "type": "timeseries",
+      "title": "Prompt length (p50 / p95)",
+      "description": "What sizes the KV pool and caps MAX_NUM_SEQS. p95 ~200K tokens means 8 concurrent slots would need ~1.6M against a ~1.1M pool \u2014 which is why the cap is 6.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 77
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "sparkstation:engine_prompt_len_p50{host=~\"$host\"}",
+          "legendFormat": "p50 {{alias}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "expr": "sparkstation:engine_prompt_len_p95{host=~\"$host\"}",
+          "legendFormat": "p95 {{alias}}",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
       "type": "row",
       "title": "Voice \u2014 cascade (STT \u2192 routed brain \u2192 TTS)",
       "collapsed": true,
@@ -2222,7 +2329,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 77
+        "y": 85
       },
       "panels": [
         {
