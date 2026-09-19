@@ -63,7 +63,7 @@ SparkStation is probably unnecessary for:
 2. **Multi-Spark logical host placement**: place model services on roles such as `primary` and `worker1`.
 3. **Stable model aliases**: keep client configuration stable while changing model IDs, images, quantization, or runtime flags. Profile-following capability aliases (`default` for chat, `vision` for image understanding) resolve to the loaded profile's designated model automatically.
 4. **LiteLLM gateway synchronization**: register running models with the OpenAI-compatible gateway.
-5. **Multi-backend and multi-model-type support**: run chat, embeddings, image, detection, recognition, and custom services behind the same management plane.
+5. **Multi-backend and multi-model-type support**: run chat, embeddings, image, detection, recognition, typed decision models, and custom services behind the same management plane.
 6. **DGX Spark unified-memory admission control**: reserve configured memory before launching local services.
 7. **Ordered, non-blocking startup**: models load as a background task in phase order (multi-node stacks first), the management API binds immediately, and the gateway picks up models incrementally as they become healthy.
 8. **Health monitoring**: periodic probes detect unresponsive services.
@@ -132,6 +132,7 @@ SparkStation supports more than chat models:
 - image embeddings
 - image generation
 - detection and recognition services
+- decision models (typed judgments with calibrated probabilities over `/v1/systemone`, e.g. reflex)
 - custom model backends
 
 Each model type uses the backend appropriate for that service. SparkStation does not imply that every model type runs through the same inference engine.

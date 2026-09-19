@@ -11,6 +11,64 @@ SPARKSTATION_START_MARKER = "<!-- SPARKSTATION-START -->"
 SPARKSTATION_END_MARKER = "<!-- SPARKSTATION-END -->"
 
 
+DECISION_SECTION_TEMPLATE = """
+## Decision model (`__MODEL__`) — typed judgments, not text
+
+`__MODEL__` is a "System One" decision model (reflex, an open re-creation of
+TypeSafe's Jev). Give it a **state** (text, JSON, images) and typed
+**questions**; it answers ALL of them in one forward pass and returns
+**calibrated probabilities over the options you supplied**. It never generates
+text, so it cannot invent an option, and nothing needs parsing. Use it wherever
+a chat call would only be asked "which queue / is this spam / how urgent / does
+this photo match its caption": ~100 ms for a handful of questions once the
+state is cached, vs seconds of generation.
+
+Endpoint: `POST http://localhost:8000/v1/systemone` (same gateway, same API
+key). It is NOT an OpenAI route: `/v1/models` never lists it, and the OpenAI
+SDK has no method for it — use `httpx`/`requests`/curl. `model` may be omitted
+(or `"reflex-latest"`): it resolves to the loaded decision model.
+
+| type | asks | you get back |
+|---|---|---|
+| `noul` | "is this true?" | `noul`: P(yes) |
+| `choice` | "which one of these?" (≤26 options) | `choice`, `probabilities` per option, `confidence` |
+| `score` | "how much, on this ordered scale?" (2–10 levels) | `score` (probability-weighted level), `probabilities`, `legend`, `confidence` |
+
+```python
+import httpx
+r = httpx.post("http://localhost:8000/v1/systemone",
+               headers={"Authorization": f"Bearer {API_KEY}"}, timeout=120,
+               json={
+                   "state": {"ticket": "My payouts failed three times this week and nobody replied."},
+                   "questions": {
+                       "queue":    {"type": "choice", "instructions": "Which team should handle this?",
+                                    "criteria": {"payments": "payouts, refunds", "account": "login, 2FA", "other": None}},
+                       "escalate": {"type": "noul",   "instructions": "Should this be escalated to a manager?"},
+                       "urgency":  {"type": "score",  "instructions": "How urgent is this?",
+                                    "criteria": ["can wait a week", "handle today", "blocked right now"]},
+                   },
+               }).json()
+a = r["answers"]
+if a["queue"]["confidence"] > 0.6:        # code owns the policy, the model supplies the judgment
+    route(a["queue"]["choice"])
+if a["escalate"]["noul"] > 0.5 or a["urgency"]["score"] > 1.5:
+    page_oncall()
+```
+
+- **Images**: put `{"type": "image", "source": "<file path | URL | data: URI>"}`
+  anywhere in `state`; every question sees it (~1k tokens per megapixel).
+- **Cost model**: the state is cached by content hash — ask many questions
+  about one document for roughly the price of one; repeats over the same
+  state only pay for the questions (`usage.state_cache_hit`).
+- **Calibration**: served with a fitted temperature (and a LoRA when
+  configured), so "85 %" is right about 85 % of the time — still check a
+  handful of your own examples before trusting a threshold, and route
+  low-`confidence` cases to a person or to `default`.
+- **Errors**: 422 = bad question shape (e.g. a `choice` with one option);
+  404 = no decision model loaded; 503 = model starting.
+"""
+
+
 def run_init(profile):
     """Add Sparkstation instructions to CLAUDE.md (creates, appends, or updates)."""
     claude_md_path = Path("CLAUDE.md")
@@ -68,7 +126,14 @@ def run_init(profile):
         ]
 
     # Generate model list for documentation
-    model_list_str = "\n".join([f"- `{m['name']}` - {m['full_name']}" for m in models_info])
+    def _model_line(m):
+        line = f"- `{m['name']}` - {m['full_name']}"
+        if m.get("model_type") == "decision":
+            line += (" — DECISION model (typed judgments over `POST /v1/systemone`; "
+                     "NOT chat, never in `/v1/models`). See \"Decision model\" below.")
+        return line
+
+    model_list_str = "\n".join(_model_line(m) for m in models_info)
 
     # Document the profile-following `default` alias so clients prefer it over
     # pinning a model name that goes stale on the next profile/model swap.
@@ -298,6 +363,18 @@ curl http://localhost:8000/v1/images/generations \\
 - First request may be slower (model warmup)
 """
 
+    # Decision model (reflex): typed judgments with calibrated probabilities
+    # over its own POST /v1/systemone route — documented as its own section
+    # because it is not an OpenAI chat/embeddings API.
+    decision_model = None
+    for m in models_info:
+        if m.get("model_type") == "decision":
+            decision_model = m["name"]
+            break
+    decision_section = ""
+    if decision_model:
+        decision_section = DECISION_SECTION_TEMPLATE.replace("__MODEL__", decision_model)
+
     # Build model-specific details
     model_details_lines = []
     if vision_model:
@@ -327,6 +404,11 @@ curl http://localhost:8000/v1/images/generations \\
   - Generates high-quality images from text prompts using FLUX.1-dev
   - Supports sizes: 512x512, 1024x1024
   - Takes 20-60 seconds per image""")
+    if decision_model:
+        model_details_lines.append(f"""- **Decision model** (`{decision_model}`):
+  - `POST /v1/systemone` only (TypeSafe-Jev-compatible); NOT a chat model and not listed by `/v1/models`
+  - Typed questions (`noul` / `choice` / `score`) over one state, answered in a single pass
+  - Returns calibrated probabilities over the options YOU supply — never free text""")
 
     model_details_str = "\n\n".join(model_details_lines)
 
@@ -340,6 +422,8 @@ curl http://localhost:8000/v1/images/generations \\
         api_lines.append(f"  - Embeddings: `/v1/embeddings` ({', '.join(embed_models)})")
     if has_flux:
         api_lines.append("  - Image Generation: `/v1/images/generations` (flux-dev)")
+    if decision_model:
+        api_lines.append(f"  - Decisions: `/v1/systemone` ({decision_model}) — typed judgments, Jev-compatible, not in `/v1/models`")
     api_capabilities_str = "\n".join(api_lines)
 
     sparkstation_section = f"""{SPARKSTATION_START_MARKER}
@@ -533,7 +617,7 @@ for i, data in enumerate(response.data):
 - **Semantic Search**: Embed documents and queries, find similar content via cosine similarity
 - **RAG (Retrieval Augmented Generation)**: Embed knowledge base for context retrieval
 - **Classification**: Use embeddings as features for downstream ML tasks
-{flux_section}
+{flux_section}{decision_section}
 ## Important Notes
 
 - **Do not start/stop Sparkstation services** - they are managed by the system
