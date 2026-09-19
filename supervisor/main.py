@@ -242,7 +242,9 @@ async def lifespan(app: FastAPI):
                 return 2 if m.host in _dspark_hosts else 0
 
             vllm_sglang_models.sort(key=_phase1_key)
-            clip_models = [m for m in autoload_models if m.backend == "clip"]
+            # reflex (decision model) is a fixed-size docker container like
+            # CLIP — it does not size off free memory, so it shares phase 2.
+            clip_models = [m for m in autoload_models if m.backend in ("clip", "reflex")]
             flux_models = [m for m in autoload_models if m.backend == "flux"]
             species_models = [m for m in autoload_models if m.backend == "species"]
             face_models = [m for m in autoload_models if m.backend == "face"]
@@ -254,7 +256,7 @@ async def lifespan(app: FastAPI):
                 if id(m) not in _bucketed:
                     logger.error(f"Autoload has no phase for backend {m.backend!r} — {m.alias or m.name} will NOT be loaded")
 
-            logger.info(f"Auto-loading models: {len(vllm_sglang_models)} vLLM/SGLang/DSpark/Voicechat, {len(clip_models)} CLIP, {len(species_models)} Species, {len(face_models)} Face, {len(flux_models)} FLUX")
+            logger.info(f"Auto-loading models: {len(vllm_sglang_models)} vLLM/SGLang/DSpark/Voicechat, {len(clip_models)} CLIP/reflex, {len(species_models)} Species, {len(face_models)} Face, {len(flux_models)} FLUX")
             launched_model_ids = []  # Track models we actually launched
 
             # Helper function to wait for models to be ready

@@ -355,7 +355,9 @@ def _write_gateway_yaml():
             continue
         # Voice models speak WebSocket/WebRTC audio, not the OpenAI API — a
         # LiteLLM route would just 404/502 (mirrors gateway_sync exclusion).
-        if (m.get("model_type") or "chat") == "voice":
+        # Decision models (reflex) only speak POST /v1/systemone, which the
+        # proxy forwards to them directly — same exclusion.
+        if (m.get("model_type") or "chat") in ("voice", "decision"):
             continue
         alias = m.get("alias") or m["model_name"].split("/")[-1]
         # Use base_url from supervisor rather than hardcoding 127.0.0.1 — for

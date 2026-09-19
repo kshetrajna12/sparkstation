@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- **`reflex` backend + `decision` model type**: a Jev-style "System One"
+  decision model (github.com/kshetrajna12/reflex on Qwen3.5-4B) as a
+  first-class managed model. Typed questions (`noul` / `choice` / `score`)
+  over a shared state come back as calibrated probability distributions in
+  one prefill — no generation, nothing to parse. Ships in `docker/reflex`
+  (reflex's own uv-locked environment + a thin entrypoint adding `/health`
+  and a pre-bind warm-up so Triton compilation lands in STARTING), with
+  models.yaml knobs for the LoRA adapter, calibration temperatures and token
+  budgets. Enabled in the generic / voice / deep profiles on primary (12 GB).
+- **Gateway `POST /v1/systemone`**: the proxy forwards the Jev-compatible
+  route straight to the loaded decision model (LiteLLM never sees it; decision
+  models are excluded from litellm.yaml like voice). Client keys, allow-lists,
+  rate/concurrency limits, auto-resume and per-alias metrics apply unchanged;
+  `model` may be omitted or `"reflex-latest"`.
+
+### Fixed
+- **Stale `sparkstation` CLI after every install**: `cli.py` / `cli_init.py`
+  were shipped via hatchling `force-include`, which COPIES them into
+  site-packages even for editable installs — so the `sparkstation` entry
+  point ran whatever cli.py existed at the last `uv sync` (the repo venv was
+  19 days behind HEAD, the systemd `uv tool` install 17; symptom: the
+  CLI-written litellm.yaml lacked `supports_vision` after a bounce and, with
+  reflex, briefly listed a decision model to LiteLLM). Now `only-include`, so
+  an editable install is a single .pth onto the checkout. Reinstall once:
+  `uv pip install -e . --no-deps` (venv) and `uv tool install --force -e .`
+  (the systemd entry point).
+
 ## [0.5.0] - 2026-08-15
 
 ### Added

@@ -41,6 +41,7 @@ class Backend(str, Enum):
     TRT_LLM = "trt-llm"  # Future support
     DSPARK = "dspark"  # Anemll DSpark multi-node compose stack (2x GB10 TP=2)
     VOICECASCADE = "voicecascade"  # cascade voice stack: Kyutai STT -> routed brain -> Qwen3-TTS (pipecat)
+    REFLEX = "reflex"  # System One decision model (typed judgments, POST /v1/systemone) — docker/reflex
 
 
 class ModelType(str, Enum):
@@ -51,6 +52,7 @@ class ModelType(str, Enum):
     IMAGE = "image"
     DETECTION = "detection"
     VOICE = "voice"  # WebSocket/WebRTC audio — not an OpenAI-API model
+    DECISION = "decision"  # typed-judgment model: POST /v1/systemone only, no chat (reflex)
 
 
 # SQLAlchemy ORM Model

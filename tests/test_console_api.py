@@ -195,7 +195,8 @@ def switch_client(client, monkeypatch):
 def test_switch_plan(switch_client):
     d = switch_client.get("/profiles/voice/plan").json()
     assert d["stop"] == ["flux-dev"]
-    assert d["start"] == ["voicecascade"]
+    # the live set lacks the decision model too, so it is part of the plan
+    assert d["start"] == ["reflex", "voicecascade"]
     assert "qwen-flash-next" in d["keep"]
     assert switch_client.get("/profiles/nope/plan").status_code == 404
 
