@@ -313,6 +313,24 @@ curl http://127.0.0.1:8000/v1/embeddings \
   }'
 ```
 
+For a typed decision (a `decision` model such as `reflex`: calibrated
+probabilities over options you supply, no generation — TypeSafe-Jev-compatible
+`POST /v1/systemone`, forwarded by the proxy straight to the model):
+
+```bash
+curl http://127.0.0.1:8000/v1/systemone \
+  -H "Authorization: Bearer $SPARK_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "state": "The export button crashes in Safari but works in Chrome.",
+    "questions": {
+      "browser_specific": {"type": "noul", "instructions": "Is the bug browser-specific?"},
+      "severity": {"type": "score", "instructions": "How severe is this?",
+                   "criteria": ["cosmetic", "degraded but there is a workaround", "blocking"]}
+    }
+  }'
+```
+
 ## Model Configuration
 
 `models.yaml` contains the public desired state:

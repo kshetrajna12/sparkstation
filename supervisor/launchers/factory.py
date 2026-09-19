@@ -10,6 +10,7 @@ from supervisor.launchers.species_launcher import SpeciesLauncher
 from supervisor.launchers.face_launcher import FaceLauncher
 from supervisor.launchers.dspark_launcher import DsparkLauncher
 from supervisor.launchers.voicecascade_launcher import VoicecascadeLauncher
+from supervisor.launchers.reflex_launcher import ReflexLauncher
 from supervisor.models import Backend
 
 
@@ -26,6 +27,7 @@ class LauncherFactory:
             Backend.FACE: FaceLauncher(),
             Backend.DSPARK: DsparkLauncher(),
             Backend.VOICECASCADE: VoicecascadeLauncher(),
+            Backend.REFLEX: ReflexLauncher(),
             # Backend.TRT_LLM: TRTLLMLauncher(),  # TODO: Implement
         }
 

@@ -132,8 +132,10 @@ class GatewaySync:
         for model in all_models:
             # Voice models speak WebSocket/WebRTC audio, not the OpenAI API —
             # a LiteLLM route would just 502. Clients connect to them directly.
+            # Decision models (reflex) only speak POST /v1/systemone, which
+            # the gateway proxy forwards to them directly — same exclusion.
             mt = getattr(model.model_type, "value", model.model_type)
-            if mt == "voice":
+            if mt in ("voice", "decision"):
                 continue
             # Use alias for display name, but actual model_name for the backend
             display_name = model.model_alias or model.model_name.split("/")[-1]

@@ -10,6 +10,9 @@ This project has access to local LLM models through Sparkstation gateway.
 - `bge-m3` - BAAI/bge-m3 text embeddings
 - `clip-vit` - openai/clip-vit-large-patch14 image embeddings
 - `face-detect` - face-recognition
+- `reflex` - System One DECISION model (Qwen3.5-4B + reflex LoRA, primary). Typed
+  judgments with calibrated probabilities over `POST /v1/systemone` — NOT a chat
+  model, never appears in `/v1/models`. See "Decision model (reflex)" below.
 - `default` - alias for the loaded profile's default chat model (currently `qwen-flash-next`). Prefer this unless you need a specific model.
 - `vision` - alias for the loaded profile's vision model (currently `qwen-flash-next`). Use this for any image-understanding request.
 - `voicecascade` - Sparky's voice stack (worker2, `voice` profile). NOT an
@@ -20,7 +23,7 @@ This project has access to local LLM models through Sparkstation gateway.
 
 Switch profiles with `sparkstation stop && sparkstation start -d --profile <name>` (see models.yaml `profiles:` for ground truth):
 
-- **generic**: qwen-flash-next, bge-m3, clip-vit, face-detect, gemma4-2b — daily driver
+- **generic**: qwen-flash-next, bge-m3, clip-vit, face-detect, gemma4-2b, reflex — daily driver
 - **voice**: generic + voicecascade on worker2 (also on demand: `sparkstation models start voicecascade -p voice`)
 - **deep**: GLM-5.3-Flash 2-node reserve (workers) + aux on primary
 - **image-indexing**: batch photo intake (vLLM+MTP concurrency recipe)
@@ -181,6 +184,71 @@ tokens of headroom beyond the JSON itself — reasoning is emitted first.
 current daily driver (measured 2026-09-14: budget 32 produced 147 reasoning
 tokens); use `reasoning_effort` or turn thinking off instead.
 
+## Decision model (reflex) — typed judgments, not text
+
+`reflex` (github.com/kshetrajna12/reflex) is an open re-creation of TypeSafe's
+Jev "System One" model on Qwen3.5-4B. Give it a **state** (text, JSON, images)
+and typed **questions**; it answers ALL of them in one forward pass and returns
+**calibrated probabilities over the options you supplied**. It never generates
+text, so it cannot invent an option, and nothing needs parsing. Use it wherever
+a chat call would only be asked "which queue / is this spam / how urgent / does
+this photo match its caption": ~100 ms for a handful of questions once the
+state is cached, vs seconds of generation.
+
+Endpoint: `POST http://localhost:8000/v1/systemone` (same gateway, same API
+key; the proxy forwards it straight to the reflex container — LiteLLM and
+`/v1/models` never see it). Request/response shapes are TypeSafe-Jev
+compatible, so Jev client code works with `base_url` pointed here. `model`
+may be omitted (or `"reflex-latest"`): it resolves to the loaded decision model.
+
+Three question types:
+
+| type | asks | you get back |
+|---|---|---|
+| `noul` | "is this true?" | `noul`: P(yes) |
+| `choice` | "which one of these?" (≤26 options) | `choice`, `probabilities` per option, `confidence` |
+| `score` | "how much, on this ordered scale?" (2–10 levels) | `score` (probability-weighted level), `probabilities`, `legend`, `confidence` |
+
+```bash
+curl -s http://localhost:8000/v1/systemone -H "Authorization: Bearer $SPARK_KEY" \
+  -H 'content-type: application/json' -d '{
+  "state": {"ticket": "My payouts failed three times this week and nobody replied."},
+  "questions": {
+    "queue":    {"type": "choice", "instructions": "Which team should handle this?",
+                 "criteria": {"payments": "payouts, refunds", "account": "login, 2FA", "other": null}},
+    "escalate": {"type": "noul",   "instructions": "Should this be escalated to a manager?"},
+    "urgency":  {"type": "score",  "instructions": "How urgent is this?",
+                 "criteria": ["can wait a week", "handle today", "blocked right now"]}
+  }}'
+```
+
+```python
+import httpx, os
+r = httpx.post("http://localhost:8000/v1/systemone",
+               headers={"Authorization": f"Bearer {os.environ['SPARK_KEY']}"},
+               json={"state": {...}, "questions": {...}}, timeout=120).json()
+a = r["answers"]
+if a["queue"]["confidence"] > 0.6:        # code owns the policy, the model supplies the judgment
+    route(a["queue"]["choice"])
+if a["escalate"]["noul"] > 0.5 or a["urgency"]["score"] > 1.5:
+    page_oncall()
+```
+
+- **Images**: put `{"type": "image", "source": "<file path | URL | data: URI>"}`
+  anywhere in `state`; it is encoded once with the state and every question
+  sees it (~1k tokens per megapixel).
+- **Calibration**: served with the reflex LoRA (public 8-dataset mix) + fitted
+  temperature — held-out ECE 0.024, so "85 %" is right about 85 % of the time.
+  Still check a handful of your own examples before trusting a threshold, and
+  route low-`confidence` cases to a person or to `default`.
+- **Cost model**: the state is cached by content hash (LRU 8) — ask many
+  questions about one document for roughly the price of one; repeated calls
+  over the same state only pay for the questions (`usage.state_cache_hit`).
+- **Errors**: 422 = bad question shape (e.g. a `choice` with one option);
+  404 = no decision model loaded; 503 = model starting.
+- Serving knobs (adapter, calibration, token budgets) live in `models.yaml`
+  under the `reflex` spec; the container is `docker/reflex`.
+
 ## Embeddings
 
 Sparkstation provides text embedding models for semantic search, RAG, and similarity tasks.
@@ -289,6 +357,7 @@ print(f"Similarity: {similarity}")
 - All models support standard OpenAI APIs:
   - Chat: `/v1/chat/completions` (qwen-flash-next, gemma4-2b, `default`/`vision` aliases)
   - Embeddings: `/v1/embeddings` (bge-m3, clip-vit)
+  - Decisions: `/v1/systemone` (reflex) — typed judgments, Jev-compatible, not in `/v1/models`
   - Voice is NOT here: the `voicecascade` stack speaks WebSocket audio directly on worker2:7860
 
 ### Model-Specific Details

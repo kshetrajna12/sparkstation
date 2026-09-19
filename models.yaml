@@ -441,6 +441,39 @@ models:
       extra_env:
         CASCADE_VOICE: "K"        # fallback voice when console.json has no default
 
+  reflex:
+    # System One DECISION model (github.com/kshetrajna12/reflex): an open
+    # re-creation of TypeSafe's Jev on Qwen3.5-4B. State (text/JSON/images)
+    # + typed questions in, calibrated probabilities out — noul (P(yes)),
+    # choice (distribution over your options), score (ordered levels) — all
+    # questions answered in ONE prefill, no generation, so it can never emit
+    # an option you did not list. ~100 ms for a handful of questions once the
+    # state prefix is cached (LRU by content hash inside the server).
+    # NOT a chat API: the only route is POST /v1/systemone (Jev-compatible),
+    # which the gateway proxy forwards here directly (LiteLLM never sees it;
+    # gateway_sync excludes model_type "decision" like "voice"). Clients:
+    #   POST :8000/v1/systemone  {"model":"reflex","state":..., "questions":{...}}
+    # Served with the reflex LoRA trained on the public 8-dataset mix + its
+    # fitted temperature (held-out: acc 62.7 -> 76.8 %, ECE 0.120 -> 0.024;
+    # see reflex docs/results/lora-mix-qwen3.5-4b.md). Raw model: drop the
+    # `adapter` key and point `calibration` at calibration_qwen3.5-4b.json.
+    # Image: docker/reflex (reflex-server:latest, reflex's own uv-locked env).
+    name: "Qwen/Qwen3.5-4B"
+    backend: "reflex"
+    model_type: "decision"
+    host: primary
+    quantization: "none"        # bf16; the 4B fits easily beside the aux models
+    memory_gb: 12               # ~9 GB weights + state cache + Triton workspace
+    idle_timeout_minutes: 120
+    auto_suspend_enabled: false
+    docker_image: "reflex-server:latest"
+    extra_args:
+      runs_dir: "~/src/github.com/reflex/runs"   # absolute per-machine path in .sparkstation.local.yaml (adapters + calibration live here, gitignored in reflex)
+      adapter: "lora-mix"                        # LoRA dir under runs_dir
+      calibration: "lora-mix/calibration.json"   # per-primitive temperatures under runs_dir
+      max_pack_tokens: 8192
+      max_image_pixels: 1048576                  # ~1k tokens per image
+
   flux-dev:
     name: "black-forest-labs/FLUX.1-dev"
     backend: "flux"
@@ -481,6 +514,7 @@ profiles:
     clip-vit: {}        # image embeddings (cross-modal search)
     face-detect: {}     # gallery recognition
     gemma4-2b: {}       # small fast chat on primary (Gemma 4 E2B QAT w4a16)
+    reflex: {}          # System One decision model on primary (POST /v1/systemone)
 
   # voice: the generic stack + the cascade voice stack on worker2 (Reachy/
   # Sparky voice; replaced Nemotron VoiceChat 2026-08-30). Kept out of
@@ -495,6 +529,7 @@ profiles:
     clip-vit: {}
     face-detect: {}
     gemma4-2b: {}
+    reflex: {}
     voicecascade: {}
 
   # deep: GLM-5.3-Flash 2-node reserve on worker1+worker2 (swapped from
@@ -512,6 +547,7 @@ profiles:
     bge-m3: {}
     clip-vit: {}
     face-detect: {}
+    reflex: {}       # decision model (base spec host: primary)
 
   # Single-node development / production / inference — chat only on primary,
   # matches pre-cluster defaults.

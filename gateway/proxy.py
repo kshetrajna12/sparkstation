@@ -158,6 +158,8 @@ app = FastAPI(title="Sparkstation Gateway Proxy", docs_url=None, redoc_url=None)
 
 client: Optional[httpx.AsyncClient] = None
 supervisor_client: Optional[httpx.AsyncClient] = None
+# Backend-direct client for routes LiteLLM does not proxy (/v1/systemone).
+direct_client: Optional[httpx.AsyncClient] = None
 _current_port: Optional[int] = None
 _upstream_task: Optional["asyncio.Task"] = None
 
@@ -203,11 +205,15 @@ async def _upstream_watcher():
 
 @app.on_event("startup")
 async def _startup():
-    global client, supervisor_client, _current_port, _upstream_task
+    global client, supervisor_client, direct_client, _current_port, _upstream_task
     _current_port = _read_active_port()
     # No read timeout: long generations stream for minutes.
     client = _new_upstream_client(_current_port)
     supervisor_client = httpx.AsyncClient(base_url=SUPERVISOR_URL, timeout=10)
+    direct_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=10, read=None, write=60, pool=10),
+        limits=httpx.Limits(max_connections=64, max_keepalive_connections=16),
+    )
     _upstream_task = asyncio.create_task(_upstream_watcher())
     logger.info(f"Gateway proxy up: upstream=127.0.0.1:{_current_port} (blue-green) supervisor={SUPERVISOR_URL}")
 
@@ -220,6 +226,8 @@ async def _shutdown():
         await client.aclose()
     if supervisor_client:
         await supervisor_client.aclose()
+    if direct_client:
+        await direct_client.aclose()
 
 
 @app.get("/metrics")
@@ -252,6 +260,43 @@ def _find_model(models: list, alias: str) -> Optional[dict]:
         if alias == "default" and m.get("is_default"):
             return m
     return None
+
+
+# ─── Decision models (reflex): POST /v1/systemone bypasses LiteLLM ──────────
+#
+# A "decision" model (models.yaml model_type: decision, backend: reflex) is a
+# Jev-style System One server: typed questions in, calibrated probabilities
+# out, over its own POST /v1/systemone route. LiteLLM has no notion of that
+# endpoint, so gateway_sync keeps decision models OUT of litellm.yaml and the
+# proxy forwards the path straight to the model's container instead. Every
+# other gateway concern (client keys, allow-lists, rate/concurrency limits,
+# auto-resume, per-alias metrics) applies exactly as for chat.
+SYSTEMONE_PATH = "v1/systemone"
+DECISION_MODEL_TYPE = "decision"
+# reflex's schema default / the name TypeSafe's SDK sends — treated as "the
+# loaded decision model", so Jev client code works unchanged with model unset.
+_DECISION_WILDCARDS = {"reflex-latest", "decision", "systemone", ""}
+_DECISION_STATUS_ORDER = {"running": 0, "starting": 1, "suspended": 2}
+
+
+def _resolve_decision_target(parsed: object, models: list) -> Optional[tuple[str, str]]:
+    """Pick the decision model a /v1/systemone request goes to.
+
+    `parsed` is the JSON body (or None). A body `model` naming a specific
+    decision alias/model_name selects it; a missing or wildcard name picks the
+    loaded decision model, preferring running > starting > suspended so
+    _ensure_available can then resume / 503 it. Returns (alias, base_url) or
+    None when nothing matches.
+    """
+    wanted = parsed.get("model") if isinstance(parsed, dict) else None
+    candidates = [m for m in models if m.get("model_type") == DECISION_MODEL_TYPE]
+    if isinstance(wanted, str) and wanted not in _DECISION_WILDCARDS:
+        m = _find_model(candidates, wanted)
+    else:
+        m = min(candidates, key=lambda x: _DECISION_STATUS_ORDER.get(x.get("status"), 9), default=None)
+    if m is None or not m.get("base_url"):
+        return None
+    return (m.get("alias") or m.get("model_name"), m["base_url"])
 
 
 async def _ensure_available(alias: str) -> Optional[Response]:
@@ -344,6 +389,7 @@ async def forward(request: Request, path: str):
     # and, for chat, apply the client's reasoning default then normalize the
     # thinking controls to the backend's dialect.
     alias = "none"
+    parsed = None
     if request.method == "POST" and path.startswith("v1/") and body:
         try:
             parsed = json.loads(body)
@@ -366,6 +412,29 @@ async def forward(request: Request, path: str):
             status_code=401,
             content={"error": {"message": "Invalid or missing API key", "type": "invalid_api_key"}},
         )
+
+    # /v1/systemone → the loaded decision model, directly (after auth so an
+    # unknown key cannot probe which models exist; before the allow-list so
+    # the policy is checked against the RESOLVED alias).
+    direct_url: Optional[str] = None
+    if request.method == "POST" and path == SYSTEMONE_PATH:
+        target = _resolve_decision_target(parsed, await _get_models())
+        if target is None:
+            CLIENT_DENIED.labels(client=policy.name, alias=alias, reason="no_decision_model").inc()
+            REQUESTS_TOTAL.labels(alias=alias, method=request.method, code="404").inc()
+            return JSONResponse(
+                status_code=404,
+                content={"error": {
+                    "message": "No decision model is loaded (models.yaml model_type: decision, e.g. the "
+                               "`reflex` alias) or the requested one is unknown — /v1/systemone has nowhere to go",
+                    "type": "model_not_found",
+                }},
+            )
+        alias, direct_url = target[0], f"{target[1]}/{SYSTEMONE_PATH}"
+        if isinstance(parsed, dict) and parsed.get("model") != alias:
+            parsed["model"] = alias  # the backend echoes its own served name anyway
+            body = json.dumps(parsed).encode()
+
     if alias != "none" and not policy.allows_model(alias):
         CLIENT_DENIED.labels(client=policy.name, alias=alias, reason="model_not_allowed").inc()
         REQUESTS_TOTAL.labels(alias=alias, method=request.method, code="403").inc()
@@ -394,17 +463,27 @@ async def forward(request: Request, path: str):
     CLIENT_INFLIGHT.labels(client=policy.name).set(policy.inflight)
 
     headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP}
-    upstream_request = client.build_request(
-        request.method,
-        f"/{path}",
-        params=request.url.query,
-        headers=headers,
-        content=body,
-    )
+    if direct_url:
+        # Backend-direct: the gateway key stays at the gateway.
+        headers.pop("authorization", None)
+        headers.pop("x-api-key", None)
+        send_client = direct_client
+        upstream_request = send_client.build_request(
+            request.method, direct_url, params=request.url.query, headers=headers, content=body,
+        )
+    else:
+        send_client = client
+        upstream_request = send_client.build_request(
+            request.method,
+            f"/{path}",
+            params=request.url.query,
+            headers=headers,
+            content=body,
+        )
 
     start = time.perf_counter()
     try:
-        upstream = await client.send(upstream_request, stream=True)
+        upstream = await send_client.send(upstream_request, stream=True)
     except Exception as e:
         policy.release()
         CLIENT_INFLIGHT.labels(client=policy.name).set(policy.inflight)
