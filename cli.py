@@ -878,7 +878,10 @@ def _start_model_via_api(model_cfg: dict, supervisor_url: str) -> str:
         body["num_speculative_tokens"] = model_cfg["num_speculative_tokens"]
     if model_cfg.get("speculative_extra"):
         body["speculative_extra"] = model_cfg["speculative_extra"]
-    r = httpx.post(f"{supervisor_url}/models/start", json=body, timeout=60)
+    # The supervisor answers only once the launcher has started the container. A reflex
+    # launch may first build an image for a new `stable` (minutes), so this call must not
+    # give up at 60 s and leave the CLI reporting a failure for a launch that succeeds.
+    r = httpx.post(f"{supervisor_url}/models/start", json=body, timeout=httpx.Timeout(3600, connect=10))
     r.raise_for_status()
     return r.json()["model_id"]
 
