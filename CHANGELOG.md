@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `sparkstation models start` / `swap` no longer time out at 60 s on launches that build an
+  image first (reflex on a new `stable`): the start request now waits up to an hour, and
+  the CLI reports the launch that actually happened instead of a spurious failure.
+
 ### Changed
 - **reflex tracks its own `stable` tag**: the reflex launcher resolves
   `refs/tags/stable` on github.com/kshetrajna12/reflex at every launch and,
