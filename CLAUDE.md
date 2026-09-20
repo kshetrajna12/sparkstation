@@ -10,7 +10,8 @@ This project has access to local LLM models through Sparkstation gateway.
 - `bge-m3` - BAAI/bge-m3 text embeddings
 - `clip-vit` - openai/clip-vit-large-patch14 image embeddings
 - `face-detect` - face-recognition
-- `reflex` - System One DECISION model (Qwen3.5-4B + reflex LoRA, primary). Typed
+- `reflex` - System One DECISION model (frozen Qwen3.5-4B + reflex's prompt, primary;
+  auto-tracks the reflex repo's `stable` tag, rebuilt on launch when it moves). Typed
   judgments with calibrated probabilities over `POST /v1/systemone` — NOT a chat
   model, never appears in `/v1/models`. See "Decision model (reflex)" below.
 - `default` - alias for the loaded profile's default chat model (currently `qwen-flash-next`). Prefer this unless you need a specific model.

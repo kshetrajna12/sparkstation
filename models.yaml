@@ -453,11 +453,18 @@ models:
     # which the gateway proxy forwards here directly (LiteLLM never sees it;
     # gateway_sync excludes model_type "decision" like "voice"). Clients:
     #   POST :8000/v1/systemone  {"model":"reflex","state":..., "questions":{...}}
-    # Served with the reflex LoRA trained on the public 8-dataset mix + its
-    # fitted temperature (held-out: acc 62.7 -> 76.8 %, ECE 0.120 -> 0.024;
-    # see reflex docs/results/lora-mix-qwen3.5-4b.md). Raw model: drop the
-    # `adapter` key and point `calibration` at calibration_qwen3.5-4b.json.
-    # Image: docker/reflex (reflex-server:latest, reflex's own uv-locked env).
+    # WHICH reflex is reflex's decision: the launcher resolves the repo's
+    # `stable` git tag on every launch and builds reflex-server:<sha12> from
+    # docker/reflex when that commit has no image yet, and the container reads
+    # serving/stable.json at that commit for the adapter / calibration / prompt
+    # to serve (currently: the FROZEN Qwen3.5-4B, default prompt, no
+    # calibration — every LoRA tried lost on never-trained data; see reflex
+    # docs/results/frozen-vs-trained.md). So `sparkstation models swap reflex`
+    # always comes up on the current stable. First launch after the tag moves
+    # takes the build (~10 min) before the model starts.
+    # To pin: set `docker_image: reflex-server:<sha12>` (no tracking, no build).
+    # To try a local adapter: `adapter: lora-xyz` + `calibration:` under runs_dir
+    # (overrides the manifest for that launch only).
     name: "Qwen/Qwen3.5-4B"
     backend: "reflex"
     model_type: "decision"
@@ -466,11 +473,9 @@ models:
     memory_gb: 12               # ~9 GB weights + state cache + Triton workspace
     idle_timeout_minutes: 120
     auto_suspend_enabled: false
-    docker_image: "reflex-server:latest"
     extra_args:
-      runs_dir: "~/src/github.com/reflex/runs"   # absolute per-machine path in .sparkstation.local.yaml (adapters + calibration live here, gitignored in reflex)
-      adapter: "lora-mix"                        # LoRA dir under runs_dir
-      calibration: "lora-mix/calibration.json"   # per-primitive temperatures under runs_dir
+      track: stable                              # reflex git ref to follow ("none" = never build)
+      runs_dir: "~/src/github.com/reflex/runs"   # absolute per-machine path in .sparkstation.local.yaml (local adapters, gitignored in reflex)
       max_pack_tokens: 8192
       max_image_pixels: 1048576                  # ~1k tokens per image
 

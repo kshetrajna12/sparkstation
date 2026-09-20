@@ -145,3 +145,37 @@ class TestLitellmExclusion:
         names = [m["model_name"] for m in captured["list"]]
         assert "reflex" not in names
         assert names == ["gemma4-2b", "default"]
+
+
+class TestStableTracking:
+    """The launcher follows reflex's `stable` tag and builds when it moved."""
+
+    def test_annotated_tag_peels_to_the_commit(self):
+        from supervisor.launchers.reflex_launcher import parse_ls_remote
+        out = "aaaa\trefs/tags/stable\nbbbb\trefs/tags/stable^{}\n"
+        assert parse_ls_remote(out, "stable") == "bbbb"
+        assert parse_ls_remote("cccc\trefs/tags/stable\n", "stable") == "cccc"       # lightweight tag
+        assert parse_ls_remote("dddd\trefs/heads/main\n", "main") == "dddd"          # a branch works too
+        assert parse_ls_remote("", "stable") is None
+
+    def test_plan_builds_only_when_the_commit_has_no_image(self):
+        from supervisor.launchers.reflex_launcher import plan_image
+        sha = "0123456789abcdef0123456789abcdef01234567"
+        assert plan_image(None, "stable", sha, ["reflex-server:latest"]) == ("reflex-server:0123456789ab", True, sha)
+        assert plan_image(None, "stable", sha, ["reflex-server:0123456789ab"]) == ("reflex-server:0123456789ab", False, sha)
+
+    def test_explicit_image_is_a_pin(self):
+        from supervisor.launchers.reflex_launcher import plan_image
+        assert plan_image("reflex-server:next", "stable", "abc", []) == ("reflex-server:next", False, None)
+        assert plan_image(None, "none", "abc", []) == ("reflex-server:latest", False, None)
+
+    def test_offline_falls_back_to_the_local_image_or_fails_clearly(self):
+        from supervisor.launchers.reflex_launcher import plan_image
+        assert plan_image(None, "stable", None, ["reflex-server:latest"]) == ("reflex-server:latest", False, None)
+        with pytest.raises(LaunchError):
+            plan_image(None, "stable", None, [])
+
+    def test_commit_reaches_the_container_env(self):
+        cmd = build_docker_cmd(_cfg(), "id", 8010, image="reflex-server:abc", commit="abc123")
+        assert cmd[-1] == "reflex-server:abc"
+        assert _env(cmd)["REFLEX_COMMIT"] == "abc123"

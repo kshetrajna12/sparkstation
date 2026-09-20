@@ -8,10 +8,12 @@
 # pip-packaged CUDA libs, transformers 5.x, flash-linear-attention) — the
 # exact set the reflex calibration/LoRA results were measured with on GB10.
 #
-# Build (on the host that will run it — DGX Spark is linux/arm64):
+# You normally never build this by hand: the supervisor's reflex launcher
+# resolves reflex's `stable` tag on every launch and builds
+# reflex-server:<sha12> (+ :latest) when that commit has no image yet
+# (supervisor/launchers/reflex_launcher.py). Manual build, same recipe:
 #   cd docker/reflex
-#   docker build --platform linux/arm64 -t reflex-server:latest .
-#   # pin a reflex commit:  --build-arg REFLEX_REF=<sha or branch>
+#   docker build --platform linux/arm64 --build-arg REFLEX_REF=<sha or tag> -t reflex-server:latest .
 #
 # The full (non-slim) python image is deliberate: Triton JIT-compiles the
 # linear-attention kernels at first use and needs a C compiler + Python
@@ -39,6 +41,7 @@ RUN git init -q reflex \
     && git rev-parse HEAD > /app/REFLEX_COMMIT \
     && uv sync --frozen --no-dev --no-editable --python /usr/local/bin/python3.12 \
     && rm -rf .git /root/.cache/uv   # the uv wheel cache alone is 5.5 GB
+LABEL reflex.ref="${REFLEX_REF}"
 
 COPY server.py /app/server.py
 
