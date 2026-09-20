@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **reflex tracks its own `stable` tag**: the reflex launcher resolves
+  `refs/tags/stable` on github.com/kshetrajna12/reflex at every launch and,
+  when that commit has no `reflex-server:<sha12>` image on the host, builds
+  one from `docker/reflex` (also tagged `:latest`, older sha images pruned
+  to one spare) before starting the container. The container reads reflex's
+  `serving/stable.json` for the adapter / calibration / prompt to serve, so
+  models.yaml no longer pins an adapter (it had frozen the first, weakest LoRA
+  while reflex moved on to the frozen model + tuned prompt). `docker_image:`
+  is now an explicit pin that disables tracking; `extra_args.track: none`
+  disables building. `/health` reports `reflex_commit` and the manifest.
+
 ### Added
 - **`reflex` backend + `decision` model type**: a Jev-style "System One"
   decision model (github.com/kshetrajna12/reflex on Qwen3.5-4B) as a

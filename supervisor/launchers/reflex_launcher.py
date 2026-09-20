@@ -9,20 +9,27 @@ It is NOT an OpenAI chat API: the only inference route is POST /v1/systemone
 to this container (LiteLLM never sees it) and gateway_sync excludes
 model_type "decision" from the LiteLLM model list, like "voice".
 
-Image: docker/reflex (reflex-server:latest — reflex's own uv-locked env +
-a thin entrypoint that adds /health). Must exist on the target host.
+Which reflex to run is reflex's decision, not ours. The reflex repo keeps a
+git tag `stable` on the commit it recommends and a `serving/stable.json` at
+that commit naming the adapter / calibration / prompt to serve. On EVERY
+launch this launcher resolves the tag (`git ls-remote`), and if no image for
+that commit exists on the target host it builds one from docker/reflex
+(`reflex-server:<sha12>`, also tagged `:latest`) before starting the
+container. So a `sparkstation models swap reflex` (or a full restart) always
+comes up on the current stable — nobody has to remember to rebuild. If the
+remote cannot be reached, the newest local image is used and a warning logged.
 
-Config expectations (models.yaml):
+Config (models.yaml):
   backend: reflex
   model_type: decision
   name: Qwen/Qwen3.5-4B                 # HF id of the base checkpoint
   memory_gb: 12                         # 4B bf16 ≈ 9 GB + state cache
+  docker_image: reflex-server:<tag>     # OPTIONAL pin; set it and no tracking/building happens
   extra_args:
-    runs_dir: ~/src/github.com/reflex/runs   # mounted read-only at /runs
-                                              # (absolute per-machine path in
-                                              #  .sparkstation.local.yaml)
-    adapter: lora-mix                   # LoRA dir under runs_dir (optional)
-    calibration: lora-mix/calibration.json   # temperatures under runs_dir (optional)
+    track: stable                       # git ref to follow (default "stable"; "none" = never build)
+    runs_dir: ~/src/github.com/reflex/runs   # mounted read-only at /runs (local adapters)
+    adapter: lora-xyz                   # OVERRIDE the manifest's adapter (dir under runs_dir)
+    calibration: lora-xyz/calibration.json   # OVERRIDE the manifest's calibration
     max_pack_tokens: 8192               # branch-token budget per forward
     max_image_pixels: 1048576           # image token cost bound (~1k tok/MP)
     dtype: bfloat16
@@ -33,6 +40,7 @@ import asyncio
 import logging
 import os
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -46,10 +54,18 @@ from supervisor.cluster_helpers import merged_env, base_url_for_host
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_IMAGE = "reflex-server:latest"
+IMAGE_REPO = "reflex-server"
+DEFAULT_IMAGE = f"{IMAGE_REPO}:latest"
+REFLEX_GIT = "https://github.com/kshetrajna12/reflex.git"
+DEFAULT_TRACK = "stable"
+DOCKER_DIR = Path(__file__).resolve().parents[2] / "docker" / "reflex"
+BUILD_LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
 CONTAINER_PORT = 8000
 RUNS_MOUNT = "/runs"
 HF_CACHE_MOUNT = "/root/.cache/huggingface"
+LS_REMOTE_TIMEOUT_S = 20
+BUILD_TIMEOUT_S = 60 * 60
+KEEP_OLD_IMAGES = 1   # previous stable kept for a quick rollback; older ones pruned
 
 
 def _expand(path: str) -> str:
@@ -59,10 +75,130 @@ def _expand(path: str) -> str:
     return os.path.expanduser(str(path))
 
 
-def build_docker_cmd(config: ModelConfig, model_id: str, port: int) -> list[str]:
+# ── which image: resolve the tracked ref, decide whether to build ──────────
+
+def parse_ls_remote(output: str, ref: str) -> str | None:
+    """Commit sha for REF from `git ls-remote` output. An annotated tag lists the
+    tag object as `refs/tags/x` and the commit it points at as `refs/tags/x^{}`;
+    the commit is what REFLEX_REF must be, so the peeled line wins."""
+    tag, peeled, branch = None, None, None
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        sha, name = parts
+        if name == f"refs/tags/{ref}^{{}}":
+            peeled = sha
+        elif name == f"refs/tags/{ref}":
+            tag = sha
+        elif name == f"refs/heads/{ref}":
+            branch = sha
+    return peeled or tag or branch
+
+
+def resolve_ref(ref: str, repo: str = REFLEX_GIT, env: dict | None = None) -> str | None:
+    """The commit sha REF points at on the remote, or None if the remote is
+    unreachable (offline, GitHub down) — the caller then falls back."""
+    try:
+        r = subprocess.run(
+            ["git", "ls-remote", "--tags", "--heads", repo, ref, f"{ref}^{{}}"],
+            capture_output=True, text=True, timeout=LS_REMOTE_TIMEOUT_S, env=env,
+        )
+    except Exception as e:  # timeout, git missing
+        logger.warning(f"reflex: git ls-remote {repo} {ref} failed: {e}")
+        return None
+    if r.returncode != 0:
+        logger.warning(f"reflex: git ls-remote {repo} {ref} failed: {r.stderr.strip()[:300]}")
+        return None
+    return parse_ls_remote(r.stdout, ref)
+
+
+def image_for_commit(sha: str) -> str:
+    return f"{IMAGE_REPO}:{sha[:12]}"
+
+
+def plan_image(docker_image: str | None, track: str, sha: str | None, local_images: list[str]) -> tuple[str, bool, str | None]:
+    """Pure decision: (image to run, must build it first, commit sha or None).
+
+    * an explicit `docker_image` in models.yaml is a pin: run it, never build;
+    * track "none" / "": same, on `reflex-server:latest`;
+    * otherwise the image named after the resolved commit, built if absent;
+    * remote unreachable: the newest local image, with no build.
+    """
+    if docker_image:
+        return docker_image, False, None
+    if not track or track.lower() == "none":
+        return DEFAULT_IMAGE, False, None
+    if sha is None:
+        if DEFAULT_IMAGE not in local_images:
+            raise LaunchError(
+                f"reflex: cannot resolve '{track}' on {REFLEX_GIT} and no local {DEFAULT_IMAGE} to fall back on"
+            )
+        return DEFAULT_IMAGE, False, None
+    image = image_for_commit(sha)
+    return image, image not in local_images, sha
+
+
+def _local_images(env: dict) -> list[str]:
+    r = subprocess.run(
+        ["docker", "images", IMAGE_REPO, "--format", "{{.Repository}}:{{.Tag}}"],
+        capture_output=True, text=True, env=env,
+    )
+    return [l.strip() for l in r.stdout.splitlines() if l.strip()]
+
+
+def build_image(sha: str, image: str, env: dict) -> None:
+    """`docker build` docker/reflex at commit SHA, tagged IMAGE and :latest.
+    Blocking (run it in a thread); the full log goes to logs/reflex-build-<sha12>.log."""
+    if not (DOCKER_DIR / "Dockerfile").exists():
+        raise LaunchError(f"reflex: {DOCKER_DIR}/Dockerfile not found; cannot build {image}")
+    BUILD_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = BUILD_LOG_DIR / f"reflex-build-{sha[:12]}.log"
+    cmd = [
+        "docker", "build", "--platform", "linux/arm64",
+        "--build-arg", f"REFLEX_REF={sha}",
+        "-t", image, "-t", DEFAULT_IMAGE, str(DOCKER_DIR),
+    ]
+    logger.info(f"reflex: building {image} from {REFLEX_GIT}@{sha[:12]} (log: {log_path})")
+    t0 = time.monotonic()
+    with open(log_path, "w") as log:
+        log.write(" ".join(cmd) + "\n")
+        log.flush()
+        try:
+            r = subprocess.run(cmd, stdout=log, stderr=subprocess.STDOUT, text=True, timeout=BUILD_TIMEOUT_S, env=env)
+        except subprocess.TimeoutExpired:
+            raise LaunchError(f"reflex: docker build of {image} exceeded {BUILD_TIMEOUT_S // 60} min (see {log_path})")
+    if r.returncode != 0:
+        tail = log_path.read_text()[-1500:]
+        raise LaunchError(f"reflex: docker build of {image} failed (see {log_path}):\n{tail}")
+    logger.info(f"reflex: built {image} in {(time.monotonic() - t0) / 60:.1f} min")
+
+
+def prune_old_images(keep_image: str, env: dict) -> None:
+    """Drop reflex-server:<sha> images older than the KEEP_OLD_IMAGES most recent
+    besides KEEP_IMAGE (7 GB each). Images in use by a container fail to remove and
+    are simply left alone."""
+    r = subprocess.run(
+        ["docker", "images", IMAGE_REPO, "--format", "{{.Tag}}\t{{.CreatedAt}}"],
+        capture_output=True, text=True, env=env,
+    )
+    rows = []
+    for line in r.stdout.splitlines():
+        tag, _, created = line.partition("\t")
+        if tag and tag not in ("latest", "<none>") and f"{IMAGE_REPO}:{tag}" != keep_image:
+            rows.append((created, tag))
+    for _, tag in sorted(rows, reverse=True)[KEEP_OLD_IMAGES:]:
+        rm = subprocess.run(["docker", "image", "rm", f"{IMAGE_REPO}:{tag}"], capture_output=True, text=True, env=env)
+        logger.info(f"reflex: pruned old image {IMAGE_REPO}:{tag}" if rm.returncode == 0
+                    else f"reflex: kept {IMAGE_REPO}:{tag} ({rm.stderr.strip()[:120]})")
+
+
+# ── the container ──────────────────────────────────────────────────────────
+
+def build_docker_cmd(config: ModelConfig, model_id: str, port: int, image: str | None = None, commit: str | None = None) -> list[str]:
     """The `docker run` argv for a reflex container (pure; unit-tested)."""
     xa = config.extra_args or {}
-    image = config.docker_image or DEFAULT_IMAGE
+    image = image or config.docker_image or DEFAULT_IMAGE
     hf_cache = _expand(xa.get("hf_cache") or f"{Path.home()}/.cache/huggingface")
 
     env = {
@@ -71,6 +207,8 @@ def build_docker_cmd(config: ModelConfig, model_id: str, port: int) -> list[str]
         "MODEL_PATH": config.model_name,
         "SERVED_MODEL_NAME": config.model_alias or config.model_name.split("/")[-1],
     }
+    if commit:
+        env["REFLEX_COMMIT"] = commit
     knobs = {
         "max_pack_tokens": "REFLEX_MAX_PACK_TOKENS",
         "max_image_pixels": "REFLEX_MAX_IMAGE_PIXELS",
@@ -123,32 +261,46 @@ class ReflexLauncher(ModelLauncher):
     async def cleanup(self):
         await self.client.aclose()
 
+    async def _ensure_image(self, config: ModelConfig, env: dict) -> tuple[str, str | None]:
+        """Resolve the tracked ref and make sure its image exists on the host.
+        Returns (image, commit sha or None). The ls-remote and any build run in a
+        thread so the supervisor's event loop keeps serving meanwhile."""
+        xa = config.extra_args or {}
+        track = str(xa.get("track", DEFAULT_TRACK))
+        sha = None
+        if not config.docker_image and track and track.lower() != "none":
+            sha = await asyncio.to_thread(resolve_ref, track, REFLEX_GIT, env)
+            if sha is None:
+                logger.warning(f"reflex: '{track}' unresolvable on {REFLEX_GIT}; falling back to the newest local image")
+        local = await asyncio.to_thread(_local_images, env)
+        image, needs_build, sha = plan_image(config.docker_image, track, sha, local)
+        if needs_build:
+            await asyncio.to_thread(build_image, sha, image, env)
+            await asyncio.to_thread(prune_old_images, image, env)
+        elif image not in local:
+            raise LaunchError(
+                f"reflex Docker image {image!r} not found on host={config.host}. Build it there:\n"
+                f"  cd docker/reflex\n  docker build --platform linux/arm64 -t {image} ."
+            )
+        else:
+            logger.info(f"reflex: image {image} already present" + (f" (stable = {sha[:12]})" if sha else ""))
+        return image, sha
+
     async def launch(self, config: ModelConfig, model_id: str, port: int, memory_gb: float = None) -> ModelInstance:
         logger.info(f"Launching reflex decision model: {config.model_name} on host={config.host} port {port}")
         if not settings.use_docker:
             raise LaunchError("reflex subprocess mode not implemented. Please use Docker mode.")
 
-        image = config.docker_image or DEFAULT_IMAGE
         try:
             check_memory_headroom(config.host, memory_gb)
             subprocess_env = merged_env(config.host)
+            image, commit = await self._ensure_image(config, subprocess_env)
 
-            check_image = subprocess.run(
-                ["docker", "images", "-q", image],
-                capture_output=True, text=True, env=subprocess_env,
-            )
-            if not check_image.stdout.strip():
-                raise LaunchError(
-                    f"reflex Docker image {image!r} not found on host={config.host}. Build it there:\n"
-                    "  cd docker/reflex\n"
-                    "  docker build --platform linux/arm64 -t reflex-server:latest ."
-                )
-
-            docker_cmd = build_docker_cmd(config, model_id, port)
+            docker_cmd = build_docker_cmd(config, model_id, port, image=image, commit=commit)
             logger.debug(f"Docker command: {' '.join(docker_cmd)}")
             result = subprocess.run(docker_cmd, capture_output=True, text=True, check=True, env=subprocess_env)
             container_id = result.stdout.strip()
-            logger.info(f"Docker container started on host={config.host}: {container_id[:12]}, model_id={model_id}")
+            logger.info(f"Docker container started on host={config.host}: {container_id[:12]}, model_id={model_id}, image={image}")
 
             await asyncio.sleep(3)
             check = subprocess.run(
@@ -159,6 +311,10 @@ class ReflexLauncher(ModelLauncher):
                 logs = subprocess.run(["docker", "logs", container_id], capture_output=True, text=True, env=subprocess_env)
                 raise LaunchError(f"Docker container failed to start. Logs:\n{(logs.stdout + logs.stderr)[-1500:]}")
 
+            extra = dict(config.extra_args or {})
+            extra["image"] = image
+            if commit:
+                extra["reflex_commit"] = commit
             return ModelInstance(
                 id=model_id,
                 model_name=config.model_name,
@@ -175,7 +331,7 @@ class ReflexLauncher(ModelLauncher):
                 started_at=datetime.now(),
                 auto_suspend_enabled=config.auto_suspend_enabled,
                 idle_timeout_minutes=config.idle_timeout_minutes,
-                extra_args=config.extra_args,
+                extra_args=extra,
             )
         except LaunchError:
             raise
