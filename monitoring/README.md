@@ -2,6 +2,13 @@
 
 Comprehensive monitoring setup for Sparkstation with Prometheus and Grafana.
 
+> **Prometheus rules are NOT in this directory.** `sparkstation_rules.yml` is
+> owned by the **homecloud-infra** repo at `prometheus/sparkstation_rules.yml`
+> and deploys with `make deploy-prometheus`. A stale copy lived here until
+> 2026-09-20; it had frozen on 2026-08-20 and was missing every alert, so
+> deploying it would have silently removed all five. This directory remains the
+> source of truth for the Grafana **dashboards** only.
+
 ---
 
 ## Quick Start
@@ -387,7 +394,9 @@ Engine-internal metrics (queue depth, KV cache, engine tok/s) come from the
 `sparkstation-backends` Prometheus job, which discovers running backends via
 the supervisor's `http://localhost:9001/prometheus/targets` (http_sd). Raw
 `vllm:*` names are normalized to canonical `sparkstation:*` series by
-recording rules in `sparkstation_rules.yml` — to support a new engine, add an
+recording rules in `sparkstation_rules.yml`, which lives in the
+**homecloud-infra** repo (`prometheus/sparkstation_rules.yml`) and is deployed
+from there with `make deploy-prometheus` — to support a new engine, add an
 `or`-branch to those rules; dashboards never change.
 
 GPU utilization is per host (one GB10 per Spark) via `nvidia_gpu_exporter` on
