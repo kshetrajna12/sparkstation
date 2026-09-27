@@ -996,7 +996,7 @@ def models_stop(ctx, alias, no_gateway_refresh):
         sys.exit(1)
     model_id = matching[0]["id"]
     click.echo(f"  → Stopping {alias} ({model_id})...")
-    sr = httpx.post(f"{supervisor_url}/models/{model_id}/stop", timeout=30)
+    sr = httpx.post(f"{supervisor_url}/models/{model_id}/stop", timeout=180)  # dspark stop scripts archive logs + wait on shm; 30s cut swap off mid-stop
     if sr.status_code != 200:
         click.secho(f"  Stop failed: HTTP {sr.status_code}: {sr.text}", fg="red")
         sys.exit(1)
