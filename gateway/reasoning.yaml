@@ -32,6 +32,17 @@ dialects:
     dialect: qwen_enable_thinking
     efforts: [low, medium, xhigh]
     effort_aliases: {high: xhigh, max: xhigh, minimal: low}
+  # GLM-5.3-Flash (deep profile; litellm target openai/glm-5.3-flash). The
+  # template reads enable_thinking + reasoning_effort inside
+  # chat_template_kwargs (MiaAI EXL3 kit README). Effort vocabulary is
+  # low|high|max; `medium` is NOT an error but the template maps it to Max, so
+  # alias it down to high. Before this rule (matched nothing -> passthrough)
+  # `reasoning: false` was ignored and GLM reasoned on every such call
+  # (measured 2026-09-26: 53 completion tokens for "Tokyo" vs 3).
+  - match: "glm"
+    dialect: qwen_enable_thinking
+    efforts: [low, high, max]
+    effort_aliases: {medium: high, xhigh: max, minimal: low}
   # Qwen3.8-27B NVFP4 on SGLang (earlier daily driver).
   - match: "NVFP4"
     dialect: qwen_enable_thinking

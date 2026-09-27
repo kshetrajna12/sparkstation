@@ -144,6 +144,46 @@ models:
       head_container: "deepseek-v4-flash-vllm-dspark-1"
 
   glm5.3-flash:
+    # DEEP-PROFILE CHAT (2026-09-26) — swapped from the radixark NVFP4 stack
+    # (kept below as glm5.3-flash-radixark, same served name). Recipe:
+    # MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks (worker1:~/glm-exl3 @ b2c5986),
+    # weights Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw (EXL3 routed experts, rest
+    # native) + incoai DFlash2 k=7 drafter, adaptive-k (GLM53_ADAPTIVE_K=ema,
+    # lossless), fp8 KV, InstantTensor loader (boot ~4 min vs ~30).
+    # WHY: quality. Same bench (backend direct, thinking off, temp 0) vs radixark:
+    #   prompt NLL 1.322 vs 1.355 (EXL3 KLD 0.025 vs NVFP4 0.061 per the quant
+    #   author); factual 6/6 vs 4/6 — radixark LEAKS its reasoning into content
+    #   with thinking off (glm45 parser); warm 2nd-turn TTFT 2.0s vs 3.9s,
+    #   after-4k-tool 5.0s vs 8.0s; KV pool 1,572,073 vs 476,625 at 850K ctx
+    #   (vs 393K); 0 U+FFFD (LibertAIDAI NVFP4 is on vllm#54150's corrupt list).
+    # COST: lossless decode is ~20% SLOWER than radixark on real prompts:
+    #   code c1 24.0 vs 29.1, prose c1 20.6 vs 26.1, c4 agg code 52.9 vs 53.6,
+    #   prose 46.8 vs 49.0. DFlash2 accepts only ~2.2-2.6 tok/step on real text
+    #   (the kit's 62.9 tok/s headline is a counting prompt at ~6.7).
+    # SPEED OPTION (not on, quality-first call): GLM53_DENSE_FP8=dense,kda in
+    #   ~/glm-exl3/.env -> code c1 30.4, prose c1 26.5, c4 58.2/51.3, NLL 1.3206
+    #   (no measurable change) — upstream still labels it PROVISIONAL.
+    # IMAGE: built locally on BOTH nodes (stamp 8aaa7dc0114e); the kit's
+    #   save|load ship fails ("max depth exceeded", 193 layers). The wrapper
+    #   pins SKIP_BUILD/SKIP_SHIP/SKIP_PULL — see ~/glm53-exl3-deploy/start.sh.
+    name: "glm-5.3-flash"   # SERVED model name (kit .env SERVED_MODEL_NAME)
+    backend: "dspark"        # generic 2-node script-stack launcher
+    model_type: "chat"
+    vision_default: true     # vision verified 2026-09-26 (LANGUAGE_MODEL_ONLY=0)
+    host: worker1            # head rank; worker2 runs the second rank
+    quantization: "none"     # stack-managed (EXL3 checkpoint)
+    memory_gb: 104           # kit preflight request per node (103.44 GiB)
+    auto_suspend_enabled: false
+    extra_args:
+      dspark_dir: "~/glm53-exl3-deploy"  # resolved ON PRIMARY; absolute path in .sparkstation.local.yaml
+      start_script: "start.sh"
+      stop_script: "stop.sh"
+      port: 8009                          # kit .env PORT
+      launch_timeout_seconds: 1800
+      head_container: "glm53-exl3-head"
+
+  glm5.3-flash-radixark:
+    # ROLLBACK for glm5.3-flash (retired 2026-09-26; not in any profile).
     # GLM-5.3-Flash (320B-A18B MoE, MIT, 262K ctx) — winner of the 2026-08-28
     # TP2 autoresearch sweep on worker1+worker2: LibertAIDAI NVFP4 + incoai
     # DFlash2 drafter (spec-7) + CUDA graphs + fp8 KV (pinned 4.15GiB), image
