@@ -263,6 +263,15 @@ models:
     # PASS (warm 2.2-2.9s vs cold 136s), code c1 45.9 / prose 33.9 tok/s,
     # tools PASS, factual 6/6 = AutoRound. Rollback: qwen-flash-next above
     # (its weights stay at ~/models/qfn-ar-{model,table}).
+    # RECIPE UPGRADE 2026-09-26: worker1:~/qfn-single d038090 -> b843911
+    # (upstream HEAD, default lane). Picks up the PLE staging-buffer fix
+    # (upstream PR #67: every prefill chunk + MTP verify step shipped STALE
+    # PLE rows) and MTP_DISABLE_BLOCK_DROP=1 (added to .env with the empty
+    # CHAT_TEMPLATE=; old .env kept as .env.bak-d038090). Same bench, backend
+    # direct, idle server, before -> after: prompt NLL 1.247 -> 1.206, warm
+    # 2nd-turn TTFT 1.36 -> 0.49s, after-4k-tool-output 3.67 -> 2.77s, code
+    # c4 agg 107 -> 122, prose c1 32.1 -> 35.6; code c1 / prose c4 / cold
+    # TTFT unchanged; tools, vision, factual PASS. KV pool 1,124,729.
     # MEMORY: HOST_RESERVE_GIB=26 is NOT tunable down — 22 (the recipe's old
     # default) idles the host at 6.9-8.8GiB MemAvailable against a 6GiB
     # watchdog floor; upstream lost three servers to it on 2026-09-04.
