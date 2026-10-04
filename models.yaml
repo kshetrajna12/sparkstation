@@ -290,7 +290,49 @@ models:
       head_container: "qwen38-flash"
 
   qwen-flash-next:
-    # DAILY DRIVER (2026-09-14) — swapped from qwen-flash-next (AutoRound).
+    # DAILY DRIVER (2026-10-04) — swapped from the vLLM lane (kept below as
+    # qwen-flash-next-vllm, same served name). Same model, TensorFold engine:
+    # MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark-TensorFold @ 4c0dea8
+    # (worker1:~/qfn-tf; TensorFold v0.6.1 + 2 patches, image
+    # tensorfold-qwen38:v0.6.1), checkpoint Vontra/Qwen3.8-Flash-Next-MLX-4bit-MTP
+    # (MLX 4-bit gs32 + MTP head, 106G), 5 streams x 262,144 ctx, int8 KV
+    # (1,310,720-token pool), n-gram tables on SSD, vision + video on.
+    # A/B 2026-10-04 vs the vLLM lane, same instrument, backend direct, thinking
+    # off, temp 0 (vLLM on worker1, TF on worker2):
+    #   quality: HumanEval 155/164 vs 154; GSM8K-200 190 vs 193 (paired
+    #     discordant 3 vs 6, several TF "misses" were still double-checking at
+    #     the 1024-token cap) — a tie; tools, vision, factual 6/6, 0 U+FFFD both.
+    #   speed: code c1 64.7 vs 49.1 (+32%), prose c1 50.5 vs 36.2 (+39%);
+    #     c4 agg code 131.0 vs 125.2, prose 103.5 vs 92.4; warm 2nd-turn TTFT
+    #     0.30 vs 0.53s; after-4k-tool 2.95 vs 2.66s; cold 9.5k 4.53 vs 4.59s.
+    # No prompt_logprobs on TensorFold, so prompt NLL can't be compared.
+    # REASONING: the wrapper passes --reasoning-effort low (server default; the
+    # template's own default is xhigh). Per-request enable_thinking and
+    # chat_template_kwargs.reasoning_effort are honored, so the gateway's
+    # `flash-next` rule applies unchanged (served name still matches).
+    # Image prompts are NOT kept for prefix reuse (text chats are).
+    name: "qwen-flash-next"   # SERVED name (recipe .env SERVED_NAME) — alias kept stable across recipe swaps
+    backend: "dspark"            # generic script-stack launcher
+    model_type: "chat"
+    host: worker1
+    quantization: "none"         # stack-managed (MLX 4-bit)
+    default: true
+    vision_default: true         # image + video (TensorFold vision tower)
+    memory_gb: 103               # recipe needs ~103 GiB free at start
+    auto_suspend_enabled: false
+    extra_args:
+      # dspark_dir is resolved ON PRIMARY; the wrapper ssh's to worker1 and
+      # carries the 2026-08-29 wedge guards (cache drop + MemFree preflight).
+      dspark_dir: "~/qfn-tf-deploy"   # absolute per-machine path in .sparkstation.local.yaml
+      start_script: "start.sh"
+      stop_script: "stop.sh"
+      port: 8888
+      launch_timeout_seconds: 1800    # load ~2.5 min warm; first start compiles kernels
+      head_container: "qwen38-flash-next-tf"
+
+  qwen-flash-next-vllm:
+    # ROLLBACK for qwen-flash-next (retired 2026-10-04; not in any profile).
+    # Was DAILY DRIVER (2026-09-14) — swapped from qwen-flash-next (AutoRound).
     # Same model (Qwen3.8-Flash-Next 125B-A6B), different serving recipe:
     # MiaAI-Lab/Qwen3.8-Flash-Next-Single-DGX-Spark, checkpoint
     # Mia-AiLab/Qwen3.8-Flash-Next-NVFP4 (99G) + a PACKED 26.8GiB PLE table
