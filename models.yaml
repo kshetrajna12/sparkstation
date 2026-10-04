@@ -246,49 +246,6 @@ models:
       max_model_len: 32768
       max_concurrent_requests: 4
 
-  qwen-flash-next-autoround:
-    # ROLLBACK — REMOVE AFTER 2026-10-01 if the MiaAI lane has held up.
-    # Deleting it means removing, in this order:
-    #   1. this spec block
-    #   2. primary:~/qfn-ar-deploy/            (wrapper scripts)
-    #   3. worker1:~/models/qfn-ar-{model,table}  (~120 GB — the real cost)
-    #   4. worker1:~/qfn-autoround/            (the Saren fork clone)
-    # Until then: `sparkstation models stop qwen-flash-next && \
-    #              sparkstation models start qwen-flash-next-autoround`
-    # serves the SAME model name, so a rollback is invisible to clients.
-    # (was DAILY DRIVER 2026-08-29 .. 2026-09-14) — Qwen3.8-Flash-Next 125B-A6B on ONE Spark
-    # (worker1), replacing qwen3.8-sglang: model a benchmark tier up,
-    # code c1 48.3 tok/s (+13% vs 27B), prose 30.1 (tie), vision native,
-    # tools+thinking 4/4, 2x4K-token long-gen stability verified. Trade-off:
-    # c4 aggregate 50/98 vs 27B's 81/124 (mmap-PLE contention under load).
-    # Stack: Saren-Arterius/qwen3.8-Flash-DGX-AutoRound vLLM fork (worker1
-    # ~/qfn-autoround; serve.sh holds the config): Intel W4A16 AutoRound int4
-    # experts + int8 head + fp8 side layers (~71GB resident), 44GB fp8 PLE
-    # table mmapped from NVMe, MTP=3, 262K ctx, port 8010. Weights:
-    # ~/models/qfn-ar-{model,table} (materialized, NOT hub symlinks — the
-    # container mount needs real files). Rollback: qwen3.8-sglang spec below.
-    # REASONING BUDGET CONTRACT: serve.sh sets server default reasoning_effort
-    # LOW (--default-chat-template-kwargs) — without it, default thinking ate
-    # modest max_tokens budgets before any JSON content (finish_reason=length;
-    # caught by test_structured_output_modest_budget 2026-08-29). Clients
-    # request deeper thinking per-call, same as dsv4/glm.
-    name: "qwen-flash-next"   # SERVED name (serve.sh SERVED_NAME) — same as the live spec on purpose: only one runs at a time, so a rollback is invisible to clients
-    backend: "dspark"          # generic script-stack launcher
-    model_type: "chat"
-    host: worker1
-    quantization: "none"       # stack-managed (AutoRound hybrid)
-    default: true
-    vision_default: true
-    memory_gb: 78              # ~71GB resident + headroom; PLE stays on NVMe
-    auto_suspend_enabled: false
-    extra_args:
-      dspark_dir: "~/qfn-ar-deploy"     # absolute per-machine path in .sparkstation.local.yaml
-      start_script: "start-qfn-ar.sh"
-      stop_script: "stop-qfn-ar.sh"
-      port: 8010
-      launch_timeout_seconds: 1500
-      head_container: "qwen38-flash"
-
   qwen-flash-next:
     # DAILY DRIVER (2026-10-04) — swapped from the vLLM lane (kept below as
     # qwen-flash-next-vllm, same served name). Same model, TensorFold engine:
@@ -343,8 +300,8 @@ models:
     # Measured here 2026-09-14: pool 1,085,188 tokens / 4.14x, prefix caching
     # ON (mamba cache mode 'align', vLLM #54173 did NOT fire), A/B/A probe
     # PASS (warm 2.2-2.9s vs cold 136s), code c1 45.9 / prose 33.9 tok/s,
-    # tools PASS, factual 6/6 = AutoRound. Rollback: qwen-flash-next above
-    # (its weights stay at ~/models/qfn-ar-{model,table}).
+    # tools PASS, factual 6/6 = AutoRound. (The AutoRound lane was retired
+    # 2026-10-04; its HF weights are archived on the NAS.)
     # RECIPE UPGRADE 2026-09-26: worker1:~/qfn-single d038090 -> b843911
     # (upstream HEAD, default lane). Picks up the PLE staging-buffer fix
     # (upstream PR #67: every prefill chunk + MTP verify step shipped STALE
@@ -373,8 +330,8 @@ models:
     auto_suspend_enabled: false
     extra_args:
       # dspark_dir is resolved ON PRIMARY (where the supervisor runs), so it
-      # points at a wrapper that ssh's to worker1 — same pattern as
-      # ~/qfn-ar-deploy. The recipe itself lives at worker1:~/qfn-single.
+      # points at a wrapper that ssh's to worker1. The recipe itself lives at
+      # worker1:~/qfn-single.
       dspark_dir: "~/qfn-single-deploy"  # absolute per-machine path in .sparkstation.local.yaml
       start_script: "start.sh"
       stop_script: "stop.sh"
