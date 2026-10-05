@@ -1332,7 +1332,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "sum by (alias) (increase(vllm:prompt_tokens_total[24h]) or increase(sglang_prompt_tokens_total[24h])) > 0",
+          "expr": "sum by (alias) (label_replace(increase(vllm:prompt_tokens_total[24h]), \"src\", \"vllm\", \"\", \"\") or label_replace(increase(sglang_prompt_tokens_total[24h]), \"src\", \"sglang\", \"\", \"\") or label_replace(increase(tensorfold:prompt_tokens_total[24h]), \"src\", \"tensorfold\", \"\", \"\")) > 0",
           "refId": "A",
           "legendFormat": "{{alias}}"
         }
@@ -1392,7 +1392,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "sum by (alias) (increase(vllm:generation_tokens_total[24h]) or increase(sglang_generation_tokens_total[24h])) > 0",
+          "expr": "sum by (alias) (label_replace(increase(vllm:generation_tokens_total[24h]), \"src\", \"vllm\", \"\", \"\") or label_replace(increase(sglang_generation_tokens_total[24h]), \"src\", \"sglang\", \"\", \"\") or label_replace(increase(tensorfold:generation_tokens_total[24h]), \"src\", \"tensorfold\", \"\", \"\")) > 0",
           "refId": "A",
           "legendFormat": "{{alias}}"
         }
@@ -1482,7 +1482,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "sum(increase(vllm:prompt_tokens_total[$__range]) or increase(sglang_prompt_tokens_total[$__range])) by (alias)",
+          "expr": "sum(label_replace(increase(vllm:prompt_tokens_total[$__range]), \"src\", \"vllm\", \"\", \"\") or label_replace(increase(sglang_prompt_tokens_total[$__range]), \"src\", \"sglang\", \"\", \"\") or label_replace(increase(tensorfold:prompt_tokens_total[$__range]), \"src\", \"tensorfold\", \"\", \"\")) by (alias)",
           "legendFormat": "{{alias}} input",
           "range": true,
           "refId": "A"
@@ -1492,7 +1492,7 @@
             "type": "prometheus",
             "uid": "PBFA97CFB590B2093"
           },
-          "expr": "sum(increase(vllm:generation_tokens_total[$__range]) or increase(sglang_generation_tokens_total[$__range])) by (alias)",
+          "expr": "sum(label_replace(increase(vllm:generation_tokens_total[$__range]), \"src\", \"vllm\", \"\", \"\") or label_replace(increase(sglang_generation_tokens_total[$__range]), \"src\", \"sglang\", \"\", \"\") or label_replace(increase(tensorfold:generation_tokens_total[$__range]), \"src\", \"tensorfold\", \"\", \"\")) by (alias)",
           "legendFormat": "{{alias}} output",
           "range": true,
           "refId": "B"
