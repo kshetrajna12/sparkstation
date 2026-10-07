@@ -110,6 +110,12 @@ class Settings(BaseSettings):
     log_file_path: str = "./data/sparkstation.log"  # Log file location
     log_max_bytes: int = 10 * 1024 * 1024  # 10 MB per file
     log_backup_count: int = 5  # Keep 5 backup files
+    # Restart recovery removes the dead container (docker rm), which deletes
+    # its logs. The restart manager saves them here first so a crash stays
+    # diagnosable (2026-10-06: gemma4-2b died and its only evidence was lost).
+    crash_log_dir: str = "~/.sparkstation/logs/crashes"
+    crash_log_tail_lines: int = 3000
+    crash_log_keep: int = 50  # newest N files kept
 
     # Startup profile (load named profile instead of autoload models)
     startup_profile: Optional[str] = None
