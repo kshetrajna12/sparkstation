@@ -5,9 +5,12 @@ Implements exponential backoff and restart attempt tracking.
 """
 import asyncio
 import logging
+import subprocess
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional, Set
 
+from supervisor.cluster_helpers import merged_env
 from supervisor.registry import ModelRegistry
 from supervisor.resources import ResourceManager
 from supervisor.models import ModelStatus, HealthStatus, ModelInstance, ModelConfig
@@ -220,6 +223,10 @@ class RestartManager:
                 await self._mark_permanently_failed(model)
                 return
 
+            # stop() below docker-rm's the dead container, taking its logs
+            # with it — save them first (best effort, never blocks a restart).
+            await asyncio.to_thread(self._preserve_crash_logs, model)
+
             # Force stop any existing process (in case it's hung)
             launcher = self.launcher_factory.get_launcher(model.backend)
             try:
@@ -245,6 +252,12 @@ class RestartManager:
             # Memory limits are only tracked for the primary Spark (same rule
             # as ResourceManager.allocate_model).
             if config.host == "primary":
+                # The failed model still holds its own resident slot from the
+                # original launch. Counting it here meant a model sitting at
+                # max_resident_models blocked its own restart forever
+                # (2026-10-06: gemma4-2b, 5/5 slots, one of them itself). It
+                # is not running, so free the slot; keep the port for reuse.
+                self.resource_manager.release_model(model_id, full_release=False)
                 can_allocate = await asyncio.to_thread(
                     self.resource_manager.can_allocate_model, memory_estimate
                 )
@@ -302,6 +315,56 @@ class RestartManager:
 
             # Cleanup resources
             self.resource_manager.release_model(model_id, full_release=False)
+
+    def _preserve_crash_logs(self, model: ModelInstance) -> Optional[Path]:
+        """Save a failed model's container state + log tail before removal.
+
+        Writes <crash_log_dir>/<alias>-<container12>-<timestamp>.log and
+        prunes to the newest crash_log_keep files. Best effort: any failure is
+        logged and swallowed. Returns the written path, or None.
+        """
+        if not model.container_id:
+            return None
+        cid = model.container_id
+        env = merged_env(model.host or "primary")
+        try:
+            inspect = subprocess.run(
+                ["docker", "inspect", "--format",
+                 "status={{.State.Status}} exit={{.State.ExitCode}} "
+                 "oom_killed={{.State.OOMKilled}} error={{.State.Error}} "
+                 "started={{.State.StartedAt}} finished={{.State.FinishedAt}}",
+                 cid],
+                capture_output=True, text=True, timeout=20, env=env,
+            )
+            if inspect.returncode != 0:
+                # Container already gone — nothing left to save.
+                logger.info(f"No container {cid[:12]} to save crash logs from")
+                return None
+            logs = subprocess.run(
+                ["docker", "logs", "--timestamps", "--tail",
+                 str(settings.crash_log_tail_lines), cid],
+                capture_output=True, text=True, timeout=60, env=env,
+            )
+            crash_dir = Path(settings.crash_log_dir).expanduser()
+            crash_dir.mkdir(parents=True, exist_ok=True)
+            name = model.model_alias or model.id
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            path = crash_dir / f"{name}-{cid[:12]}-{stamp}.log"
+            path.write_text(
+                f"# model={name} id={model.id} host={model.host or 'primary'} "
+                f"container={cid}\n# {inspect.stdout.strip()}\n\n"
+                # vLLM logs to stderr; keep both streams.
+                f"{logs.stdout}{logs.stderr}"
+            )
+            logger.warning(f"Saved crash logs for {name} to {path}")
+            for old in sorted(crash_dir.glob("*.log"), key=lambda p: p.stat().st_mtime)[
+                : -settings.crash_log_keep
+            ]:
+                old.unlink(missing_ok=True)
+            return path
+        except Exception as e:
+            logger.warning(f"Could not save crash logs for {model.id}: {e}")
+            return None
 
     async def _mark_permanently_failed(self, model: ModelInstance):
         """
