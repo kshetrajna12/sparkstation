@@ -1,0 +1,16 @@
+diff --git a/start.sh b/start.sh
+--- a/start.sh
++++ b/start.sh
+@@ -315,6 +315,12 @@
+ env_args
+ RUN_ARGS=(--gpus all --ipc=host --network host --shm-size 16g --device /dev/infiniband --cap-add IPC_LOCK
+           --ulimit memlock=-1 --ulimit stack=67108864)
++# Keep GPU device access in runc/systemd's spec. With only the legacy --gpus
++# hook, a daemon-reload or container update can revoke access; resident kernels
++# still run, but new vision/cuBLAS/Triton kernels fail. Applies to every rank.
++RUN_ARGS+=(--device /dev/nvidia0 --device /dev/nvidiactl
++           --device /dev/nvidia-uvm --device /dev/nvidia-uvm-tools
++           --device /dev/nvidia-modeset --device /dev/nvidia-caps)
+ # DISPLAY_KV_BACKEND=dispram (patch 0087): dispramd's socket and its python client in every rank
+ if (( DISPLAY_KV_MIB )) && [[ "$DISPLAY_KV_BACKEND" == dispram ]]; then
+   RUN_ARGS+=(-v /run/dispram:/run/dispram -v /opt/kindling/dispram/python:/opt/dispram:ro -e PYTHONPATH=/opt/dispram)
