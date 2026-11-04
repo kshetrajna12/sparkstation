@@ -281,6 +281,19 @@ sparkstation start -d --profile dev
 
 The detached start flow launches the supervisor, waits for configured models, writes `gateway/litellm.yaml`, starts LiteLLM, and starts the gateway proxy on `127.0.0.1:8000`.
 
+The proxy observes a client's disconnect while waiting for upstream headers and
+while streaming its body. It cancels that forwarding request, closes its upstream
+response and releases the client's concurrency slot once. The original upstream
+status, headers and response bytes are preserved; cancelling does not retry work
+or change a timeout or model limit. This closes the proxy's own HTTP hop, not a
+guarantee that a downstream inference engine has stopped computing.
+
+Forwarding diagnostics retain the stage, terminal outcome, upstream status,
+elapsed time and error/cause types and numeric errno values, including a separate
+cleanup failure. Exception messages and request bodies are omitted from these
+ordinary logs. Cancellation uses `499` in request accounting only; it sends no
+new response to a client that has disconnected.
+
 ### 6. Check Health and Model Status
 
 ```bash
