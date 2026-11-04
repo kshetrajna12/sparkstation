@@ -501,6 +501,7 @@ async def forward(request: Request, path: str):
         upstream = None
         failure = None
         cleanup_failure = None
+        delivery_failure = None
         stage = "upstream_request"
         code = "502"
         released = False
@@ -521,35 +522,50 @@ async def forward(request: Request, path: str):
                 finally:
                     policy.release()
                     CLIENT_INFLIGHT.labels(client=policy.name).set(policy.inflight)
-                    cancelled = disconnected() or isinstance(failure, asyncio.CancelledError)
-                    outcome = "cancelled" if cancelled else "failed" if failure or cleanup_failure else "completed"
-                    # 499 is accounting only: a disconnected client receives no response.
-                    terminal_code = "499" if cancelled else code
-                    if upstream is not None and alias != "none":
-                        REQUEST_DURATION.labels(alias=alias).observe(time.perf_counter() - start)
-                    CLIENT_REQUESTS.labels(client=policy.name, alias=alias, code=terminal_code).inc()
-                    REQUESTS_TOTAL.labels(alias=alias, method=request.method, code=terminal_code).inc()
-                    def error_facts(error):
-                        if error is None:
-                            return None
-                        cause = error.__cause__
-                        facts = {"type": type(error).__name__, "cause_type": type(cause).__name__ if cause is not None else None,
-                                 "message": "omitted"}
-                        for label, exc in (("errno", error), ("cause_errno", cause)):
-                            value = getattr(exc, "errno", None)
-                            if type(value) is int:
-                                facts[label] = value
-                        return facts
-
-                    logger.info(
-                        "Forwarding ended client=%s alias=%s stage=%s outcome=%s upstream_status=%s elapsed_ms=%.1f "
-                        "error=%s cleanup_error=%s",
-                        policy.name, alias, stage, outcome, upstream.status_code if upstream is not None else None,
-                        (time.perf_counter() - start) * 1000,
-                        json.dumps(error_facts(failure)), json.dumps(error_facts(cleanup_failure)),
-                    )
             if cleanup_failure is not None and failure is None:
                 raise cleanup_failure
+
+        def record_terminal():
+            cancelled = disconnected() or isinstance(failure, asyncio.CancelledError) or isinstance(delivery_failure, (OSError, asyncio.CancelledError))
+            outcome = "cancelled" if cancelled else "failed" if failure or cleanup_failure or delivery_failure else "completed"
+            # 499 is accounting only: a disconnected client receives no response.
+            terminal_code = "499" if cancelled else code
+            if upstream is not None and alias != "none":
+                REQUEST_DURATION.labels(alias=alias).observe(time.perf_counter() - start)
+            CLIENT_REQUESTS.labels(client=policy.name, alias=alias, code=terminal_code).inc()
+            REQUESTS_TOTAL.labels(alias=alias, method=request.method, code=terminal_code).inc()
+            def error_facts(error):
+                if error is None:
+                    return None
+                cause = error.__cause__
+                facts = {"type": type(error).__name__, "cause_type": type(cause).__name__ if cause is not None else None,
+                         "message": "omitted"}
+                for label, exc in (("errno", error), ("cause_errno", cause)):
+                    value = getattr(exc, "errno", None)
+                    if type(value) is int:
+                        facts[label] = value
+                return facts
+
+            logger.info(
+                "Forwarding ended client=%s alias=%s stage=%s outcome=%s upstream_status=%s elapsed_ms=%.1f "
+                "error=%s cleanup_error=%s delivery_error=%s",
+                policy.name, alias, stage, outcome, upstream.status_code if upstream is not None else None,
+                (time.perf_counter() - start) * 1000,
+                json.dumps(error_facts(failure)), json.dumps(error_facts(cleanup_failure)), json.dumps(error_facts(delivery_failure)),
+            )
+
+        async def finish_send(message):
+            nonlocal stage, delivery_failure
+            if message["type"] == "http.response.body" and not message.get("more_body", False):
+                await cleanup()
+            previous_stage = stage
+            stage = "downstream_send"
+            try:
+                await send(message)
+            except BaseException as error:
+                delivery_failure = error
+                raise
+            stage = previous_stage
 
         try:
             headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP}
@@ -575,7 +591,7 @@ async def forward(request: Request, path: str):
                 failure = error
                 response = JSONResponse(status_code=502, content={"error": {"message": f"Upstream gateway error: {error}", "type": "bad_gateway"}})
                 await cleanup()
-                await response(scope, request.receive, send)
+                await response(scope, request.receive, finish_send)
                 return
 
             code = str(upstream.status_code)
@@ -599,16 +615,15 @@ async def forward(request: Request, path: str):
             response = StreamingResponse(stream(), status_code=upstream.status_code,
                                          headers=response_headers, media_type=upstream.headers.get("content-type"))
             # The surrounding response owns receive/disconnect for the whole request.
-            async def finish_send(message):
-                if message["type"] == "http.response.body" and not message.get("more_body", False):
-                    await cleanup()
-                await send(message)
-
             await response.stream_response(finish_send)
         except BaseException as error:
-            failure = error
+            if failure is None:
+                failure = error
             raise
         finally:
-            await cleanup()
+            try:
+                await cleanup()
+            finally:
+                record_terminal()
 
     return _DisconnectResponse(forward_response)

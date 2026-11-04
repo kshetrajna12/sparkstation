@@ -290,7 +290,8 @@ guarantee that a downstream inference engine has stopped computing.
 
 Forwarding diagnostics retain the stage, terminal outcome, upstream status,
 elapsed time and error/cause types and numeric errno values, including a separate
-cleanup failure. Exception messages and request bodies are omitted from these
+cleanup failure. Terminal accounting follows the final send result; a failed
+error response retains both the upstream and delivery failures. Exception messages and request bodies are omitted from these
 ordinary logs. Cancellation uses `499` in request accounting only; it sends no
 new response to a client that has disconnected.
 

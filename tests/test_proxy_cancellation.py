@@ -26,11 +26,16 @@ from gateway.sse_normalize import normalize_sse
 
 
 class Metric:
+    def __init__(self):
+        self.current = {}
+        self.increments = []
+
     def labels(self, **labels):
+        self.current = labels
         return self
 
     def inc(self, *args):
-        pass
+        self.increments.append(dict(self.current))
 
     def set(self, *args):
         pass
@@ -88,6 +93,7 @@ def handler(client, policy, *, unknown_key=False):
     for name in ["CLIENT_DENIED", "REQUESTS_TOTAL", "CLIENT_REQUESTS", "CLIENT_INFLIGHT", "TTFT", "REQUEST_DURATION"]:
         env[name] = Metric()
     exec(compile(ast.fix_missing_locations(ast.Module(body=nodes, type_ignores=[])), "gateway/proxy.py", "exec"), env)
+    env["forward"].fixture_metrics = env
     return env["forward"]
 
 
@@ -384,3 +390,57 @@ async def test_request_build_failure_cannot_strand_admitted_slot():
     result = await asyncio.gather(call(), return_exceptions=True)
     assert isinstance(result[0], BaseException), "construction failure stays a failure"
     assert (policy.inflight, policy.releases) == (0, 1), "request construction failure releases admission"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream_fails", [False, True])
+async def test_failed_final_send_is_accounted_after_release(upstream_fails, caplog):
+    caplog.set_level(logging.INFO, logger="gateway.proxy")
+    closed = []
+
+    class Upstream:
+        status_code = 200
+        headers = {"content-type": "application/octet-stream"}
+
+        async def aiter_raw(self):
+            yield b"Fictional"
+
+        async def aclose(self):
+            closed.append(True)
+
+    class Client:
+        def build_request(self, *args, **kwargs):
+            return None
+
+        async def send(self, *args, **kwargs):
+            if upstream_fails:
+                try:
+                    raise ConnectionRefusedError(111, "FICTIONAL_PRIVATE_UPSTREAM_CAUSE")
+                except ConnectionRefusedError as cause:
+                    raise httpx.ConnectError("FICTIONAL_PRIVATE_UPSTREAM_ERROR") from cause
+            return Upstream()
+
+    policy = Policy()
+    queue = asyncio.Queue()
+    await queue.put({"type": "http.request", "body": b'{"model":"fictional"}', "more_body": False})
+    scope = {"type": "http", "method": "POST", "path": "/v1/chat/completions", "query_string": b"", "headers": []}
+    forward = handler(Client(), policy)
+
+    async def send(message):
+        if message["type"] == "http.response.body" and not message.get("more_body", False):
+            assert (policy.inflight, policy.releases) == (0, 1), "resources released before final send"
+            raise BrokenPipeError(32, "FICTIONAL_PRIVATE_SEND_ERROR")
+
+    response = await forward(Request(scope, queue.get), "v1/chat/completions")
+    result = await asyncio.gather(response(scope, queue.get, send), return_exceptions=True)
+    assert isinstance(result[0], BaseException), "final send failure remains a failure"
+    assert (policy.inflight, policy.releases) == (0, 1)
+    assert len(closed) == (0 if upstream_fails else 1)
+    metrics = forward.fixture_metrics["CLIENT_REQUESTS"].increments
+    assert len(metrics) == 1 and metrics[0]["code"] == "499", "failed final send is not accounted as successful upstream status"
+    terminal = [line for line in caplog.messages if line.startswith("Forwarding ended")]
+    assert len(terminal) == 1 and "stage=downstream_send outcome=cancelled" in terminal[0]
+    assert '"type": "BrokenPipeError"' in terminal[0]
+    if upstream_fails:
+        assert '"type": "ConnectError"' in terminal[0] and '"cause_errno": 111' in terminal[0], "upstream failure survives a later failed error response"
+    assert "FICTIONAL_PRIVATE" not in terminal[0]
