@@ -199,7 +199,8 @@ async def world(mode="held_headers", *, unknown_key=False, deny=False):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["held_headers", "held_body"])
-async def test_client_disconnect_closes_upstream_and_releases_once(mode):
+async def test_client_disconnect_closes_upstream_and_releases_once(mode, caplog):
+    caplog.set_level(logging.WARNING, logger="gateway.proxy")
     async with world(mode) as w:
         reader, writer = await asyncio.open_connection("127.0.0.1", w.port)
         body = b'{"model":"fictional","stream":true}'
@@ -216,15 +217,26 @@ async def test_client_disconnect_closes_upstream_and_releases_once(mode):
                 break
             await asyncio.sleep(.01)
         assert (w.policy.inflight, w.policy.admissions, w.policy.releases) == (0, 1, 1), "disconnect releases its admission exactly once"
+    terminal = [record for record in caplog.records if record.getMessage().startswith("Forwarding ended")]
+    assert len(terminal) == 1 and terminal[0].levelno == logging.WARNING, "cancellation facts survive the default WARNING threshold"
+    assert f"stage={'upstream_headers' if mode == 'held_headers' else 'upstream_body'} outcome=cancelled" in terminal[0].getMessage()
 
 
 @pytest.mark.asyncio
-async def test_normal_stream_keeps_bytes_and_releases_once():
+@pytest.mark.parametrize("threshold", [logging.WARNING, logging.INFO])
+async def test_normal_stream_keeps_bytes_and_releases_once(threshold, caplog):
+    caplog.set_level(threshold, logger="gateway.proxy")
     async with world("normal") as w, httpx.AsyncClient(trust_env=False) as downstream:
         response = await downstream.post(w.url + "/v1/chat/completions", json={"model": "fictional", "stream": True})
         assert response.status_code == 200
         assert response.content == CHUNK + b"data: [DONE]\n\n"
         assert (w.policy.inflight, w.policy.releases) == (0, 1)
+    terminal = [record for record in caplog.records if record.getMessage().startswith("Forwarding ended")]
+    if threshold == logging.WARNING:
+        assert terminal == [], "completed forwarding stays below the default WARNING threshold"
+    else:
+        assert len(terminal) == 1 and terminal[0].levelno == logging.INFO
+        assert "outcome=completed upstream_status=200" in terminal[0].getMessage()
 
 
 @pytest.mark.asyncio
@@ -239,7 +251,7 @@ async def test_nonstream_upstream_status_headers_and_bytes_unchanged():
 
 @pytest.mark.asyncio
 async def test_upstream_transport_failure_keeps_502_and_releases_once(caplog):
-    caplog.set_level(logging.INFO, logger="gateway.proxy")
+    caplog.set_level(logging.WARNING, logger="gateway.proxy")
     async with world("failure") as w, httpx.AsyncClient(trust_env=False) as downstream:
         response = await downstream.post(w.url + "/v1/chat/completions", json={"model": "fictional"})
         assert response.status_code == 502
@@ -247,6 +259,8 @@ async def test_upstream_transport_failure_keeps_502_and_releases_once(caplog):
         assert (w.policy.inflight, w.policy.releases) == (0, 1)
         assert "stage=upstream_headers outcome=failed" in caplog.text
         assert '"type": "RemoteProtocolError"' in caplog.text
+        terminal = [record for record in caplog.records if record.getMessage().startswith("Forwarding ended")]
+        assert len(terminal) == 1 and terminal[0].levelno == logging.WARNING
 
 
 @pytest.mark.asyncio
@@ -326,7 +340,7 @@ async def test_header_disconnect_race_closes_acquired_response_once():
 
 @pytest.mark.asyncio
 async def test_cleanup_failure_still_releases_and_keeps_safe_cause(caplog):
-    caplog.set_level(logging.INFO, logger="gateway.proxy")
+    caplog.set_level(logging.WARNING, logger="gateway.proxy")
     reached = asyncio.Event()
 
     class Upstream:
@@ -367,6 +381,8 @@ async def test_cleanup_failure_still_releases_and_keeps_safe_cause(caplog):
     assert (policy.inflight, policy.releases) == (0, 1), "failed cleanup cannot strand admission"
     assert '"errno": 32' in caplog.text and '"cause_errno": 104' in caplog.text
     assert "FICTIONAL_PRIVATE" not in caplog.text, "ordinary diagnostics omit exception messages"
+    terminal = [record for record in caplog.records if record.getMessage().startswith("Forwarding ended")]
+    assert len(terminal) == 1 and terminal[0].levelno == logging.WARNING
 
 
 @pytest.mark.asyncio
@@ -395,7 +411,7 @@ async def test_request_build_failure_cannot_strand_admitted_slot():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("upstream_fails", [False, True])
 async def test_failed_final_send_is_accounted_after_release(upstream_fails, caplog):
-    caplog.set_level(logging.INFO, logger="gateway.proxy")
+    caplog.set_level(logging.WARNING, logger="gateway.proxy")
     closed = []
 
     class Upstream:

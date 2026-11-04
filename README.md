@@ -294,6 +294,9 @@ cleanup failure. Terminal accounting follows the final send result; a failed
 error response retains both the upstream and delivery failures. Exception messages and request bodies are omitted from these
 ordinary logs. Cancellation uses `499` in request accounting only; it sends no
 new response to a client that has disconnected.
+Failed and cancelled forwarding records use WARNING, so the default launcher
+keeps their safe facts. Completed forwarding stays INFO; no global logging
+verbosity changes are required.
 
 ### 6. Check Health and Model Status
 

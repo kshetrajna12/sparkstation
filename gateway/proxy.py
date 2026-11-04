@@ -546,7 +546,8 @@ async def forward(request: Request, path: str):
                         facts[label] = value
                 return facts
 
-            logger.info(
+            terminal_log = logger.info if outcome == "completed" else logger.warning
+            terminal_log(
                 "Forwarding ended client=%s alias=%s stage=%s outcome=%s upstream_status=%s elapsed_ms=%.1f "
                 "error=%s cleanup_error=%s delivery_error=%s",
                 policy.name, alias, stage, outcome, upstream.status_code if upstream is not None else None,
