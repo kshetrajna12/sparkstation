@@ -25,6 +25,7 @@ import os
 import time
 from typing import Optional
 
+import anyio
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -155,6 +156,37 @@ HOP_BY_HOP = {
 }
 
 app = FastAPI(title="Sparkstation Gateway Proxy", docs_url=None, redoc_url=None)
+
+
+class _DisconnectResponse(Response):
+    """Own forwarding until it ends, including the wait for upstream headers.
+
+    There is one ASGI receive owner after forward() consumes the request body.
+    StreamingResponse's send side is reused without its version-dependent
+    disconnect handling, so a quiet upstream is cancellable on every ASGI version.
+    """
+
+    def __init__(self, forward_response):
+        super().__init__()
+        self.forward_response = forward_response
+
+    async def __call__(self, scope, receive, send):
+        disconnected = False
+        async with anyio.create_task_group() as tasks:
+            async def watch_disconnect():
+                nonlocal disconnected
+                while True:
+                    if (await receive())["type"] == "http.disconnect":
+                        disconnected = True
+                        tasks.cancel_scope.cancel()
+                        return
+
+            tasks.start_soon(watch_disconnect)
+            try:
+                await self.forward_response(scope, send, lambda: disconnected)
+            finally:
+                tasks.cancel_scope.cancel()
+
 
 client: Optional[httpx.AsyncClient] = None
 supervisor_client: Optional[httpx.AsyncClient] = None
@@ -462,67 +494,136 @@ async def forward(request: Request, path: str):
         )
     CLIENT_INFLIGHT.labels(client=policy.name).set(policy.inflight)
 
-    headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP}
-    if direct_url:
-        # Backend-direct: the gateway key stays at the gateway.
-        headers.pop("authorization", None)
-        headers.pop("x-api-key", None)
-        send_client = direct_client
-        upstream_request = send_client.build_request(
-            request.method, direct_url, params=request.url.query, headers=headers, content=body,
-        )
-    else:
-        send_client = client
-        upstream_request = send_client.build_request(
-            request.method,
-            f"/{path}",
-            params=request.url.query,
-            headers=headers,
-            content=body,
-        )
-
+    send_client = direct_client if direct_url else client
     start = time.perf_counter()
-    try:
-        upstream = await send_client.send(upstream_request, stream=True)
-    except Exception as e:
-        policy.release()
-        CLIENT_INFLIGHT.labels(client=policy.name).set(policy.inflight)
-        CLIENT_REQUESTS.labels(client=policy.name, alias=alias, code="502").inc()
-        REQUESTS_TOTAL.labels(alias=alias, method=request.method, code="502").inc()
-        return JSONResponse(status_code=502, content={"error": {"message": f"Upstream gateway error: {e}", "type": "bad_gateway"}})
 
-    response_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in HOP_BY_HOP}
-    measured = alias != "none"
+    async def forward_response(scope, send, disconnected):
+        upstream = None
+        failure = None
+        cleanup_failure = None
+        delivery_failure = None
+        stage = "upstream_request"
+        code = "502"
+        released = False
 
-    # Chat SSE streams get their deltas normalized (a delta carrying both
-    # reasoning and content is split in two — see gateway/sse_normalize.py);
-    # everything else is a byte-for-byte passthrough.
-    is_chat_sse = path.endswith("chat/completions") and upstream.headers.get(
-        "content-type", ""
-    ).lower().startswith("text/event-stream")
-    upstream_iter = normalize_sse(upstream.aiter_raw()) if is_chat_sse else upstream.aiter_raw()
+        async def cleanup():
+            nonlocal released, cleanup_failure
+            if released:
+                return
+            released = True
+            # Cancellation must not interrupt socket closure or strand the client's
+            # admission. A header/disconnect race still closes the acquired response.
+            with anyio.CancelScope(shield=True):
+                try:
+                    if upstream is not None:
+                        await upstream.aclose()
+                except Exception as error:
+                    cleanup_failure = error
+                finally:
+                    policy.release()
+                    CLIENT_INFLIGHT.labels(client=policy.name).set(policy.inflight)
+            if cleanup_failure is not None and failure is None:
+                raise cleanup_failure
 
-    async def stream():
-        first = True
-        try:
-            async for chunk in upstream_iter:
-                if first:
-                    first = False
-                    if measured:
-                        TTFT.labels(alias=alias).observe(time.perf_counter() - start)
-                yield chunk
-        finally:
-            await upstream.aclose()
-            policy.release()
-            CLIENT_INFLIGHT.labels(client=policy.name).set(policy.inflight)
-            if measured:
+        def record_terminal():
+            cancelled = disconnected() or isinstance(failure, asyncio.CancelledError) or isinstance(delivery_failure, (OSError, asyncio.CancelledError))
+            outcome = "cancelled" if cancelled else "failed" if failure or cleanup_failure or delivery_failure else "completed"
+            # 499 is accounting only: a disconnected client receives no response.
+            terminal_code = "499" if cancelled else code
+            if upstream is not None and alias != "none":
                 REQUEST_DURATION.labels(alias=alias).observe(time.perf_counter() - start)
-            CLIENT_REQUESTS.labels(client=policy.name, alias=alias, code=str(upstream.status_code)).inc()
-            REQUESTS_TOTAL.labels(alias=alias, method=request.method, code=str(upstream.status_code)).inc()
+            CLIENT_REQUESTS.labels(client=policy.name, alias=alias, code=terminal_code).inc()
+            REQUESTS_TOTAL.labels(alias=alias, method=request.method, code=terminal_code).inc()
+            def error_facts(error):
+                if error is None:
+                    return None
+                cause = error.__cause__
+                facts = {"type": type(error).__name__, "cause_type": type(cause).__name__ if cause is not None else None,
+                         "message": "omitted"}
+                for label, exc in (("errno", error), ("cause_errno", cause)):
+                    value = getattr(exc, "errno", None)
+                    if type(value) is int:
+                        facts[label] = value
+                return facts
 
-    return StreamingResponse(
-        stream(),
-        status_code=upstream.status_code,
-        headers=response_headers,
-        media_type=upstream.headers.get("content-type"),
-    )
+            logger.info(
+                "Forwarding ended client=%s alias=%s stage=%s outcome=%s upstream_status=%s elapsed_ms=%.1f "
+                "error=%s cleanup_error=%s delivery_error=%s",
+                policy.name, alias, stage, outcome, upstream.status_code if upstream is not None else None,
+                (time.perf_counter() - start) * 1000,
+                json.dumps(error_facts(failure)), json.dumps(error_facts(cleanup_failure)), json.dumps(error_facts(delivery_failure)),
+            )
+
+        async def finish_send(message):
+            nonlocal stage, delivery_failure
+            if message["type"] == "http.response.body" and not message.get("more_body", False):
+                await cleanup()
+            previous_stage = stage
+            stage = "downstream_send"
+            try:
+                await send(message)
+            except BaseException as error:
+                delivery_failure = error
+                raise
+            stage = previous_stage
+
+        try:
+            headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP}
+            if direct_url:
+                # Backend-direct: the gateway key stays at the gateway.
+                headers.pop("authorization", None)
+                headers.pop("x-api-key", None)
+                upstream_request = send_client.build_request(
+                    request.method, direct_url, params=request.url.query, headers=headers, content=body,
+                )
+            else:
+                upstream_request = send_client.build_request(
+                    request.method,
+                    f"/{path}",
+                    params=request.url.query,
+                    headers=headers,
+                    content=body,
+                )
+            stage = "upstream_headers"
+            try:
+                upstream = await send_client.send(upstream_request, stream=True)
+            except Exception as error:
+                failure = error
+                response = JSONResponse(status_code=502, content={"error": {"message": f"Upstream gateway error: {error}", "type": "bad_gateway"}})
+                await cleanup()
+                await response(scope, request.receive, finish_send)
+                return
+
+            code = str(upstream.status_code)
+            response_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in HOP_BY_HOP}
+            stage = "upstream_body"
+            # Keep the existing SSE normalization and byte passthrough semantics.
+            is_chat_sse = path.endswith("chat/completions") and upstream.headers.get(
+                "content-type", ""
+            ).lower().startswith("text/event-stream")
+            upstream_iter = normalize_sse(upstream.aiter_raw()) if is_chat_sse else upstream.aiter_raw()
+
+            async def stream():
+                first = True
+                async for chunk in upstream_iter:
+                    if first:
+                        first = False
+                        if alias != "none":
+                            TTFT.labels(alias=alias).observe(time.perf_counter() - start)
+                    yield chunk
+
+            response = StreamingResponse(stream(), status_code=upstream.status_code,
+                                         headers=response_headers, media_type=upstream.headers.get("content-type"))
+            # The surrounding response owns receive/disconnect for the whole request.
+            await response.stream_response(finish_send)
+        except BaseException as error:
+            if failure is None:
+                failure = error
+            raise
+        finally:
+            try:
+                await cleanup()
+            finally:
+                record_terminal()
+
+    return _DisconnectResponse(forward_response)
