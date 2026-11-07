@@ -144,7 +144,39 @@ models:
       head_container: "deepseek-v4-flash-vllm-dspark-1"
 
   glm5.3-flash:
-    # DEEP-PROFILE CHAT (2026-09-26) — swapped from the radixark NVFP4 stack
+    # DEEP-PROFILE CHAT (2026-11-07): native GLM 1104 recipe, replacing
+    # the Python TensorFold v0.6.0 deployment retained at worker1:~/glm-tf.
+    # MiaAI-Lab/GLM-5.3-Flash-DGX-Sparks-1104 @ 13f2464, worker1:~/glm53-1104;
+    # TensorFold 1.1.9 @ f350cd3e + 110 patches, sm_121, WITH_VIDEO=1.
+    # Weights Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold @ 76c0b517,
+    # incoai/GLM-5.3-Flash-DFlash2 @ bf582e4e (4-bit drafter).
+    # TP2: rank 0 (API) worker1, rank 1 worker2 over CX7. Site config:
+    # PORT=8009, DENSE=q8, HEAD=q8, PARALLEL=4, CONTEXT=auto (up to 1M),
+    # MEMORY_RESERVE_GIB=12, CACHE_FIRST=1, PROMPT_CACHE_GIB=8,
+    # PROMPT_CACHE_MIN_GIB=2, LEARN_GIB=30, KV_SHARD=0. Vision + video,
+    # tools, reasoning via the gateway `glm` rule; no logprobs.
+    name: "glm-5.3-flash"   # SERVED name (kit local.sh SERVED_NAME)
+    backend: "dspark"        # generic 2-node script-stack launcher
+    model_type: "chat"
+    vision_default: true     # GLM vision tower on rank 0 (VISION=1)
+    host: worker1            # rank 0; worker2 runs rank 1
+    quantization: "none"     # stack-managed (EXL3 experts + q8 dense/head)
+    memory_gb: 110           # kit wants ~110 GiB free per node at start
+    auto_suspend_enabled: false
+    extra_args:
+      dspark_dir: "~/glm53-tf-deploy"   # resolved ON PRIMARY; absolute path in .sparkstation.local.yaml
+      start_script: "start.sh"
+      stop_script: "stop.sh"
+      port: 8009
+      launch_timeout_seconds: 2400      # image is prepared before activation; warm load 2-6 min
+      head_container: "glm53-flash-tf"
+      # Checks BOTH ranks (head /health only sees rank 0; 2026-10-11 rank 1
+      # died on an all-gather desync and rank 0 stayed "ok" for 2h).
+      health_script: "health.sh"
+
+  glm5.3-flash-vllm-exl3:
+    # ROLLBACK for glm5.3-flash (retired 2026-10-10; not in any profile).
+    # Was DEEP-PROFILE CHAT (2026-09-26) — swapped from the radixark NVFP4 stack
     # (kept below as glm5.3-flash-radixark, same served name). Recipe:
     # MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks (worker1:~/glm-exl3 @ b2c5986),
     # weights Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw (EXL3 routed experts, rest

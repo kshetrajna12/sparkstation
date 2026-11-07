@@ -75,6 +75,10 @@ equivalent protection. Reverse it with `git apply -R` and restart both ranks.
 
 ## Upstream updates
 
+The following assessment is from October 21. On November 7 the deployment moved
+to the separate [GLM 1104 native recipe](glm53-native-upgrade.md), retaining
+equivalent explicit-device protection on both ranks.
+
 MiaAI main `3fd60df` differs from our `b5808ac` only by eight README lines about
 precision/quality trade-offs. It still pins TensorFold v0.6.0 and image digest
 `sha256:14b5072e8e9918f1080153f57321415a387bc7d78cf9c9b44a7aeae2d4399ccf`.

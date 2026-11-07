@@ -1,0 +1,35 @@
+diff --git a/scripts/nodes.sh b/scripts/nodes.sh
+index ff2f81f..a67d071 100644
+--- a/scripts/nodes.sh
++++ b/scripts/nodes.sh
+@@ -266,13 +266,13 @@ declare -a WORKER_MOUNTS=()
+ send_dir() {
+   local src=$1 dst=$2 what=$3
+   if [[ "$DRY_RUN" == 1 ]]; then
+-    plan rsync -a --partial --inplace -e "ssh $SSH_OPTS -o Compression=no" "$src/" "$WORKER:$dst/"
++    plan rsync -a --partial -e "ssh $SSH_OPTS -o Compression=no" "$src/" "$WORKER:$dst/"
+     return 0
+   fi
+   log "Sending the $what to $(worker_host):$dst over the link (resumable)."
+   wssh mkdir -p "$dst" || fail E_WEIGHTS "Could not create $dst on $(worker_host)."
+   # shellcheck disable=SC2086
+-  rsync -a --partial --inplace --exclude '.downloading' \
++  rsync -a --partial --exclude '.downloading' \
+     -e "ssh $SSH_OPTS -o Compression=no -c aes128-gcm@openssh.com" "$src/" "$WORKER:$dst/" \
+     || fail E_WEIGHTS "Could not send the $what to $(worker_host). Check its disk space and the link."
+ }
+diff --git a/start.sh b/start.sh
+index b64becb..1661e09 100755
+--- a/start.sh
++++ b/start.sh
+@@ -227,6 +227,10 @@ rank_env_args() {
+ RUN_ARGS=(--gpus all --ipc=host --network host --shm-size 16g --cap-add IPC_LOCK
+           --ulimit memlock=-1 --ulimit stack=67108864)
+ [[ ! -e /dev/infiniband ]] || RUN_ARGS+=(--device /dev/infiniband)
++# SparkStation: preserve NVIDIA access across systemd device-policy rebuilds.
++for dev in /dev/nvidia0 /dev/nvidiactl /dev/nvidia-modeset /dev/nvidia-uvm /dev/nvidia-uvm-tools /dev/nvidia-caps/nvidia-cap1 /dev/nvidia-caps/nvidia-cap2; do
++  RUN_ARGS+=(--device "$dev")
++done
+ 
+ # The ranks' command lines, as each Spark starts them.
+ show_ranks() {
