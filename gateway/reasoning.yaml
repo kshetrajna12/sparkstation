@@ -49,7 +49,7 @@ dialects:
   # DFlash2 build (if the daily driver is swapped back to it).
   - match: "DFlash2"
     dialect: qwen_thinking
-  # DeepSeek-V4-Flash (deep profile) — leave its own reasoning handling alone.
+  # Legacy DeepSeek-V4-Flash (manual revival) — retain its reasoning handling.
   - match: "deepseek"
     dialect: passthrough
 

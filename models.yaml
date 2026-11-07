@@ -574,27 +574,18 @@ models:
 # ─── Profiles (dict of alias → override) ────────────────────────────────────
 
 profiles:
-  # ── THREE-PROFILE STRUCTURE (2026-08-19, post-gauntlet) ─────────────────
-  # generic       — DAILY DRIVER (coding/generic). Qwen3.8-27B on SGLang +
-  #                 DFlash2 spec-decode (swapped from DSpark 2026-08-21; the
-  #                 current recipe — NVFP4 base weights, fp8 KV cache, no
-  #                 torch.compile — lives in the qwen3.8-sglang spec above).
-  #                 Fully sparkstation-managed on worker1: the supervisor
-  #                 launches and health-checks the container, and the gateway
-  #                 routes default+vision to it. The old standalone qwen38-best
-  #                 container (:30000, restart=unless-stopped) is RETIRED.
-  #                 WARNING: never start a standalone SGLang container for
-  #                 this model while the managed driver is up — two ~90 GB
-  #                 SGLang instances on the 121 GB unified node will wedge it
-  #                 (the 0.88-frac incident class; unplug-only recovery).
-  #                 Switch profiles with:
-  #                 `sparkstation stop && sparkstation start -d --profile <name>`.
-  # deep          — RESERVE for hostile/long-horizon work. DSV4-Flash 2-node.
-  # image-indexing— BATCH photo intake. Qwen3.8-27B on vLLM+MTP-2 (concurrency-
-  #                 tuned, 135 tok/s aggregate c=8 — vLLM MTP batches well,
-  #                 unlike SGLang-DSpark which poisons batch, proven 08-18).
+  # generic       — daily driver: Qwen3.8-Flash-Next on TensorFold, worker1;
+  #                 default+vision follow qwen-flash-next. Aux runs on primary.
+  # voice         — generic plus voicecascade on worker2.
+  # deep          — GLM-5.3-Flash, native GLM 1104 recipe, both workers;
+  #                 default+vision follow glm5.3-flash. Aux runs on primary.
+  # image-indexing— batch photo intake on the vLLM+MTP concurrency recipe.
+  # Switch profiles with:
+  #   sparkstation stop && sparkstation start -d --profile <name>
+  # Stop the managed stack before starting another large model on the same
+  # workers: their GPUs share host memory and overlapping stacks can exhaust it.
   generic:
-    qwen-flash-next: {} # DAILY DRIVER chat (single Spark, worker1; default+vision alias). Recipe swapped AutoRound -> MiaAI NVFP4 2026-09-14 for a 3.7x KV pool; alias unchanged.
+    qwen-flash-next: {} # daily-driver chat+vision, TensorFold on worker1
     bge-m3: {}          # openclaw/memory-search text embeddings
     clip-vit: {}        # image embeddings (cross-modal search)
     face-detect: {}     # gallery recognition
@@ -617,12 +608,10 @@ profiles:
     reflex: {}
     voicecascade: {}
 
-  # deep: GLM-5.3-Flash 2-node reserve on worker1+worker2 (swapped from
-  # DSV4-Flash 2026-08-28 after the TP2 autoresearch sweep — better agentic
-  # benches, 40 tok/s c1 code w/ DFlash2+graphs, MIT license). Chat takes the
-  # two workers; EVERYTHING else (gemma, vision, embeddings, aux) runs on
-  # primary. DSV4 spec kept above for manual revival (weights cached on
-  # primary+worker1).
+  # deep: native GLM 1104 on worker1+worker2; see the glm5.3-flash base spec
+  # and patches/glm53-native-upgrade.md for pins, cache settings and speed.
+  # Chat occupies both workers; gemma, embeddings and aux run on primary.
+  # The older DSV4 spec remains available for manual revival on primary+worker1.
   deep:
     glm5.3-flash:
       default: true  # gateway "default" alias resolves to GLM in this profile
