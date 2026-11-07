@@ -5,7 +5,8 @@ This project has access to local LLM models through Sparkstation gateway.
 
 ## Available Models
 
-- `qwen-flash-next` - daily-driver chat+vision (Flash-Next AutoRound, worker1)
+- `qwen-flash-next` - daily-driver chat+vision (Flash-Next on TensorFold, worker1; generic/voice profiles)
+- `glm5.3-flash` - deep-profile chat+vision (GLM 1104, TensorFold native 1.1.9, worker1 + worker2; image/video/tools). See [deployment details](patches/glm53-native-upgrade.md).
 - `gemma4-2b` - small fast chat (Gemma 4 E2B QAT, primary; also audio-capable)
 - `bge-m3` - BAAI/bge-m3 text embeddings
 - `clip-vit` - openai/clip-vit-large-patch14 image embeddings
@@ -14,8 +15,8 @@ This project has access to local LLM models through Sparkstation gateway.
   auto-tracks the reflex repo's `stable` tag, rebuilt on launch when it moves). Typed
   judgments with calibrated probabilities over `POST /v1/systemone` — NOT a chat
   model, never appears in `/v1/models`. See "Decision model (reflex)" below.
-- `default` - alias for the loaded profile's default chat model (currently `qwen-flash-next`). Prefer this unless you need a specific model.
-- `vision` - alias for the loaded profile's vision model (currently `qwen-flash-next`). Use this for any image-understanding request.
+- `default` - alias for the loaded profile's default chat model (`glm5.3-flash` in `deep`; `qwen-flash-next` in `generic`/`voice`). Prefer this unless you need a specific model.
+- `vision` - alias for the loaded profile's vision model (`glm5.3-flash` in `deep`; `qwen-flash-next` in `generic`/`voice`). Use this for any image-understanding request.
 - `voicecascade` - Sparky's voice stack (worker2, `voice` profile). NOT an
   OpenAI API — WebSocket/WebRTC audio directly on worker2:7860; never appears
   in `/v1/models`. See homecloud-infra/docs/cascade-voice-runbook.md.
@@ -26,7 +27,7 @@ Switch profiles with `sparkstation stop && sparkstation start -d --profile <name
 
 - **generic**: qwen-flash-next, bge-m3, clip-vit, face-detect, gemma4-2b, reflex — daily driver
 - **voice**: generic + voicecascade on worker2 (also on demand: `sparkstation models start voicecascade -p voice`)
-- **deep**: GLM-5.3-Flash 2-node reserve (workers) + aux on primary
+- **deep**: GLM-5.3-Flash on the native GLM 1104 recipe (both workers) + aux on primary
 - **image-indexing**: batch photo intake (vLLM+MTP concurrency recipe)
 
 ## Sparkstation Console

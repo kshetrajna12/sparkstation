@@ -471,7 +471,31 @@ Distributed execution means one model is served by a distributed runtime, for ex
 - multi-node inference
 - distributed runtime execution
 
-SparkStation does not implement distributed inference itself — that behavior belongs to the underlying runtime. It can, however, manage a multi-node stack as a first-class model via the `dspark` backend: the launcher delegates start/stop to the stack's own orchestration scripts, and the supervisor provides registration, health checks, gateway routing, metrics discovery, and restart-the-whole-stack-together recovery. This is how a 2-Spark tensor-parallel DeepSeek deployment runs under the same management plane as single-node models.
+SparkStation does not implement distributed inference itself — that behavior belongs to the underlying runtime. It can, however, manage a multi-node stack as a first-class model via the `dspark` backend: the launcher delegates start/stop to the stack's own orchestration scripts, and the supervisor provides registration, health checks, gateway routing, metrics discovery, and restart-the-whole-stack-together recovery. This is how the 2-Spark tensor-parallel GLM deployment runs under the same management plane as single-node models.
+
+### GLM in the deep profile
+
+The `deep` profile serves `glm5.3-flash` on worker1 and worker2 using the
+[MiaAI GLM 1104 recipe](https://github.com/MiaAI-Lab/GLM-5.3-Flash-DGX-Sparks-1104),
+pinned at `13f2464`. It runs TensorFold native 1.1.9 with 110 engine patches,
+EXL3 4-bit expert weights, q8 dense/head weights, and a DFlash2 drafter.
+
+In this profile, gateway aliases `default` and `vision` resolve to GLM; the backend
+serves `glm-5.3-flash` on port 8009. The deployment has four parallel streams,
+a 1,048,576-token request limit, an 8 GiB prompt cache, and up to 30 GiB of
+conversation states on disk. Image input, video input, tools, and reasoning
+controls are enabled. In the `generic` and `voice` profiles, the default chat and
+vision model remains `qwen-flash-next`.
+
+The supervisor calls the primary's `~/glm53-tf-deploy` wrappers, which invoke
+`~/glm53-1104` on worker1. Its optional `health_script` checks both containers:
+a healthy head `/health` response alone does not establish that its peer is up.
+
+See the [deployment record](patches/glm53-native-upgrade.md) for exact pins,
+site settings, the NVIDIA-device launch patch, validation limits, measured speed,
+and rollback to the retained Python-engine deployment. The image and model
+checkpoints are prepared by the external recipe; SparkStation manages their
+lifecycle through the wrappers.
 
 ## Lifecycle and Recovery
 
