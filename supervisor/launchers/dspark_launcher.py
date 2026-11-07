@@ -56,6 +56,36 @@ DEFAULT_API_PORT = 8888
 # load ~4 min with OMP_NUM_THREADS=20, plus the script's own 100x15s API
 # wait. 45 min leaves room for one slow boot without masking a true hang.
 DEFAULT_LAUNCH_TIMEOUT_S = 2700
+STACK_PROBE_TIMEOUT_S = 60
+
+
+async def stack_probe(instance: ModelInstance) -> tuple[bool, str]:
+    """Run the stack's optional health_script (extra_args) from its dspark_dir.
+
+    The head API's /health only describes the head rank. TensorFold kept
+    answering {"ok": true} for 2h after rank 1 exited on an all-gather desync,
+    failing every request (2026-10-11), so a stack can ship a script that checks
+    every rank. Exit 0 = healthy; otherwise its last output line is the reason.
+    No health_script -> healthy (head liveness is all we know).
+    """
+    extra = instance.extra_args or {}
+    name = extra.get("health_script")
+    if not name:
+        return True, ""
+    script = Path(extra.get("dspark_dir", DEFAULT_DSPARK_DIR)).expanduser() / name
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            str(script), cwd=script.parent,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), STACK_PROBE_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        proc.kill()
+        return False, f"{name} timed out after {STACK_PROBE_TIMEOUT_S}s"
+    except OSError as e:
+        return False, f"{name}: {e}"
+    lines = out.decode(errors="replace").strip().splitlines()
+    return proc.returncode == 0, (lines[-1] if lines else f"{name} exit {proc.returncode}")
 STOP_TIMEOUT_S = 300
 
 
@@ -276,8 +306,8 @@ class DsparkLauncher(ModelLauncher):
         completion (what the vLLM launcher does) is too expensive here — under
         long-context coding load a probe completion can queue for minutes and
         false-fail the check, and a false FAILED triggers a ~10 min 2-node
-        restart. Liveness of the head API implies the TP ranks are joined;
-        rank death kills the head server process.
+        restart. Head liveness does NOT imply the ranks are joined (TensorFold's
+        head outlives a dead rank 1), hence the stack's own health_script.
         """
         try:
             response = await self.client.get(
@@ -285,7 +315,10 @@ class DsparkLauncher(ModelLauncher):
                 timeout=settings.health_check_timeout_seconds,
             )
             if response.status_code == 200:
-                return True
+                ok, reason = await stack_probe(instance)
+                if not ok:
+                    logger.warning(f"DSpark stack probe failed for {instance.id}: {reason}")
+                return ok
             logger.warning(
                 f"DSpark health check failed for {instance.id}: {response.status_code}"
             )

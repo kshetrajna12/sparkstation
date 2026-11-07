@@ -13,6 +13,7 @@ import httpx
 from supervisor.registry import ModelRegistry
 from supervisor.models import Backend, ModelStatus, HealthStatus, ModelInstance
 from supervisor.config import settings
+from supervisor.launchers.dspark_launcher import stack_probe
 
 
 def _health_path(model: ModelInstance) -> str:
@@ -265,6 +266,15 @@ class HealthCheckManager:
             # Use /health endpoint for all models (liveness check)
             # This is lightweight and doesn't queue behind inference requests
             response = await self.client.get(f"{model.base_url}{_health_path(model)}")
+
+            if response.status_code == 200 and model.backend == Backend.DSPARK:
+                # A 2-node stack's head can answer /health with a dead rank
+                # behind it; the stack's health_script checks every rank.
+                ok, reason = await stack_probe(model)
+                if not ok:
+                    logger.warning(f"Stack probe failed for {display_name}: {reason}")
+                    await self._handle_unhealthy(model_id, display_name, reason)
+                    return False
 
             if response.status_code == 200:
                 # Health check passed
