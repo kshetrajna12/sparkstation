@@ -271,6 +271,28 @@ def test_usage_missing_is_not_zero_and_cumulative_is_latest(cap):
     assert rec["usage"]["cached_tokens"] is None, "invalid or missing usage must stay null"
 
 
+def test_trailing_partial_usage_keeps_earlier_split_with_provenance(cap):
+    raw = b"".join([
+        _line({"choices": [{"index": 0, "delta": {}, "finish_reason": "length"}],
+               "usage": {"prompt_tokens": 7, "completion_tokens": 40, "total_tokens": 47,
+                         "prompt_tokens_details": {"cached_tokens": 5},
+                         "completion_tokens_details": {"reasoning_tokens": 38}}}),
+        _line({"choices": [], "usage": {"prompt_tokens": 7, "completion_tokens": 41, "total_tokens": 48}}),
+        b"data: [DONE]\n\n",
+    ])
+    _run([raw])
+    rec = _one(cap)
+    # The latest snapshot stays truthful: it did not report the split ...
+    assert rec["usage"]["completion_tokens"] == 41 and rec["usage"]["reasoning_tokens"] is None
+    # ... and the earlier supplied split survives, tagged with its snapshot.
+    known = rec.get("usage_known") or {}
+    assert known.get("reasoning_tokens") == {"value": 38, "snapshot": 1}, \
+        "a trailing partial usage snapshot must not erase an earlier reasoning split"
+    assert known.get("cached_tokens") == {"value": 5, "snapshot": 1}
+    assert known.get("completion_tokens") == {"value": 41, "snapshot": 2}
+    assert rec["usage_snapshots"] == 2
+
+
 def test_record_waits_for_trailing_usage_after_finish(cap):
     events = [
         _line({"choices": [{"index": 0, "delta": {"reasoning": "r" * 40}}]}),

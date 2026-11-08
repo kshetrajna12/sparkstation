@@ -23,7 +23,8 @@ unchanged; any parse failure passes the line through as-is.
 Stream facts (2026-11-07): when a normalized stream finalizes, one
 content-free `sse_stream_facts` record goes to stderr (gateway-proxy.log)
 describing what the UPSTREAM sent, observed per original line before any
-split: the latest usage snapshot (missing stays null, never 0), finish
+split: the latest usage snapshot (missing stays null, never 0) plus each
+field's last supplied value with its snapshot number, finish
 reasons from a fixed set, character counts per channel, line/parse coverage
 and timings. It never holds text, arguments, tool names, IDs or other
 upstream strings, and diagnostic failures or bounds only make the record
@@ -95,6 +96,7 @@ class _StreamFacts:
         self.done = self.parsed = self.unparsed = self.non_object = self.oversize = self.parsed_bytes = 0
         self.error_events = self.invalid_choices = self.split_lines = 0
         self.usage = None
+        self.usage_known = {}
         self.usage_snapshots = self.usage_invalid = 0
         self.usage_after_finish = None
         self.finish = {}
@@ -176,6 +178,11 @@ class _StreamFacts:
                 "reasoning_tokens": _count(completion.get("reasoning_tokens")) if isinstance(completion, dict) else None,
             }
             self.usage_snapshots += 1
+            # A later snapshot may omit a detail an earlier one supplied; keep
+            # each field's last supplied value with the snapshot it came from.
+            for field, value in self.usage.items():
+                if value is not None:
+                    self.usage_known[field] = {"value": value, "snapshot": self.usage_snapshots}
             self.usage_after_finish = self.finish_last is not None
             self._mark("first_usage")
         elif usage is not None:
@@ -266,6 +273,7 @@ class _StreamFacts:
             "finish": self.finish,
             "finish_last": self.finish_last,
             "usage": self.usage,
+            "usage_known": self.usage_known,
             "usage_snapshots": self.usage_snapshots,
             "usage_invalid": self.usage_invalid,
             "usage_after_finish": self.usage_after_finish,
