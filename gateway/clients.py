@@ -62,10 +62,25 @@ DENY_RATE_LIMITED = "rate_limited"
 DENY_CONCURRENCY = "concurrency_limited"
 
 
-class Client:
-    """One named policy + its live limiter state (rpm window + in-flight count)."""
+class _Limiter:
+    """A client's live limiter state, shared by every Client built for that name.
 
-    __slots__ = ("name", "allow", "rpm", "concurrency", "reasoning", "_window", "_inflight")
+    A reload builds new Client objects (fresh policy snapshots), but a request
+    admitted on an earlier object releases on that same object. Sharing one
+    mutable state per client name makes that release visible to the current one.
+    """
+
+    __slots__ = ("window", "inflight")
+
+    def __init__(self):
+        self.window: "deque[float]" = deque()  # rpm: sliding 60 s window
+        self.inflight = 0
+
+
+class Client:
+    """One named policy snapshot + its client's shared live limiter state."""
+
+    __slots__ = ("name", "allow", "rpm", "concurrency", "reasoning", "_limiter")
 
     def __init__(self, name: str, allow, rpm: int, concurrency: int, reasoning=None):
         self.name = name
@@ -82,12 +97,11 @@ class Client:
         # thinking control, so qwen falls to its xhigh template default) get a
         # sane cap without touching that framework's config.
         self.reasoning = (str(reasoning).strip().lower() or None) if reasoning else None
-        self._window: "deque[float]" = deque()
-        self._inflight = 0
+        self._limiter = _Limiter()
 
     @property
     def inflight(self) -> int:
-        return self._inflight
+        return self._limiter.inflight
 
     def allows_model(self, alias: str) -> bool:
         return any(fnmatch.fnmatchcase(alias, pat) for pat in self.allow)
@@ -109,7 +123,7 @@ class Client:
         # rpm: sliding 60s window
         if self.rpm > 0:
             cutoff = now - 60.0
-            w = self._window
+            w = self._limiter.window
             while w and w[0] < cutoff:
                 w.popleft()
             if len(w) >= self.rpm:
@@ -117,18 +131,18 @@ class Client:
                 return False, DENY_RATE_LIMITED, retry
 
         # concurrency: cap simultaneous in-flight requests
-        if self.concurrency > 0 and self._inflight >= self.concurrency:
+        if self.concurrency > 0 and self._limiter.inflight >= self.concurrency:
             return False, DENY_CONCURRENCY, 1
 
         # admit — commit both counters
         if self.rpm > 0:
-            self._window.append(now)
-        self._inflight += 1
+            self._limiter.window.append(now)
+        self._limiter.inflight += 1
         return True, None, None
 
     def release(self) -> None:
-        if self._inflight > 0:
-            self._inflight -= 1
+        if self._limiter.inflight > 0:
+            self._limiter.inflight -= 1
 
 
 class Registry:
@@ -183,9 +197,8 @@ class Registry:
             prev = old_by_name.get(name)
             c = Client(name, spec.get("allow"), spec.get("rpm", 0), spec.get("concurrency", 0),
                        reasoning=spec.get("reasoning"))
-            if prev is not None:  # preserve live limiter state across reloads
-                c._window = prev._window
-                c._inflight = prev._inflight
+            if prev is not None:  # share live limiter state across reloads (one per client name)
+                c._limiter = prev._limiter
             return c
 
         for spec in (cfg.get("clients") or []):
