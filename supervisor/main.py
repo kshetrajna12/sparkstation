@@ -213,7 +213,17 @@ async def lifespan(app: FastAPI):
             f"Loading profile: {_default_profile or '(none — autoload list)'} "
             f"(source: models.yaml default_profile; {len(autoload_models)} models)"
         )
+    phase1_tasks: dict[str, asyncio.Task] = {}
+
     async def _autoload():
+        try:
+            await _load_autoload_models()
+        finally:
+            for task in phase1_tasks.values():
+                task.cancel()
+            await asyncio.gather(*phase1_tasks.values(), return_exceptions=True)
+
+    async def _load_autoload_models():
         """Autoload configured models. Runs as a BACKGROUND task so the
         supervisor binds its HTTP port immediately — `sparkstation start`
         and the gateway no longer blind-wait behind multi-minute (DSV4:
@@ -257,8 +267,6 @@ async def lifespan(app: FastAPI):
                     logger.error(f"Autoload has no phase for backend {m.backend!r} — {m.alias or m.name} will NOT be loaded")
 
             logger.info(f"Auto-loading models: {len(vllm_sglang_models)} vLLM/SGLang/DSpark/Voicechat, {len(clip_models)} CLIP/reflex, {len(species_models)} Species, {len(face_models)} Face, {len(flux_models)} FLUX")
-            launched_model_ids = []  # Track models we actually launched
-
             # Helper function to wait for models to be ready
             async def wait_for_models(model_ids: list, next_phase: str):
                 if not model_ids:
@@ -294,85 +302,126 @@ async def lifespan(app: FastAPI):
 
             # Phase 1: Load vLLM/SGLang models first (sequential - wait for each to be ready)
             logger.info("=== PHASE 1: Loading vLLM/SGLang models ===")
-            for i, model_config in enumerate(vllm_sglang_models):
-                try:
-                    # Check if model already exists in database
-                    existing = await registry.get_by_alias(model_config.alias or model_config.name)
-                    if existing:
-                        if existing.status in [ModelStatus.RUNNING, ModelStatus.STARTING]:
-                            logger.info(f"Model {model_config.alias or model_config.name} already running, skipping")
-                            continue
+            # Models sharing memory load one at a time (each must be RUNNING before
+            # the next): a later engine sizing off free memory while an earlier one
+            # is still in torch.compile / KV allocation is a real race. Primary and
+            # the workers don't share memory, so the two sequences run
+            # concurrently -- a 2-node GLM stack no longer queues behind primary's
+            # gemma/bge-m3, nor primary's CLIP/reflex/face behind GLM's boot.
+            # All workers form ONE sequence: a multi-node stack (dspark TP2) spans
+            # worker hosts its spec doesn't declare, so worker-side ordering stays
+            # exactly as before. (dspark launches await their boot via
+            # asyncio.to_thread, so they don't block the event loop.)
+            # A stack headed on primary can also consume worker memory.
+            primary_stack = any((host or "primary") == "primary" for host in _dspark_hosts)
+
+            def _mem_group(m):
+                if primary_stack:
+                    return "cluster"
+                return "primary" if (m.host or "primary") == "primary" else "workers"
+
+            _phase1_groups = {}
+            for m in vllm_sglang_models:
+                _phase1_groups.setdefault(_mem_group(m), []).append(m)
+            phase1_model_ids = {group: [] for group in _phase1_groups}
+
+            async def _load_host_sequence(host, host_models):
+                for i, model_config in enumerate(host_models):
+                    try:
+                        # Check if model already exists in database
+                        existing = await registry.get_by_alias(model_config.alias or model_config.name)
+                        if existing:
+                            if existing.status in [ModelStatus.RUNNING, ModelStatus.STARTING]:
+                                logger.info(f"Model {model_config.alias or model_config.name} already running, skipping")
+                                if existing.status == ModelStatus.STARTING:
+                                    phase1_model_ids[host].append(existing.id)
+                                    if i < len(host_models) - 1:
+                                        await wait_for_models([existing.id], f"launch model {i+2}/{len(host_models)} on {host}")
+                                continue
+                            else:
+                                # Remove old stopped/failed entry to avoid duplicates
+                                logger.info(f"Removing old entry for {model_config.alias or model_config.name} (status: {existing.status})")
+                                await registry.delete(existing.id)
+
+                        # Generate model ID
+                        model_id = registry.generate_id(model_config.name)
+
+                        # Use explicit memory if provided, otherwise estimate
+                        if model_config.memory_gb is not None:
+                            memory_estimate = model_config.memory_gb
+                            logger.info(f"Using explicit memory allocation: {memory_estimate}GB for {model_config.name}")
                         else:
-                            # Remove old stopped/failed entry to avoid duplicates
-                            logger.info(f"Removing old entry for {model_config.alias or model_config.name} (status: {existing.status})")
-                            await registry.delete(existing.id)
+                            memory_estimate = resource_manager.estimate_model_memory(
+                                model_config.name, model_config.quantization
+                            )
 
-                    # Generate model ID
-                    model_id = registry.generate_id(model_config.name)
+                        # Allocate port
+                        port = resource_manager.allocate_model(model_id, memory_estimate, host=model_config.host)
 
-                    # Use explicit memory if provided, otherwise estimate
-                    if model_config.memory_gb is not None:
-                        memory_estimate = model_config.memory_gb
-                        logger.info(f"Using explicit memory allocation: {memory_estimate}GB for {model_config.name}")
-                    else:
-                        memory_estimate = resource_manager.estimate_model_memory(
-                            model_config.name, model_config.quantization
+                        # Create model config
+                        from supervisor.models import ModelConfig, Backend, ModelType
+                        config = ModelConfig(
+                            model_name=model_config.name,
+                            backend=Backend(model_config.backend),
+                            model_type=ModelType(model_config.model_type),
+                            model_alias=model_config.alias,
+                            host=model_config.host,
+                            num_gpus=1,
+                            quantization=model_config.quantization,
+                            idle_timeout_minutes=model_config.idle_timeout_minutes,
+                            auto_suspend_enabled=model_config.auto_suspend_enabled,
+                            speculative_model=model_config.speculative_model,
+                            num_speculative_tokens=model_config.num_speculative_tokens,
+                            speculative_method=model_config.speculative_method,
+                            speculative_extra=model_config.speculative_extra,
+                            extra_args=model_config.extra_args,
+                            docker_image=model_config.docker_image,
+                            env_vars=model_config.env_vars,
+                            volumes=model_config.volumes,
                         )
 
-                    # Allocate port
-                    port = resource_manager.allocate_model(model_id, memory_estimate, host=model_config.host)
+                        # Launch model
+                        launcher = launcher_factory.get_launcher(config.backend)
+                        instance = await launcher.launch(config, model_id, port, memory_gb=memory_estimate)
+                        instance.memory_gb = memory_estimate
 
-                    # Create model config
-                    from supervisor.models import ModelConfig, Backend, ModelType
-                    config = ModelConfig(
-                        model_name=model_config.name,
-                        backend=Backend(model_config.backend),
-                        model_type=ModelType(model_config.model_type),
-                        model_alias=model_config.alias,
-                        host=model_config.host,
-                        num_gpus=1,
-                        quantization=model_config.quantization,
-                        idle_timeout_minutes=model_config.idle_timeout_minutes,
-                        auto_suspend_enabled=model_config.auto_suspend_enabled,
-                        speculative_model=model_config.speculative_model,
-                        num_speculative_tokens=model_config.num_speculative_tokens,
-                        speculative_method=model_config.speculative_method,
-                        speculative_extra=model_config.speculative_extra,
-                        extra_args=model_config.extra_args,
-                        docker_image=model_config.docker_image,
-                        env_vars=model_config.env_vars,
-                        volumes=model_config.volumes,
-                    )
+                        # Save config for auto-restart
+                        instance.saved_config = build_saved_config(config, instance.gpu_ids, port, memory_estimate)
 
-                    # Launch model
-                    launcher = launcher_factory.get_launcher(config.backend)
-                    instance = await launcher.launch(config, model_id, port, memory_gb=memory_estimate)
-                    instance.memory_gb = memory_estimate
+                        # Save to registry
+                        await registry.create(instance)
+                        phase1_model_ids[host].append(instance.id)
+                        logger.info(f"Auto-loaded model: {model_config.alias or model_config.name} (id: {instance.id})")
 
-                    # Save config for auto-restart
-                    instance.saved_config = build_saved_config(config, instance.gpu_ids, port, memory_estimate)
+                        # Wait for this model to be RUNNING before starting the next one.
+                        # This prevents memory race conditions where later models grab memory
+                        # while earlier models are still in torch.compile/KV cache allocation.
+                        if i < len(host_models) - 1:  # Don't wait after the host's last model
+                            logger.info(f"Waiting for {model_config.alias or model_config.name} to be ready before next model on {host}...")
+                            await wait_for_models([instance.id], f"launch model {i+2}/{len(host_models)} on {host}")
 
-                    # Save to registry
-                    await registry.create(instance)
-                    launched_model_ids.append(instance.id)
-                    logger.info(f"Auto-loaded model: {model_config.alias or model_config.name} (id: {instance.id})")
+                    except Exception as e:
+                        logger.error(f"Failed to auto-load model {model_config.name}: {e}")
+                        # Continue with other models
 
-                    # Wait for this model to be RUNNING before starting the next one.
-                    # This prevents memory race conditions where later models grab memory
-                    # while earlier models are still in torch.compile/KV cache allocation.
-                    if i < len(vllm_sglang_models) - 1:  # Don't wait after the last model
-                        logger.info(f"Waiting for {model_config.alias or model_config.name} to be ready before next model...")
-                        await wait_for_models([instance.id], f"launch model {i+2}/{len(vllm_sglang_models)}")
+            # CLIP/reflex/face/species/FLUX size off their own host's free memory,
+            # so later phases wait only for the phase-1 sequences of their groups.
+            _later_groups = {_mem_group(m) for m in (*clip_models, *species_models, *face_models, *flux_models)}
+            phase1_tasks.update({g: asyncio.create_task(_load_host_sequence(g, ms)) for g, ms in _phase1_groups.items()})
+            _background_phase1 = [t for g, t in phase1_tasks.items() if g not in _later_groups]
+            await asyncio.gather(*(t for g, t in phase1_tasks.items() if g in _later_groups))
 
-                except Exception as e:
-                    logger.error(f"Failed to auto-load model {model_config.name}: {e}")
-                    # Continue with other models
-
-            logger.info(f"=== PHASE 1 COMPLETE: Launched {len(launched_model_ids)} vLLM/SGLang models ===")
+            logger.info(f"=== PHASE 1 launched for {sorted(_later_groups)}; "
+                        f"{len(_background_phase1)} other sequence(s) continue in the background ===")
 
             # Wait for vLLM/SGLang models before loading CLIP
             logger.info("=== Waiting for vLLM/SGLang models to be RUNNING ===")
-            await wait_for_models(launched_model_ids, "load CLIP")
+            later_model_ids = [
+                model_id
+                for group in _later_groups
+                for model_id in phase1_model_ids.get(group, ())
+            ]
+            await wait_for_models(later_model_ids, "load CLIP")
 
             # Phase 2: Load CLIP models
             logger.info("=== PHASE 2: Loading CLIP models ===")
@@ -571,6 +620,13 @@ async def lifespan(app: FastAPI):
 
                     except Exception as e:
                         logger.error(f"Failed to auto-load FLUX model {model_config.name}: {e}")
+
+            # Hold the worker-side phase-1 sequence (e.g. a 2-node GLM boot) to
+            # completion: keeps a strong reference to its task, and a supervisor
+            # shutdown cancels it together with autoload_task.
+            if _background_phase1:
+                await asyncio.gather(*_background_phase1)
+                logger.info("=== Background phase-1 sequence(s) complete ===")
 
 
     autoload_task = asyncio.create_task(_autoload())
