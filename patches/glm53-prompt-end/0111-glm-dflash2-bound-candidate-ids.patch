@@ -1,0 +1,23 @@
+diff --git a/zig/src/families/glm/dflash_select.zig b/zig/src/families/glm/dflash_select.zig
+index 867fbc6..e0646e3 100644
+--- a/zig/src/families/glm/dflash_select.zig
++++ b/zig/src/families/glm/dflash_select.zig
+@@ -90,7 +90,7 @@ fn edgeWeight() f32 {
+ /// Stream `i`'s 7 drafts: each row's best of every rank's 16 by logit plus codebook score; greedy, chance kept.
+ pub fn select(dr: *const df.Drafter, i: usize, M: usize, q: df.Req) void {
+     const out = q.out.?;
+-    var prev: usize = q.anchor;
++    var prev: usize = if (q.anchor < df.VOCAB) q.anchor else 0;
+     for (1..df.BLOCK) |t| {
+         const r = i * df.BLOCK + t;
+         var c: [TOPK]Cand = undefined;
+@@ -98,7 +98,8 @@ pub fn select(dr: *const df.Drafter, i: usize, M: usize, q: df.Req) void {
+         for (0..dr.world) |rk| {
+             const blk = dr.cand[rk * M * CW + r * CW ..][0..CW];
+             for (0..TOPK) |j| {
+-                if (blk[j] < 0) continue;
++                // A row with no winner can carry a sentinel outside the vocabulary.
++                if (blk[j] < 0 or blk[j] >= df.VOCAB) continue;
+                 const cand: Cand = .{ .v = @bitCast(blk[TOPK + j]), .id = @intCast(blk[j]) };
+                 if (n < TOPK) {
+                     c[n] = cand;

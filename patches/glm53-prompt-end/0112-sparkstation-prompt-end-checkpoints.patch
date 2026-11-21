@@ -1,0 +1,406 @@
+diff --git a/zig/src/core/lane_stream.zig b/zig/src/core/lane_stream.zig
+index cb2b881..65bce5a 100644
+--- a/zig/src/core/lane_stream.zig
++++ b/zig/src/core/lane_stream.zig
+@@ -3,6 +3,7 @@ const std = @import("std");
+ const lanes = @import("lanes");
+ const host = @import("lane_host.zig");
+ const recalls = @import("lane_host_recall.zig");
++const prompt_cache = @import("prompt_cache.zig");
+ const LaneHost = host.LaneHost;
+ const Job = LaneHost.Job;
+ 
+@@ -12,6 +13,29 @@ pub fn freeProposer(h: *LaneHost, job: *Job) void {
+     job.custom = null;
+ }
+ 
++/// A first one-shot request stays on the full compute grid. Tool queues,
++/// conversations with history, and requests with a reusable prefix use the finer grid.
++fn coldStarts(h: *LaneHost, job: *Job, store: *prompt_cache.Store) ?[]u32 {
++    const r = job.request;
++    const grid = store.rules.cold_grid;
++    if (grid == 0 or r.chunks.len != 0 or r.tools_json.len != 0 or r.background or r.rewind_len >= store.rules.grid) return null;
++    const key = job.cacheKey();
++    if (store.find(key, &.{}, h.spans(r)) != null) return null;
++    // Keep the zero start even in a short request. An empty list asks the
++    // store to use its normal fine grid.
++    const last = (key.len -| 1) / grid * grid;
++    // Keep the natural history boundary when the only unprocessed rows
++    // after it are the template's short generation suffix.
++    const tail = store.rules.off_grid_resume and r.images.len == 0 and
++        r.history_len >= store.rules.grid and r.history_len > last and
++        r.history_len < key.len and key.len - r.history_len <= 64;
++    const count = last / grid + 1;
++    const starts = h.gpa.alloc(u32, count + @intFromBool(tail)) catch return null;
++    for (starts[0..count], 0..) |*at, i| at.* = @intCast(i * grid);
++    if (tail) starts[count] = r.history_len;
++    return starts;
++}
++
+ /// An admitted job's stream (its kept prefix looked up, its drafter): false when it failed (the job is finished).
+ pub fn open(h: *LaneHost, job: *Job) bool {
+     const r = job.request;
+@@ -24,12 +48,16 @@ pub fn open(h: *LaneHost, job: *Job) bool {
+             job.key[0] = 0x8000_0000 | @as(u32, @truncate(std.hash.Wyhash.hash(f, std.mem.asBytes(&job.key[0])) & 0x7fff_ffff));
+         }
+     };
+-    if (h.cache) |store| if (r.embedding == null and r.prompt_logprobs == null and !r.untaught) if (store.lookupUser(h.gpa, job.cacheKey(), r.bornLen(), r.history_len, r.rewind_len, r.user_end, r.shared_prefixes, r.chunks, h.spans(r))) |l| {
+-        job.entry = l.entry;
+-        job.kept0 = store.counts.kept;
+-        job.marks = l.marks;
+-        reuse = .{ .saved = if (l.entry) |e| e.saved else null, .at = if (l.entry) |e| e.at else 0, .marks = l.marks, .hook = .{ .ptr = job, .at = Job.kept } };
+-    } else |_| {};
++    if (h.cache) |store| if (r.embedding == null and r.prompt_logprobs == null and !r.untaught) {
++        const cold_starts = coldStarts(h, job, store);
++        defer if (cold_starts) |starts| h.gpa.free(starts);
++        if (store.lookupUser(h.gpa, job.cacheKey(), r.bornLen(), r.history_len, r.rewind_len, r.user_end, r.shared_prefixes, cold_starts orelse r.chunks, h.spans(r))) |l| {
++            job.entry = l.entry;
++            job.kept0 = store.counts.kept;
++            job.marks = l.marks;
++            reuse = .{ .saved = if (l.entry) |e| e.saved else null, .at = if (l.entry) |e| e.at else 0, .marks = l.marks, .hook = .{ .ptr = job, .at = Job.kept } };
++        } else |_| {}
++    };
+     if (h.proposers) |ps| {
+         job.custom = ps.make(ps.ctx, h.gpa, r.prompt, r.eos) catch return !h.drop(job, "the drafter could not start");
+     } else job.proposer = lanes.SuffixLookup.init(h.gpa, .{ .min_match = h.min_match }) catch return !h.drop(job, "the drafter could not start");
+diff --git a/zig/src/core/prompt_cache.zig b/zig/src/core/prompt_cache.zig
+index 252b90c..c9ad706 100644
+--- a/zig/src/core/prompt_cache.zig
++++ b/zig/src/core/prompt_cache.zig
+@@ -86,6 +86,9 @@ pub const Rules = struct {
+     planned: bool = false,
+     /// A planned family's own zero-anchored chunk rows, its starts when a request names none (0: none).
+     grid: u32 = 0,
++    /// Coarser marks for a first one-shot request that has no prefix to resume (0: use grid).
++    cold_grid: u32 = 0,
++    off_grid_resume: bool = false,
+     /// A mark other than the history's is kept only this far from every other mark and the resume point.
+     min_gap: u32 = 256,
+     /// Shorter prompts keep only the history's mark, at a chunk end (`chunk`); a planned family's marks add no call.
+@@ -238,7 +241,7 @@ pub const Store = struct {
+ 
+     /// Whether a state at `at` may start or end a prompt pass: anywhere, or a chunk start for planned families.
+     pub fn usable(s: *const Store, at: u32, starts: []const u32) bool {
+-        return at > 0 and (!s.rules.planned or s.startAt(starts, at) == at);
++        return at > 0 and (s.rules.off_grid_resume or !s.rules.planned or s.startAt(starts, at) == at);
+     }
+ 
+     /// The chunk start at or before `at`: the request's, else the family's grid (0 when none).
+diff --git a/zig/src/families/glm/cuda_engine.zig b/zig/src/families/glm/cuda_engine.zig
+index 1a1e23a..195cd94 100644
+--- a/zig/src/families/glm/cuda_engine.zig
++++ b/zig/src/families/glm/cuda_engine.zig
+@@ -36,6 +36,7 @@ pub const pick_rows = 32;
+ 
+ /// A prompt pass's chunk rows (decode.prefill's).
+ pub const prompt_rows = fw.prefill_rows;
++pub const checkpoint_rows = @import("cuda_state.zig").checkpoint_rows;
+ pub const max_together = @import("cuda_state.zig").prompt_heads;
+ pub const Prompt = struct { slot: u32, ids: []const u32 };
+ 
+@@ -473,8 +474,10 @@ pub const Engine = struct {
+     /// decode.prefill: `ids` in 2,048-row chunks, then the first token from the last row; `from` restores a kept state.
+     pub fn prefill(e: *Engine, ids: []const u32, from: ?Resume, cancel: ?Cancel, marks: ?Marks) !u32 {
+         var start = try e.prefillStart(ids.len, from);
+-        while (true) : (start += fw.prefill_rows) {
+-            if (try e.prefillChunk(ids[start..@min(ids.len, start + fw.prefill_rows + 1)], start, ids.len, null, cancel, marks)) |first| return first;
++        while (true) {
++            const rows = prompt_pair.singleRows(start, ids.len, false, if (marks) |m| m.at else &.{});
++            if (try e.prefillChunk(ids[start..@min(ids.len, start + rows + 1)], start, ids.len, rows, null, cancel, marks)) |first| return first;
++            start += rows;
+         }
+     }
+ 
+@@ -487,20 +490,23 @@ pub const Engine = struct {
+     fn prefillStart(e: *Engine, len: usize, from: ?Resume) !usize {
+         if (!promptFits(len, e.cur.st.capacity)) return error.PromptTooLong;
+         const r = from orelse return 0;
+-        if (r.at == 0 or r.at >= len or r.at % fw.prefill_rows != 0) return error.BadResume;
++        if (r.at == 0 or r.at >= len) return error.BadResume;
+         try e.restoreState(r.id); // DFlash2's context too: its kept rows, or from r.at when it kept none
++        if (e.pos() != r.at) return error.BadResume;
+         return r.at;
+     }
+ 
+     /// One chunk of a `len`-id prompt pass: `part` from `start` plus the next id; first token at the end, else null.
+-    pub fn prefillChunk(e: *Engine, part: []const u32, start: usize, len: usize, from: ?Resume, cancel: ?Cancel, marks: ?Marks) !?u32 {
++    pub fn prefillChunk(e: *Engine, part: []const u32, start: usize, len: usize, rows: usize, from: ?Resume, cancel: ?Cancel, marks: ?Marks) !?u32 {
+         const split = e.index_split; // this step's alone
+         e.index_split = false;
+         if ((from != null or start == 0) and try e.prefillStart(len, from) != start) return error.BadChunk;
+-        if (start >= len or start % fw.prefill_rows != 0) return error.BadChunk;
+-        const rows = @min(len - start, fw.prefill_rows);
+-        if (part.len > rows + 1) return prompt_pair.prefill(e, part, start, len, cancel, marks, split);
++        if (start >= len or e.pos() != start or rows == 0 or rows > len - start) return error.BadChunk;
+         if (part.len != @min(len - start, rows + 1)) return error.BadChunk;
++        if (rows > fw.prefill_rows) {
++            if (start % fw.prefill_rows != 0 or rows > 2 * fw.prefill_rows) return error.BadChunk;
++            return prompt_pair.prefill(e, part, start, len, rows, cancel, marks, split);
++        }
+         var one: [1]fw.Rank = undefined;
+         var f = e.view(&e.bp, &one);
+         f.index_split = split;
+@@ -721,6 +727,7 @@ pub const Engine = struct {
+ 
+     pub const holdPrompt = @import("cuda_prompt_hold.zig").save;
+     pub const pairedAt = prompt_pair.pairedAt;
++    pub const pairedRows = prompt_pair.pairedRows;
+     pub const prefillMany = @import("cuda_prompts.zig").prefillMany;
+ 
+     /// forward.commit of the last window's first `n` rows (the KDA replay when fewer than it ran).
+diff --git a/zig/src/families/glm/cuda_follow.zig b/zig/src/families/glm/cuda_follow.zig
+index 55bb9b4..18d2d6d 100644
+--- a/zig/src/families/glm/cuda_follow.zig
++++ b/zig/src/families/glm/cuda_follow.zig
+@@ -7,6 +7,7 @@ const images_mod = @import("cuda_images.zig");
+ const vcfg = @import("vision_config.zig");
+ const sampler = @import("cuda_sampler.zig");
+ const prompt_wire = @import("cuda_prompt_wire.zig");
++const prompt_pair = @import("cuda_prompt_pair.zig");
+ const dflash = @import("dflash.zig");
+ const pages_mod = @import("cuda_pages.zig");
+ const sparse = @import("cuda_sparse.zig");
+@@ -43,6 +44,12 @@ pub const head_bytes = @sizeOf(Words);
+ /// Header `flags` bit set when the step carries rank 0's last `keep` on the same slot (rows in bits 16-23): the other
+ /// ranks commit it before the step, as a separate keep step would have, without its round trip.
+ pub const keep_flag: u32 = 1 << 24;
++/// Chunk rows travel in bits 2-15, between the prompt flags and any pending keep.
++const chunk_row_shift = 2;
++const chunk_row_mask = (1 << (16 - chunk_row_shift)) - 1;
++comptime {
++    std.debug.assert(2 * engine.prompt_rows <= chunk_row_mask);
++}
+ 
+ /// The most ids one step carries (a prompt at the engine's capacity).
+ pub const Link = struct {
+@@ -251,7 +258,19 @@ pub const Leader = struct {
+     }
+ 
+     /// `cancel` (rank 0's), asked before each chunk, decides for every rank; `from` every rank holds; `marks` rank 0's.
+-    pub fn prefill(x: Leader, ids: []const u32, from: ?engine.Resume, cancel: ?engine.Cancel, marks: ?engine.Marks) !u32 {
++    pub fn prefill(x: Leader, ids: []const u32, initial: ?engine.Resume, cancel: ?engine.Cancel, marks: ?engine.Marks) !u32 {
++        var from = initial;
++        if (marks) |m| for (m.at) |at| {
++            if (at % engine.prompt_rows != 0) {
++                var start: usize = if (from) |r| r.at else 0;
++                while (true) {
++                    const step = try x.chunk(ids, start, true, from, cancel, marks);
++                    if (step.first) |first| return first;
++                    start += step.rows;
++                    from = null;
++                }
++            }
++        };
+         try x.flush();
+         try x.send(.{ .kind = @backingInt(Kind.prefill), .flags = x.rows(), .a = if (from) |r| r.id else 0, .seed = if (from) |r| r.at else 0 }, ids);
+         return x.e.prefill(ids, from, cancel, marks);
+@@ -259,15 +278,25 @@ pub const Leader = struct {
+ 
+     /// One prompt step on every rank (Engine.prefillChunk): a chunk, or two when `pair` and Engine.pairedAt allow.
+     pub fn chunk(x: Leader, ids: []const u32, start: usize, pair: bool, from: ?engine.Resume, cancel: ?engine.Cancel, marks: ?engine.Marks) !Chunk {
++        return x.promptStep(ids, start, pair, false, from, cancel, marks);
++    }
++
++    pub fn responsiveChunk(x: Leader, ids: []const u32, start: usize, from: ?engine.Resume, cancel: ?engine.Cancel, marks: ?engine.Marks) !Chunk {
++        return x.promptStep(ids, start, false, true, from, cancel, marks);
++    }
++
++    fn promptStep(x: Leader, ids: []const u32, start: usize, pair: bool, responsive: bool, from: ?engine.Resume, cancel: ?engine.Cancel, marks: ?engine.Marks) !Chunk {
+         if (start >= ids.len) return error.BadChunk;
+         try x.flush();
+-        const n: usize = if (pair and x.e.pairedAt(start, ids.len, from, marks)) 2 else 1;
+-        const part = ids[start..@min(ids.len, start + n * engine.prompt_rows + 1)];
++        const paired = if (pair) x.e.pairedRows(start, ids.len, from, marks) else 0;
++        const step_rows = if (paired != 0) paired else
++            prompt_pair.singleRows(start, ids.len, responsive, if (marks) |m| m.at else &.{});
++        const part = ids[start..@min(ids.len, start + step_rows + 1)];
+         const split = sparse.splitAt(start, x.e.settings.index_split, x.e.share.world); // a paired step's chunks share it
+-        try x.send(.{ .kind = @backingInt(Kind.chunk), .flags = x.rows() | @as(u32, @intFromBool(split)) << 1, .a = if (from) |r| r.id else 0, .seed = if (from) |r| r.at else 0, .depth = @intCast(start), .top_k = @intCast(ids.len) }, part);
++        try x.send(.{ .kind = @backingInt(Kind.chunk), .flags = x.rows() | @as(u32, @intFromBool(split)) << 1 | @as(u32, @intCast(step_rows)) << chunk_row_shift, .a = if (from) |r| r.id else 0, .seed = if (from) |r| r.at else 0, .depth = @intCast(start), .top_k = @intCast(ids.len) }, part);
+         x.e.index_split = split;
+-        const first = try x.e.prefillChunk(part, start, ids.len, from, cancel, marks);
+-        return .{ .first = first, .rows = @min(ids.len - start, n * engine.prompt_rows) };
++        const first = try x.e.prefillChunk(part, start, ids.len, step_rows, from, cancel, marks);
++        return .{ .first = first, .rows = step_rows };
+     }
+ 
+     /// TF_GLM_KV_SHARD_CHECK: every that many decode rounds, rank 0's page layout digest before the round's step;
+@@ -444,7 +473,7 @@ pub fn apply(e: *Engine, link: *Link, h_in: Header, ids_in: []const u32, s: *Scr
+             defer e.gpa.free(ids);
+             const from: ?engine.Resume = if (h.a != 0) .{ .id = h.a, .at = h.seed } else null;
+             e.index_split = indexSplit(h);
+-            _ = e.prefillChunk(ids, h.depth, h.top_k, from, null, null) catch |err| switch (err) {
++            _ = e.prefillChunk(ids, h.depth, h.top_k, (h.flags >> chunk_row_shift) & chunk_row_mask, from, null, null) catch |err| switch (err) {
+                 error.Cancelled => {},
+                 else => return err,
+             };
+diff --git a/zig/src/families/glm/cuda_lanes.zig b/zig/src/families/glm/cuda_lanes.zig
+index 9772b14..04012e2 100644
+--- a/zig/src/families/glm/cuda_lanes.zig
++++ b/zig/src/families/glm/cuda_lanes.zig
+@@ -275,7 +275,11 @@ pub const Lanes = struct {
+         try sink.prepare();
+         self.x.e.prompt_logprobs = sink.want();
+         defer self.x.e.prompt_logprobs = null;
+-        const step = try self.x.chunk(s.prompt(), at, !self.othersDecode(s), from, .{ .ptr = s, .check = cancelled }, marksOf(s));
++        const cancel: engine.Cancel = .{ .ptr = s, .check = cancelled };
++        const step = if (self.othersDecode(s))
++            try self.x.responsiveChunk(s.prompt(), at, from, cancel, marksOf(s))
++        else
++            try self.x.chunk(s.prompt(), at, true, from, cancel, marksOf(s));
+         if (step.first) |first| {
+             l.first = self.take(first);
+             l.fill = null;
+@@ -387,9 +391,9 @@ pub const Lanes = struct {
+     fn resumeFrom(self: *Lanes, s: *lanes.Stream, len: usize) ?engine.Resume {
+         const saved = s.reuse.saved orelse return null;
+         const k: *const engine.Kept = @ptrCast(@alignCast(saved));
+-        if (k.at != s.reuse.at or k.at == 0 or k.at >= len or k.at % fw.prefill_rows != 0 or !self.x.e.holds(k.id)) {
++        if (k.at != s.reuse.at or k.at == 0 or k.at >= len or !self.x.e.holds(k.id)) {
+             s.reuse_failed = true;
+-            s.reuse_error = if (k.at == 0 or k.at >= len) error.SnapshotNotPrefix else if (k.at != s.reuse.at or k.at % fw.prefill_rows != 0) error.SnapshotOutOfStep else error.SnapshotStale;
++            s.reuse_error = if (k.at == 0 or k.at >= len) error.SnapshotNotPrefix else if (k.at != s.reuse.at) error.SnapshotOutOfStep else error.SnapshotStale;
+             return null;
+         }
+         if (!self.resumesHere(k.id)) { // sharded: the stream lies outside the state's home part and carries are off
+diff --git a/zig/src/families/glm/cuda_native.zig b/zig/src/families/glm/cuda_native.zig
+index c9238a1..c377fe7 100644
+--- a/zig/src/families/glm/cuda_native.zig
++++ b/zig/src/families/glm/cuda_native.zig
+@@ -23,7 +23,9 @@ pub const default_context: i64 = 8192;
+ pub const max_segments: u32 = 1;
+ pub const prompt_rows: u32 = fw.prefill_rows;
+ /// Prompt kernels change arithmetic with a chunk's rows: states keep and resume only on chunk starts.
+-pub const snap_grid: u32 = prompt_rows;
++pub const snap_grid: u32 = @import("cuda_state.zig").checkpoint_rows;
++pub const snap_cold_grid: u32 = prompt_rows;
++pub const snap_off_grid = true;
+ /// Warm turns (server/warm.zig): after a reply, the next turn's prompt is prefilled in the background, so a user
+ /// message after an agent loop resumes past the loop's turns, which GLM's template renders without their reasoning
+ /// once that message comes. The pass waits this long for other work before its first chunk, and steps aside at any
+diff --git a/zig/src/families/glm/cuda_prompt_pair.zig b/zig/src/families/glm/cuda_prompt_pair.zig
+index 8917254..d2f2770 100644
+--- a/zig/src/families/glm/cuda_prompt_pair.zig
++++ b/zig/src/families/glm/cuda_prompt_pair.zig
+@@ -54,11 +54,26 @@ pub fn wanted(on: bool, world: usize) bool {
+     return on and world > 1;
+ }
+ 
+-/// Whether a step at `start` of a `len`-id prompt takes the next chunk too: min_rows or more there, and no mark at it.
++/// Take up to a full chunk, preserving the original full-chunk grid after
++/// a short step. When a reply is streaming, limit prefill to one checkpoint interval.
++pub fn singleRows(start: usize, len: usize, responsive: bool, marks: []const u32) usize {
++    const grid = @import("cuda_state.zig").checkpoint_rows;
++    const width = fw.prefill_rows - start % fw.prefill_rows;
++    var end = start + @min(len - start, if (responsive) @min(width, grid) else width);
++    for (marks) |at| if (at > start) {
++        end = @min(end, at);
++    };
++    return end - start;
++}
++
++/// Pair two chunks only when neither contains a checkpoint that must be saved first.
+ pub fn takesTwo(start: usize, len: usize, world: usize, marks: []const u32) bool {
++    if (start % fw.prefill_rows != 0) return false;
+     const next = start + fw.prefill_rows;
+     if (next >= len or len - next < @max(min_rows, world)) return false;
+-    return std.mem.indexOfScalar(u32, marks, @intCast(next)) == null;
++    const end = next + @min(len - next, fw.prefill_rows);
++    for (marks) |at| if (at > start and at < end) return false;
++    return true;
+ }
+ 
+ /// Whether chunks of `ra` and `rb` rows can share one exchange room (Pair.own_room false): every piece of each splits
+@@ -80,26 +95,37 @@ pub fn ringsAgree(base: usize, ring: usize, start: usize, rb: usize) bool {
+ 
+ /// Rank 0's choice for the step at `start` (the others take the ids it sends); not with prompt rows or prof.
+ pub fn pairedAt(e: *const Engine, start: usize, len: usize, from: ?engine.Resume, marks: ?engine.Marks) bool {
+-    if (e.pair == null or !e.settings.pair or e.prompt_logprobs != null or e.prompt_profs[3] != null) return false;
+-    if (e.pieces.count == 1 and !e.settings.split) return false; // run takes such a chunk whole
+-    if (len < minLen()) return false; // too short to gain from a pair
+-    // TF_GLM_KV_SHARD: a stream one rank holds alone attends owner-computed, on the main stream: one chunk a step
+-    if (e.settings.kv_shard.on) if (e.cur.st.hold) |h| if (!h.twin) return false;
+-    if (!takesTwo(start, len, e.share.world, if (marks) |m| m.at else &.{})) return false;
+-    const rb = @min(len - start - fw.prefill_rows, fw.prefill_rows);
+-    if (!e.pair.?.own_room and !piecesSplit(fw.prefill_rows, rb, e.pieces.count, e.share.world)) return false;
+-    // a resumed step restores its kept state, and the rings' base, after this choice
+-    const base = if (from) |r| (e.snaps.get(r.id) orelse return false).bases[0] else e.cur.st.base;
+-    return ringsAgree(base, e.cur.st.ring_rows, start, rb);
++    return pairedRows(e, start, len, from, marks) != 0;
++}
++
++pub fn pairedRows(e: *const Engine, start: usize, len: usize, from: ?engine.Resume, marks: ?engine.Marks) usize {
++    if (e.pair == null or !e.settings.pair or e.prompt_logprobs != null or e.prompt_profs[3] != null) return 0;
++    if (e.pieces.count == 1 and !e.settings.split) return 0;
++    if (len < minLen() or start % fw.prefill_rows != 0) return 0;
++    if (e.settings.kv_shard.on) if (e.cur.st.hold) |h| if (!h.twin) return 0;
++    const next = start + fw.prefill_rows;
++    if (next >= len) return 0;
++    var end = next + @min(len - next, fw.prefill_rows);
++    for (if (marks) |m| m.at else &.{}) |at| {
++        if (at <= start or at >= end) continue;
++        // Only shorten the second half for a terminal generation suffix.
++        if (at <= next or len - at > 64) return 0;
++        end = at;
++    }
++    const rb = end - next;
++    if (rb < @max(min_rows, e.share.world)) return 0;
++    if (!e.pair.?.own_room and !piecesSplit(fw.prefill_rows, rb, e.pieces.count, e.share.world)) return 0;
++    const base = if (from) |r| (e.snaps.get(r.id) orelse return 0).bases[0] else e.cur.st.base;
++    return if (ringsAgree(base, e.cur.st.ring_rows, start, rb)) end - start else 0;
+ }
+ 
+ /// Engine.prefillChunk of two chunks (`part`: both, then the next id): one pass, then each chunk's MTP rows and commit.
+ /// With DFlash2 each chunk taps where prefillChunk would (a chunk reaching the last window), and the drafter ingests
+ /// a's rows, then b's, as two chunks one at a time do.
+-pub fn prefill(e: *Engine, part: []const u32, start: usize, len: usize, cancel: ?engine.Cancel, marks: ?engine.Marks, split: bool) !?u32 {
++pub fn prefill(e: *Engine, part: []const u32, start: usize, len: usize, rows: usize, cancel: ?engine.Cancel, marks: ?engine.Marks, split: bool) !?u32 {
+     const ra: usize = fw.prefill_rows;
+     if (len <= start + ra) return error.BadChunk;
+-    const rb: usize = @min(len - start - ra, fw.prefill_rows);
++    const rb = rows - ra;
+     const pair = if (e.pair) |*p| p else return error.BadChunk;
+     if (rb < e.share.world or part.len != @min(len - start, ra + rb + 1) or e.prompt_logprobs != null) return error.BadChunk;
+     if (!pair.own_room and !piecesSplit(ra, rb, e.pieces.count, e.share.world)) return error.BadChunk; // pairedAt's rule
+@@ -202,3 +228,16 @@ test "only ranks that exchange make the twin: TP=1 has no exchanges to hide" {
+     try std.testing.expect(wanted(true, 2));
+     try std.testing.expect(!wanted(false, 3));
+ }
++
++test "full chunks keep the old grid and split only for a checkpoint or a concurrent reply" {
++    const C: usize = fw.prefill_rows;
++    const G = C / 2;
++    try std.testing.expectEqual(C, singleRows(0, 3 * C, false, &.{}));
++    try std.testing.expectEqual(G, singleRows(0, 3 * C, false, &.{G}));
++    try std.testing.expectEqual(G, singleRows(G, 3 * C, false, &.{G}));
++    try std.testing.expectEqual(G, singleRows(C, 3 * C, true, &.{}));
++    try std.testing.expectEqual(@as(usize, 1), singleRows(C, C + 1, false, &.{}));
++    try std.testing.expect(!takesTwo(0, 3 * C, 2, &.{G}));
++    try std.testing.expect(!takesTwo(0, 3 * C, 2, &.{C + G}));
++    try std.testing.expect(takesTwo(0, 3 * C, 2, &.{2 * C}));
++}
+diff --git a/zig/src/families/glm/cuda_state.zig b/zig/src/families/glm/cuda_state.zig
+index 7c750ba..d5dfcb1 100644
+--- a/zig/src/families/glm/cuda_state.zig
++++ b/zig/src/families/glm/cuda_state.zig
+@@ -17,6 +17,7 @@ const kda_block = @import("cuda_kda_block.zig");
+ 
+ /// A prompt chunk's rows (decode.PREFILL_ROWS).
+ pub const prefill_rows = 4096;
++pub const checkpoint_rows = prefill_rows / 2;
+ /// A decode window's rows (Engine's max_rows).
+ pub const window_rows = 16;
+ /// Prompts one prompt pass takes together (cuda_prompts): a prompt buffer's logits rows, one a prompt.
+diff --git a/zig/src/native/cuda_snaps.zig b/zig/src/native/cuda_snaps.zig
+index 113270f..2312378 100644
+--- a/zig/src/native/cuda_snaps.zig
++++ b/zig/src/native/cuda_snaps.zig
+@@ -11,6 +11,8 @@ pub fn cacheRules(comptime F: type) api.prompt_cache.Rules {
+     if (@hasDecl(F, "snap_grid")) {
+         rules.planned = true;
+         rules.grid = F.snap_grid;
++        if (@hasDecl(F, "snap_cold_grid")) rules.cold_grid = F.snap_cold_grid;
++        if (@hasDecl(F, "snap_off_grid")) rules.off_grid_resume = F.snap_off_grid;
+     }
+     return rules;
+ }
